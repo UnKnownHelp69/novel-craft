@@ -1,0 +1,16 @@
+{
+  "name": "novelcraft",
+  "version": "1.0.0",
+  "description": "NovelCraft — a distraction-free desktop novel writing studio (Tauri + vanilla JS)",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri",
+    "icons": "tauri icon assets/app-icon.png",
+    "fonts": "node scripts/fetch-fonts.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

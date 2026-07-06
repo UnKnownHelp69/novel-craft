@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NovelCraft</title>
+  <link rel="stylesheet" href="fonts/fonts.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ============ TOP BAR ============ -->
+  <header id="topbar" data-tauri-drag-region>
+    <div class="topbar-left" data-tauri-drag-region>
+      <button class="icon-btn panel-toggle" id="toggleLeft" title="Toggle panels (Ctrl+\)">◀</button>
+      <span class="app-title">NovelCraft</span>
+      <span class="brand-sep">—</span>
+      <span id="novelTitle" class="novel-title" title="Double-click to rename the novel">Untitled Novel</span>
+      <span id="filePathIndicator" class="file-path" title=""></span>
+    </div>
+
+    <div class="topbar-center" data-tauri-drag-region>
+      <span id="chapterTitle" class="chapter-title" title="Double-click to rename">Chapter 1</span>
+      <span id="saveIndicator" class="save-indicator">Saved</span>
+    </div>
+
+    <div class="topbar-right">
+      <button class="tbtn" id="btnNew" title="New Novel (creates a new .novel file)">New</button>
+      <button class="tbtn" id="btnOpen" title="Open .novel file (Ctrl+O)">Open</button>
+      <div class="dropdown">
+        <button class="tbtn" id="btnRecent" title="Recent files">Recent ▾</button>
+        <div class="dropdown-menu" id="recentMenu"><button class="rm-empty" disabled>No recent files</button></div>
+      </div>
+      <button class="tbtn" id="btnSave" title="Save .novel file (Ctrl+S)">Save</button>
+      <button class="tbtn" id="btnSaveAs" title="Save As… (Ctrl+Shift+S)">Save As</button>
+      <div class="dropdown">
+        <button class="tbtn" id="btnExport" title="Export">Export ▾</button>
+        <div class="dropdown-menu" id="exportMenu">
+          <button data-export="txt">Text (.txt)</button>
+          <button data-export="html">HTML (.html)</button>
+          <button data-export="md">Markdown (.md)</button>
+        </div>
+      </div>
+      <button class="tbtn accent" id="btnFocus" title="Focus Mode (Ctrl+Shift+F)">Focus</button>
+      <button class="icon-btn panel-toggle" id="toggleRight" title="Toggle tools (Ctrl+/)">▶</button>
+
+      <!-- native window controls (Tauri, frameless) -->
+      <div class="win-controls" id="winControls">
+        <button class="win-btn" id="winMin" title="Minimize">&#9472;</button>
+        <button class="win-btn" id="winMax" title="Maximize">&#9723;</button>
+        <button class="win-btn win-close" id="winClose" title="Close">&#10005;</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============ MAIN LAYOUT ============ -->
+  <div id="main">
+    <!-- LEFT: chapters -->
+    <aside id="leftPanel" class="side-panel">
+      <div class="lp-actions">
+        <button class="lp-action" id="btnNewNovel" title="Create a new .novel file">＋ New Novel</button>
+        <button class="lp-action" id="btnOpenNovel" title="Open a .novel file">📂 Open</button>
+      </div>
+
+      <!-- Chapters of the currently-open novel -->
+      <div class="lp-section" id="chaptersSection">
+        <div class="panel-head">
+          <span class="lp-title">📖 Chapters</span>
+          <button class="icon-btn" id="btnAddChapter" title="Add chapter">＋</button>
+        </div>
+        <div class="lp-body">
+          <ul id="chapterList" class="chapter-list"></ul>
+        </div>
+      </div>
+
+      <!-- Empty state (no novel open) -->
+      <div id="emptyState" class="empty-state hidden">
+        <div class="es-icon">📖</div>
+        <p>Open a novel or create a new one</p>
+        <button class="lp-action" id="esNew">＋ New Novel</button>
+        <button class="lp-action" id="esOpen">📂 Open Novel</button>
+      </div>
+    </aside>
+
+    <!-- CENTER: editor -->
+    <section id="editorArea">
+      <div class="editor-scroll">
+        <div id="editorWrap">
+          <div id="editor" class="editor" contenteditable="true" spellcheck="true"></div>
+          <textarea id="mdEditor" class="md-editor hidden" spellcheck="false"></textarea>
+        </div>
+      </div>
+      <button id="exitFocus" class="exit-focus hidden">Exit Focus (Esc)</button>
+    </section>
+
+    <!-- RIGHT: tools accordion -->
+    <aside id="rightPanel" class="side-panel">
+      <!-- Formatting -->
+      <div class="accordion open" data-acc="fmt">
+        <button class="acc-head">Formatting <span class="chev">▾</span></button>
+        <div class="acc-body">
+          <div class="fmt-row">
+            <button class="fmt-btn" data-cmd="bold" id="fmtBold" title="Bold (Ctrl+B)"><b>B</b></button>
+            <button class="fmt-btn" data-cmd="italic" id="fmtItalic" title="Italic (Ctrl+I)"><i>I</i></button>
+            <button class="fmt-btn" id="btnMarkdownMode" title="Toggle Markdown source">&lt;/&gt;</button>
+          </div>
+          <label class="field-label">Paragraph style</label>
+          <select id="styleSelect" class="control">
+            <option value="P">Normal</option>
+            <option value="H1">Heading 1</option>
+            <option value="H2">Heading 2</option>
+            <option value="H3">Heading 3</option>
+          </select>
+          <label class="field-label">Font (selection)</label>
+          <select id="fontSelect" class="control">
+            <option value="Georgia, serif">Georgia</option>
+            <option value="'Lora', serif">Lora</option>
+            <option value="'Merriweather', serif">Merriweather</option>
+            <option value="'Inter', sans-serif">Inter</option>
+            <option value="Roboto, sans-serif">Roboto</option>
+            <option value="Arial, sans-serif">Arial</option>
+          </select>
+          <label class="field-label">Global font size: <span id="fsVal">18</span>px</label>
+          <input type="range" id="fontSize" class="slider" min="14" max="24" step="2" value="18" />
+          <label class="field-label">Default document font</label>
+          <select id="docFontSelect" class="control">
+            <option value="Georgia, serif">Georgia</option>
+            <option value="'Lora', serif">Lora</option>
+            <option value="'Merriweather', serif">Merriweather</option>
+            <option value="'Inter', sans-serif">Inter</option>
+            <option value="Roboto, sans-serif">Roboto</option>
+            <option value="Arial, sans-serif">Arial</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Characters -->
+      <div class="accordion" data-acc="chars">
+        <button class="acc-head">Characters <span class="chev">▾</span></button>
+        <div class="acc-body">
+          <button class="add-entity" id="btnAddChar">＋ Add Character</button>
+          <div id="charList" class="entity-list"></div>
+        </div>
+      </div>
+
+      <!-- Locations -->
+      <div class="accordion" data-acc="locs">
+        <button class="acc-head">Locations <span class="chev">▾</span></button>
+        <div class="acc-body">
+          <button class="add-entity" id="btnAddLoc">＋ Add Location</button>
+          <div id="locList" class="entity-list"></div>
+        </div>
+      </div>
+
+      <!-- Races -->
+      <div class="accordion" data-acc="races">
+        <button class="acc-head">Races / Peoples <span class="chev">▾</span></button>
+        <div class="acc-body">
+          <button class="add-entity" id="btnAddRace">＋ Add Race</button>
+          <div id="raceList" class="entity-list"></div>
+        </div>
+      </div>
+
+      <!-- Counters -->
+      <div class="accordion open" data-acc="counters">
+        <button class="acc-head">Counters <span class="chev">▾</span></button>
+        <div class="acc-body">
+          <div class="stat"><span>Words (chapter)</span><b id="statChapWords">0</b></div>
+          <div class="stat"><span>Words (total)</span><b id="statTotalWords">0</b></div>
+          <div class="stat"><span>Chars (with spaces)</span><b id="statChars">0</b></div>
+          <div class="stat"><span>Chars (no spaces)</span><b id="statCharsNs">0</b></div>
+          <div class="goal-head">
+            <span>Goal progress</span>
+            <button class="icon-btn" id="btnGoal" title="Set word goal">⚙</button>
+          </div>
+          <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
+          <div class="stat"><span id="goalLabel">0% of 80,000</span></div>
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div class="accordion" data-acc="settings">
+        <button class="acc-head">Settings <span class="chev">▾</span></button>
+        <div class="acc-body">
+          <label class="toggle-row">
+            <input type="checkbox" id="nativeTitlebar" />
+            <span>Use native title bar</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="typewriterToggle" />
+            <span>Typewriter focus (dim &amp; center)</span>
+          </label>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ============ CONTEXT MENU ============ -->
+  <div id="ctxMenu" class="ctx-menu hidden">
+    <button data-ctx="rename">Rename</button>
+    <button data-ctx="duplicate">Duplicate</button>
+    <button data-ctx="delete" class="danger">Delete</button>
+  </div>
+
+  <!-- ============ MODAL ============ -->
+  <div id="modalOverlay" class="modal-overlay hidden">
+    <div class="modal">
+      <h3 id="modalTitle">Confirm</h3>
+      <p id="modalBody"></p>
+      <input type="text" id="modalInput" class="control hidden" />
+      <div class="modal-actions">
+        <button id="modalCancel" class="tbtn">Cancel</button>
+        <button id="modalOk" class="tbtn accent">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ CLOSE CONFIRM (3 options) ============ -->
+  <div id="closeOverlay" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>Unsaved Changes</h3>
+      <p>You have unsaved changes. What would you like to do?</p>
+      <div class="modal-actions">
+        <button id="closeSaveBtn" class="tbtn accent">Save and Close</button>
+        <button id="closeDiscardBtn" class="tbtn">Discard Changes</button>
+        <button id="closeCancelBtn" class="tbtn subtle">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toasts -->
+  <div id="toastHost" class="toast-host"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

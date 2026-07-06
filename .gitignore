@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# Generated font binaries (run `npm run fonts` to populate for offline use)
+src/fonts/*.woff2
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+*.swp

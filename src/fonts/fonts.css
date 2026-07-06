@@ -1,0 +1,40 @@
+/* Local @font-face declarations for offline use.
+   Run `node scripts/fetch-fonts.mjs` once (with internet) to populate the .woff2
+   files below. Georgia, Arial and Roboto fall back to system fonts if the files
+   are missing, so the app still works fully offline without any downloads. */
+
+@font-face {
+  font-family: 'Lora';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: local('Lora'), url('./lora.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Merriweather';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: local('Merriweather'), url('./merriweather.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: local('Inter'), url('./inter.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Roboto';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: local('Roboto'), url('./roboto.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Roboto Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local('Roboto Mono'), url('./roboto-mono.woff2') format('woff2');
+}
