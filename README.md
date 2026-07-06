@@ -3,6 +3,9 @@
 A distraction‑free desktop **novel‑writing studio** built with **Tauri v2** (Rust backend) and **vanilla HTML/CSS/JS** (no frameworks). Compiles to a single native binary for Windows, macOS and Linux.
 
 ![theme](https://img.shields.io/badge/theme-dark%20amber-c9a96e)
+![built with AI](https://img.shields.io/badge/built%20with-AI%20agent-8a7549)
+
+> 🤖 **Built with an AI agent.** This project was developed collaboratively with an AI coding agent (Claude Code / Claude Opus). See [CLAUDE.md](CLAUDE.md) for the architecture notes used during development.
 
 ## Features
 
