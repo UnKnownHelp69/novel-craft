@@ -38,6 +38,9 @@
           <button data-export="txt">Text (.txt)</button>
           <button data-export="html">HTML (.html)</button>
           <button data-export="md">Markdown (.md)</button>
+          <div class="dropdown-sep"></div>
+          <button data-export-notes="txt">Export Notes (.txt)</button>
+          <button data-export-notes="md">Export Notes (.md)</button>
         </div>
       </div>
       <button class="tbtn accent" id="btnFocus" title="Focus Mode (Ctrl+Shift+F)">Focus</button>
@@ -87,6 +90,7 @@
         <div id="editorWrap">
           <div id="editor" class="editor" contenteditable="true" spellcheck="true"></div>
           <textarea id="mdEditor" class="md-editor hidden" spellcheck="false"></textarea>
+          <div id="marginNotes" class="margin-notes"></div>
         </div>
       </div>
       <button id="exitFocus" class="exit-focus hidden">Exit Focus (Esc)</button>
@@ -160,6 +164,20 @@
         </div>
       </div>
 
+      <!-- Notes -->
+      <div class="accordion" data-acc="notes">
+        <button class="acc-head">📝 Notes <span class="chev">▾</span></button>
+        <div class="acc-body">
+          <div id="noteFilters" class="note-filters"></div>
+          <select id="noteResolvedFilter" class="control">
+            <option value="hide">Hide resolved</option>
+            <option value="show">Show resolved</option>
+            <option value="only">Only resolved</option>
+          </select>
+          <div id="noteList" class="note-list"></div>
+        </div>
+      </div>
+
       <!-- Counters -->
       <div class="accordion open" data-acc="counters">
         <button class="acc-head">Counters <span class="chev">▾</span></button>
@@ -168,10 +186,7 @@
           <div class="stat"><span>Words (total)</span><b id="statTotalWords">0</b></div>
           <div class="stat"><span>Chars (with spaces)</span><b id="statChars">0</b></div>
           <div class="stat"><span>Chars (no spaces)</span><b id="statCharsNs">0</b></div>
-          <div class="goal-head">
-            <span>Goal progress</span>
-            <button class="icon-btn" id="btnGoal" title="Set word goal">⚙</button>
-          </div>
+          <div class="goal-head"><span>Goal progress</span></div>
           <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
           <div class="stat"><span id="goalLabel">0% of 80,000</span></div>
         </div>
@@ -179,8 +194,31 @@
 
       <!-- Settings -->
       <div class="accordion" data-acc="settings">
-        <button class="acc-head">Settings <span class="chev">▾</span></button>
+        <button class="acc-head">⚙️ Settings <span class="chev">▾</span></button>
         <div class="acc-body">
+          <div class="settings-sub">Note Types</div>
+          <div id="noteTypeList" class="note-type-list"></div>
+          <button class="add-entity" id="btnAddNoteType">＋ Add Custom Type</button>
+
+          <div class="settings-sub">Note Display</div>
+          <label class="toggle-row">
+            <input type="checkbox" id="showMargin" checked />
+            <span>Show margin indicators</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="highlightAnno" checked />
+            <span>Highlight annotated text</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="autoResolveEdit" />
+            <span>Auto-resolve notes on text edit</span>
+          </label>
+
+          <div class="settings-sub">General</div>
+          <div class="goal-head">
+            <span>Word goal</span>
+            <button class="icon-btn" id="btnGoal" title="Set word goal">⚙</button>
+          </div>
           <label class="toggle-row">
             <input type="checkbox" id="nativeTitlebar" />
             <span>Use native title bar</span>
@@ -194,12 +232,33 @@
     </aside>
   </div>
 
-  <!-- ============ CONTEXT MENU ============ -->
+  <!-- ============ CONTEXT MENU (chapters) ============ -->
   <div id="ctxMenu" class="ctx-menu hidden">
     <button data-ctx="rename">Rename</button>
     <button data-ctx="duplicate">Duplicate</button>
     <button data-ctx="delete" class="danger">Delete</button>
   </div>
+
+  <!-- ============ CONTEXT MENU (editor) ============ -->
+  <div id="editorCtx" class="ctx-menu hidden">
+    <button data-ectx="addnote" title="Add Margin Note (Ctrl+Shift+M)">📝 Add Note</button>
+  </div>
+
+  <!-- ============ ADD-NOTE POPUP ============ -->
+  <div id="notePopup" class="note-popup hidden" title="Add Margin Note (Ctrl+Shift+M)">
+    <div class="np-title">Add Note</div>
+    <label class="field-label">Note type</label>
+    <select id="npType" class="control"></select>
+    <label class="field-label">Note content</label>
+    <textarea id="npContent" class="control np-content" rows="3" placeholder="Note content…"></textarea>
+    <div class="np-actions">
+      <button id="npCancel" class="tbtn subtle">Cancel</button>
+      <button id="npAdd" class="tbtn accent">Add Note</button>
+    </div>
+  </div>
+
+  <!-- ============ EXPANDED NOTE CARD ============ -->
+  <div id="noteCard" class="note-card hidden"></div>
 
   <!-- ============ MODAL ============ -->
   <div id="modalOverlay" class="modal-overlay hidden">
