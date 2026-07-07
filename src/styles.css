@@ -334,7 +334,7 @@ body.focus #editorArea:hover .exit-focus,body.focus .exit-focus.peek{top:0;}
 
 /* Context menu */
 .ctx-menu{
-  position:fixed;z-index:200;background:var(--panel);border:1px solid var(--border);
+  position:fixed;z-index:620;background:var(--panel);border:1px solid var(--border);
   border-radius:6px;display:flex;flex-direction:column;min-width:140px;overflow:hidden;
   box-shadow:0 6px 20px rgba(0,0,0,.5);
 }
@@ -344,7 +344,7 @@ body.focus #editorArea:hover .exit-focus,body.focus .exit-focus.peek{top:0;}
 
 /* Modal */
 .modal-overlay{
-  position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:300;
+  position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:640;
   display:flex;align-items:center;justify-content:center;
 }
 .modal{
@@ -465,7 +465,7 @@ body.focus #editorArea:hover .exit-focus,body.focus .exit-focus.peek{top:0;}
 .ntf-actions{display:flex;justify-content:flex-end;gap:6px;}
 
 /* Toasts */
-.toast-host{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:400;display:flex;flex-direction:column;gap:8px;align-items:center;}
+.toast-host{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:660;display:flex;flex-direction:column;gap:8px;align-items:center;}
 .toast{
   background:var(--panel);border:1px solid var(--accent-dim);color:var(--text);
   padding:9px 18px;border-radius:8px;font-size:12px;box-shadow:0 6px 20px rgba(0,0,0,.5);
