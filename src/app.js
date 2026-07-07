@@ -28,8 +28,17 @@ const stripHtml = html => {
 };
 
 /* ---------- state ---------- */
+function nowISO() { return new Date().toISOString(); }
+function blankScene(n) {
+  return {
+    id: uuid(), title: `Scene ${n + 1}`, order: n,
+    content: '', markdownContent: '', wordCount: 0,
+    povCharacter: null, location: null, timeOfDay: 'unknown', status: 'draft',
+    notes: [], createdAt: nowISO(), modifiedAt: nowISO()
+  };
+}
 function blankChapter(n) {
-  return { id: uuid(), order: n, title: `Chapter ${n + 1}`, content: '', markdownContent: '', wordCount: 0, notes: [] };
+  return { id: uuid(), order: n, title: `Chapter ${n + 1}`, wordCount: 0, collapsed: false, scenes: [blankScene(0)] };
 }
 /* One .novel file = ONE novel. Structure matches the original spec:
    { version, title, settings, chapters[], characters[], locations[], races[] } */
@@ -47,6 +56,7 @@ function newNovel(title) {
 
 let novel = null;              // the currently-open novel (null = none open)
 let currentChapterId = null;
+let currentSceneId = null;     // the scene currently loaded in the editor
 let currentFilePath = null;    // path of the open .novel file (null = never saved)
 let dirty = false;
 let mdMode = false;
@@ -103,10 +113,10 @@ function snapshotSaved() {
   savedContent = {};
   savedMd = {};
   if (!novel) return;
-  novel.chapters.forEach(c => {
-    savedContent[c.id] = normalizeHTML(c.content);
-    savedMd[c.id] = c.markdownContent || '';
-  });
+  novel.chapters.forEach(c => (c.scenes || []).forEach(s => {
+    savedContent[s.id] = normalizeHTML(s.content);
+    savedMd[s.id] = s.markdownContent || '';
+  }));
 }
 function setSaving() {
   const ind = $('#saveIndicator');
@@ -114,78 +124,218 @@ function setSaving() {
   ind.classList.add('saving');
 }
 
-/* ================= CHAPTERS ================= */
+/* ================= SCENES & CHAPTERS (tree) ================= */
+/* A chapter is a container of scenes. A scene is the writing unit that the
+   editor edits; it carries content, per-scene metadata, and margin notes. */
+const TIME_OF_DAY = [
+  ['morning', 'Morning', '🌅'], ['afternoon', 'Afternoon', '🌞'], ['evening', 'Evening', '🌆'],
+  ['night', 'Night', '🌙'], ['dawn', 'Dawn', '🌄'], ['dusk', 'Dusk', '🌇'], ['unknown', 'Unknown', '❓']
+];
+const SCENE_STATUS = [
+  ['draft', 'Draft', '#8f887c'], ['review', 'Review', '#e6b422'], ['done', 'Done', '#5cb85c']
+];
+function timeMeta(id) { return TIME_OF_DAY.find(t => t[0] === id) || TIME_OF_DAY[6]; }
+function statusMeta(id) { return SCENE_STATUS.find(s => s[0] === id) || SCENE_STATUS[0]; }
+
+/* currentChapter/currentScene derive from currentSceneId so a stale
+   currentChapterId (after a drag/move) can never disagree with the loaded scene. */
 function currentChapter() {
   if (!novel) return null;
+  if (currentSceneId) { const f = findScene(currentSceneId); if (f) return f.chapter; }
   return novel.chapters.find(c => c.id === currentChapterId) || novel.chapters[0];
 }
-function renumber() {
-  if (novel) novel.chapters.forEach((c, i) => (c.order = i));
+function currentScene() {
+  if (!novel) return null;
+  if (currentSceneId) { const f = findScene(currentSceneId); if (f) return f.scene; }
+  const c = novel.chapters.find(c => c.id === currentChapterId) || novel.chapters[0];
+  return c ? (c.scenes[0] || null) : null;
 }
-function renderChapters() {
+function findScene(id) {
+  if (!novel) return null;
+  for (const c of novel.chapters) {
+    const s = (c.scenes || []).find(x => x.id === id);
+    if (s) return { chapter: c, scene: s };
+  }
+  return null;
+}
+function findChapter(id) { return novel ? novel.chapters.find(c => c.id === id) : null; }
+function chapterWordCount(c) { return (c.scenes || []).reduce((s, x) => s + (x.wordCount || 0), 0); }
+function renumber() {
+  if (!novel) return;
+  novel.chapters.forEach((c, i) => { c.order = i; (c.scenes || []).forEach((s, j) => (s.order = j)); });
+}
+
+/* ---- tree render ---- */
+function renderTree() {
   chapterList.innerHTML = '';
   if (!novel) return;
   renumber();
-  novel.chapters.forEach((c, i) => {
-    const li = document.createElement('li');
-    li.className = 'chapter-item' + (c.id === currentChapterId ? ' active' : '');
-    li.dataset.id = c.id;
-    li.innerHTML = `<div class="ci-top"><span class="ci-num">${i + 1}.</span>
-      <span class="ci-title">${esc(c.title)}</span></div>
-      <div class="ci-words">${c.wordCount} words</div>`;
-    chapterList.appendChild(li);
+  novel.chapters.forEach((c, ci) => {
+    c.wordCount = chapterWordCount(c);
+    const chLi = document.createElement('li');
+    chLi.className = 'tree-chapter' + (c.collapsed ? ' collapsed' : '') + (c.id === currentChapterId ? ' active' : '');
+    chLi.dataset.chapterId = c.id;
+    chLi.innerHTML =
+      `<div class="tc-row" data-chapter-id="${c.id}">
+         <button class="tc-caret" title="Expand / collapse">▾</button>
+         <span class="tc-folder">📁</span>
+         <span class="tc-num">${ci + 1}.</span>
+         <span class="tc-title">${esc(c.title)}</span>
+         <span class="tc-words">${c.wordCount}</span>
+         <button class="tc-add" title="Add scene to this chapter">＋</button>
+       </div>
+       <ul class="tc-scenes"></ul>`;
+    const sceneUl = chLi.querySelector('.tc-scenes');
+    (c.scenes || []).forEach(s => {
+      const st = statusMeta(s.status);
+      const li = document.createElement('li');
+      li.className = 'tree-scene' + (s.id === currentSceneId ? ' active' : '');
+      li.dataset.sceneId = s.id;
+      li.dataset.chapterId = c.id;
+      li.innerHTML =
+        `<span class="ts-icon">🎬</span>
+         <span class="ts-title">${esc(s.title)}</span>
+         <span class="ts-words">${s.wordCount || 0}</span>
+         <span class="ts-status" style="--sc:${st[2]}" title="${st[1]}"></span>`;
+      sceneUl.appendChild(li);
+    });
+    chapterList.appendChild(chLi);
   });
 }
-function selectChapter(id, saveFirst = true) {
-  if (saveFirst) saveCurrentChapter();
-  currentChapterId = id;
+const renderChapters = renderTree;   // back-compat alias for existing callers
+
+/* ---- selection / editor sync ---- */
+function selectScene(sceneId, saveFirst = true) {
+  if (saveFirst) saveCurrentScene();
+  const f = findScene(sceneId);
+  if (!f) return;
+  currentChapterId = f.chapter.id;
+  currentSceneId = sceneId;
   openNoteId = null;
   closeAddNote();
-  loadChapterIntoEditor();
-  renderChapters();       // re-render highlights the active chapter
+  loadSceneIntoEditor();
+  renderTree();
   updateCounters();
-  renderNotes();          // notes panel reflects the newly-active chapter
+  renderNotes();
   renderNoteCard();
   localBackup();
 }
-// Requested aliases (clearer intent)
-const loadChapter = id => selectChapter(id, true);
-function loadChapterIntoEditor() {
+function selectChapter(id) {
+  const c = findChapter(id);
+  if (!c) return;
+  c.collapsed = false;
+  if (c.scenes && c.scenes.length) selectScene(c.scenes[0].id);
+  else { currentChapterId = id; renderTree(); }
+}
+function loadSceneIntoEditor() {
   const wasLoading = isLoadingContent;
   isLoadingContent = true;               // programmatic editor population must not mark dirty
-  const c = currentChapter();
-  if (!c) {
-    $('#chapterTitle').textContent = '';
-    editor.innerHTML = '';
-    mdEditor.value = '';
-  } else {
-    $('#chapterTitle').textContent = c.title;
-    if (mdMode) mdEditor.value = c.markdownContent || htmlToMd(c.content);
-    else editor.innerHTML = c.content || '';
-  }
+  const s = currentScene();
+  if (!s) { editor.innerHTML = ''; mdEditor.value = ''; }
+  else if (mdMode) mdEditor.value = s.markdownContent || htmlToMd(s.content);
+  else editor.innerHTML = s.content || '';
+  updateBreadcrumb();
+  updateSceneMeta();
   isLoadingContent = wasLoading;
 }
-function saveCurrentChapter() {
+function saveCurrentScene() {
+  const s = currentScene();
+  if (!s) return;
+  if (mdMode) { s.markdownContent = mdEditor.value; s.content = mdToHtml(mdEditor.value); }
+  else { s.content = editor.innerHTML; s.markdownContent = htmlToMd(s.content); }
+  s.wordCount = countWords(stripHtml(s.content));
+  s.modifiedAt = new Date().toISOString();
   const c = currentChapter();
-  if (!c) return;
-  if (mdMode) {
-    c.markdownContent = mdEditor.value;
-    c.content = mdToHtml(mdEditor.value);
-  } else {
-    c.content = editor.innerHTML;
-    c.markdownContent = htmlToMd(c.content);
-  }
-  c.wordCount = countWords(stripHtml(c.content));
+  if (c) c.wordCount = chapterWordCount(c);
 }
+/* thin aliases kept so file I/O helpers (flushNovel, doSave, recovery…) still work */
+function saveCurrentChapter() { saveCurrentScene(); }
+function loadChapterIntoEditor() { loadSceneIntoEditor(); }
+const loadChapter = id => selectChapter(id);
+
+/* ---- scene CRUD ---- */
+function addScene(chapterId) {
+  const c = chapterId ? findChapter(chapterId) : currentChapter();
+  if (!c) return null;
+  saveCurrentScene();
+  const s = blankScene((c.scenes || []).length);
+  c.scenes.push(s);
+  c.collapsed = false;
+  currentChapterId = c.id;
+  currentSceneId = s.id;
+  openNoteId = null;
+  loadSceneIntoEditor();
+  renderTree();
+  updateCounters();
+  renderNotes();
+  renderNoteCard();
+  markDirty();
+  toast('Scene added');
+  return s;
+}
+function duplicateScene(sceneId) {
+  const f = findScene(sceneId);
+  if (!f) return;
+  const now = new Date().toISOString();
+  const copy = { ...f.scene, id: uuid(), title: f.scene.title + ' (copy)', createdAt: now, modifiedAt: now };
+  copy.notes = (f.scene.notes || []).map(n => ({ ...n, id: uuid() }));
+  const idx = f.chapter.scenes.findIndex(s => s.id === sceneId);
+  f.chapter.scenes.splice(idx + 1, 0, copy);
+  renderTree();
+  markDirty();
+  toast('Scene duplicated');
+}
+function deleteScene(sceneId) {
+  const f = findScene(sceneId);
+  if (!f) return;
+  const c = f.chapter;
+  if (c.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+  confirmModal('Delete scene', 'Delete this scene? This cannot be undone.', () => {
+    const idx = c.scenes.findIndex(s => s.id === sceneId);
+    c.scenes.splice(idx, 1);
+    if (currentSceneId === sceneId) { currentSceneId = c.scenes[Math.max(0, idx - 1)].id; currentChapterId = c.id; }
+    openNoteId = null;
+    loadSceneIntoEditor();
+    renderTree();
+    updateCounters();
+    renderNotes();
+    renderNoteCard();
+    markDirty();
+    toast('Scene deleted');
+  });
+}
+function renameScene(sceneId) {
+  const f = findScene(sceneId);
+  if (!f) return;
+  promptModal('Rename scene', 'New title:', f.scene.title, v => {
+    f.scene.title = v || f.scene.title;
+    renderTree(); updateBreadcrumb(); markDirty();
+  });
+}
+function moveSceneToChapter(sceneId, chapterId) {
+  const f = findScene(sceneId);
+  const dest = findChapter(chapterId);
+  if (!f || !dest || f.chapter.id === chapterId) return;
+  if (f.chapter.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+  const idx = f.chapter.scenes.findIndex(s => s.id === sceneId);
+  const [moved] = f.chapter.scenes.splice(idx, 1);
+  dest.scenes.push(moved);
+  dest.collapsed = false;
+  renderTree(); updateBreadcrumb(); updateCounters(); markDirty();
+  toast('Scene moved to ' + dest.title);
+}
+
+/* ---- chapter CRUD ---- */
 function addChapter() {
-  if (!novel) { addNovel(); return; }
-  saveCurrentChapter();
+  if (!novel) return;
+  saveCurrentScene();
   const c = blankChapter(novel.chapters.length);
   novel.chapters.push(c);
   currentChapterId = c.id;
+  currentSceneId = c.scenes[0].id;
   openNoteId = null;
-  loadChapterIntoEditor();
-  renderChapters();
+  loadSceneIntoEditor();
+  renderTree();
   updateCounters();
   renderNotes();
   renderNoteCard();
@@ -193,28 +343,31 @@ function addChapter() {
   toast('Chapter added');
 }
 function duplicateChapter(id) {
-  const src = novel.chapters.find(c => c.id === id);
+  const src = findChapter(id);
   if (!src) return;
   const copy = { ...src, id: uuid(), title: src.title + ' (copy)' };
-  copy.notes = (src.notes || []).map(nt => ({ ...nt, id: uuid() }));
+  copy.scenes = (src.scenes || []).map(s => ({
+    ...s, id: uuid(), notes: (s.notes || []).map(n => ({ ...n, id: uuid() }))
+  }));
   const idx = novel.chapters.findIndex(c => c.id === id);
   novel.chapters.splice(idx + 1, 0, copy);
-  renderChapters();
+  renderTree();
   markDirty();
   toast('Chapter duplicated');
 }
 function deleteChapter(id) {
-  if (novel.chapters.length === 1) {
-    toast('Cannot delete the last chapter');
-    return;
-  }
-  confirmModal('Delete chapter', 'Delete this chapter? This cannot be undone.', () => {
+  if (novel.chapters.length === 1) { toast('Cannot delete the last chapter'); return; }
+  confirmModal('Delete chapter', 'Delete this chapter and all its scenes? This cannot be undone.', () => {
     const idx = novel.chapters.findIndex(c => c.id === id);
     novel.chapters.splice(idx, 1);
-    if (currentChapterId === id) currentChapterId = novel.chapters[Math.max(0, idx - 1)].id;
+    if (currentChapterId === id) {
+      const nc = novel.chapters[Math.max(0, idx - 1)];
+      currentChapterId = nc.id;
+      currentSceneId = nc.scenes[0].id;
+    }
     openNoteId = null;
-    loadChapterIntoEditor();
-    renderChapters();
+    loadSceneIntoEditor();
+    renderTree();
     updateCounters();
     renderNotes();
     renderNoteCard();
@@ -223,87 +376,185 @@ function deleteChapter(id) {
   });
 }
 function renameChapter(id) {
-  const c = novel.chapters.find(x => x.id === id);
+  const c = findChapter(id);
   if (!c) return;
   promptModal('Rename chapter', 'New title:', c.title, val => {
     c.title = val || c.title;
-    if (id === currentChapterId) $('#chapterTitle').textContent = c.title;
-    renderChapters();
-    markDirty();
+    renderTree(); updateBreadcrumb(); markDirty();
   });
+}
+function setAllCollapsed(v) { if (!novel) return; novel.chapters.forEach(c => (c.collapsed = v)); renderTree(); }
+
+/* ---- breadcrumb (top bar) ---- */
+function updateBreadcrumb() {
+  const bc = $('#breadcrumb');
+  if (!bc) return;
+  bc.innerHTML = '';
+  const c = currentChapter(), s = currentScene();
+  if (!novel || !c) return;
+  const sep = () => { const x = document.createElement('span'); x.className = 'bc-sep'; x.textContent = '›'; return x; };
+  const part = (text, cls, handler) => {
+    const b = document.createElement('button');
+    b.className = 'bc-part ' + cls;
+    b.textContent = text;
+    if (handler) b.onclick = handler;
+    return b;
+  };
+  bc.appendChild(part(novel.title || 'Untitled Novel', 'bc-novel', () => { if (novel) nvTitle.dispatchEvent(new MouseEvent('dblclick')); }));
+  bc.appendChild(sep());
+  bc.appendChild(part(c.title, 'bc-chapter', () => selectChapter(c.id)));
+  if (s) { bc.appendChild(sep()); bc.appendChild(part(s.title, 'bc-scene', () => renameScene(s.id))); }
 }
 
-/* ---- pointer-based chapter reorder + click-to-select ----
-   HTML5 drag-and-drop is unreliable in the desktop webview (compounded by the
-   global `user-select:none`), so we drive it with mouse events instead. A short
-   movement threshold distinguishes a click (select chapter) from a drag. */
-let chDrag = null; // { id, el, startX, startY, started, overId, after }
-function clearDropMarkers() {
-  $$('.chapter-item').forEach(x => x.classList.remove('drop-before', 'drop-after'));
+/* ---- scene metadata bar ---- */
+function fillSelect(sel, opts, val) {
+  if (!sel) return;
+  sel.innerHTML = '';
+  opts.forEach(([v, t]) => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = t;
+    if (v === val) o.selected = true;
+    sel.appendChild(o);
+  });
 }
+function updateSceneMeta() {
+  const bar = $('#sceneMeta');
+  if (!bar) return;
+  const s = currentScene();
+  const showBtn = $('#metaShow');
+  if (!novel || !s) { bar.classList.add('hidden'); if (showBtn) showBtn.classList.add('hidden'); return; }
+  if (metaHidden) { bar.classList.add('hidden'); if (showBtn) showBtn.classList.remove('hidden'); return; }
+  if (showBtn) showBtn.classList.add('hidden');
+  bar.classList.remove('hidden');
+  fillSelect($('#metaPov'), [['', '👤 POV: —'], ...novel.characters.map(c => [c.id, '👤 ' + (c.name || '(unnamed)')])], s.povCharacter || '');
+  fillSelect($('#metaLoc'), [['', '📍 Location: —'], ...novel.locations.map(l => [l.id, '📍 ' + (l.name || '(unnamed)')])], s.location || '');
+  fillSelect($('#metaTime'), TIME_OF_DAY.map(t => [t[0], t[2] + ' ' + t[1]]), s.timeOfDay || 'unknown');
+  fillSelect($('#metaStatus'), SCENE_STATUS.map(x => [x[0], x[1]]), s.status || 'draft');
+}
+let metaHidden = false;
+function bindSceneMeta() {
+  const set = (key, val) => { const s = currentScene(); if (!s) return; s[key] = val; s.modifiedAt = new Date().toISOString(); markDirty(); renderTree(); if (corkboardOpen) renderCorkboard(); };
+  const pov = $('#metaPov'); if (pov) pov.addEventListener('change', e => set('povCharacter', e.target.value || null));
+  const loc = $('#metaLoc'); if (loc) loc.addEventListener('change', e => set('location', e.target.value || null));
+  const tim = $('#metaTime'); if (tim) tim.addEventListener('change', e => set('timeOfDay', e.target.value));
+  const sta = $('#metaStatus'); if (sta) sta.addEventListener('change', e => set('status', e.target.value));
+  const hide = $('#metaHide'); if (hide) hide.addEventListener('click', () => { metaHidden = true; updateSceneMeta(); });
+  const show = $('#metaShow'); if (show) show.addEventListener('click', () => { metaHidden = false; updateSceneMeta(); });
+}
+
+/* ---- tree interaction: caret / add / select / pointer drag ---- */
+chapterList.addEventListener('click', e => {
+  const caret = e.target.closest('.tc-caret');
+  if (caret) { const c = findChapter(caret.closest('.tree-chapter').dataset.chapterId); if (c) { c.collapsed = !c.collapsed; renderTree(); } return; }
+  const add = e.target.closest('.tc-add');
+  if (add) { addScene(add.closest('.tree-chapter').dataset.chapterId); return; }
+});
+chapterList.addEventListener('dblclick', e => {
+  const sc = e.target.closest('.tree-scene');
+  if (sc) { renameScene(sc.dataset.sceneId); return; }
+  const cr = e.target.closest('.tc-row');
+  if (cr) renameChapter(cr.dataset.chapterId);
+});
+
+let treeDrag = null;
+function clearTreeDrop() { $$('.tree-scene,.tree-chapter').forEach(x => x.classList.remove('drop-before', 'drop-after', 'drop-into')); }
 chapterList.addEventListener('mousedown', e => {
-  if (e.button !== 0) return;                       // left button only
-  const li = e.target.closest('.chapter-item');
-  if (!li) return;
-  chDrag = { id: li.dataset.id, el: li, startX: e.clientX, startY: e.clientY, started: false, overId: null, after: false };
+  if (e.button !== 0) return;
+  if (e.target.closest('.tc-caret') || e.target.closest('.tc-add')) return;   // buttons handled on click
+  const sceneEl = e.target.closest('.tree-scene');
+  const chapRow = e.target.closest('.tc-row');
+  if (sceneEl) treeDrag = { type: 'scene', id: sceneEl.dataset.sceneId, el: sceneEl, startX: e.clientX, startY: e.clientY, started: false, target: null };
+  else if (chapRow) treeDrag = { type: 'chapter', id: chapRow.dataset.chapterId, el: chapRow.closest('.tree-chapter'), startX: e.clientX, startY: e.clientY, started: false, target: null };
 });
 document.addEventListener('mousemove', e => {
-  if (!chDrag) return;
-  if (!chDrag.started) {
-    if (Math.abs(e.clientX - chDrag.startX) < 5 && Math.abs(e.clientY - chDrag.startY) < 5) return;
-    chDrag.started = true;
-    chDrag.el.classList.add('dragging');
+  if (!treeDrag) return;
+  if (!treeDrag.started) {
+    if (Math.abs(e.clientX - treeDrag.startX) < 5 && Math.abs(e.clientY - treeDrag.startY) < 5) return;
+    treeDrag.started = true;
+    treeDrag.el.classList.add('dragging');
   }
   e.preventDefault();
-  const items = $$('.chapter-item');
-  clearDropMarkers();
-  chDrag.overId = null;
-  const over = items.find(x => {
-    const r = x.getBoundingClientRect();
-    return e.clientY >= r.top && e.clientY <= r.bottom;
-  });
-  if (over && over !== chDrag.el) {
-    const r = over.getBoundingClientRect();
-    chDrag.after = e.clientY > r.top + r.height / 2;
-    chDrag.overId = over.dataset.id;
-    over.classList.add(chDrag.after ? 'drop-after' : 'drop-before');
-  } else if (!over && items.length) {
-    // pointer past the ends of the list -> drop at start or end
-    const last = items[items.length - 1];
-    const first = items[0];
-    if (e.clientY > last.getBoundingClientRect().bottom && last !== chDrag.el) {
-      chDrag.overId = last.dataset.id; chDrag.after = true;
-      last.classList.add('drop-after');
-    } else if (e.clientY < first.getBoundingClientRect().top && first !== chDrag.el) {
-      chDrag.overId = first.dataset.id; chDrag.after = false;
-      first.classList.add('drop-before');
+  clearTreeDrop();
+  treeDrag.target = null;
+  if (treeDrag.type === 'scene') {
+    const over = $$('.tree-scene').find(x => { const r = x.getBoundingClientRect(); return e.clientY >= r.top && e.clientY <= r.bottom; });
+    if (over && over !== treeDrag.el) {
+      const r = over.getBoundingClientRect();
+      const after = e.clientY > r.top + r.height / 2;
+      over.classList.add(after ? 'drop-after' : 'drop-before');
+      treeDrag.target = { kind: 'scene', id: over.dataset.sceneId, after };
+    } else {
+      const overCh = $$('.tc-row').find(x => { const r = x.getBoundingClientRect(); return e.clientY >= r.top && e.clientY <= r.bottom; });
+      if (overCh) { overCh.closest('.tree-chapter').classList.add('drop-into'); treeDrag.target = { kind: 'chapter-into', id: overCh.dataset.chapterId }; }
+    }
+  } else {
+    const over = $$('.tree-chapter').find(x => { const r = x.getBoundingClientRect(); return e.clientY >= r.top && e.clientY <= r.bottom; });
+    if (over && over !== treeDrag.el) {
+      const r = over.getBoundingClientRect();
+      const after = e.clientY > r.top + r.height / 2;
+      over.classList.add(after ? 'drop-after' : 'drop-before');
+      treeDrag.target = { kind: 'chapter', id: over.dataset.chapterId, after };
     }
   }
 });
 document.addEventListener('mouseup', () => {
-  if (!chDrag) return;
-  const st = chDrag;
-  chDrag = null;
-  clearDropMarkers();
-  st.el.classList.remove('dragging');
-  if (!st.started) {
-    // no meaningful movement -> treat as a click (select the chapter)
-    if (st.id !== currentChapterId) selectChapter(st.id);
+  if (!treeDrag) return;
+  const d = treeDrag;
+  treeDrag = null;
+  clearTreeDrop();
+  d.el.classList.remove('dragging');
+  if (!d.started) {                                   // no movement -> click
+    if (d.type === 'scene') { if (d.id !== currentSceneId) selectScene(d.id); }
+    else { const c = findChapter(d.id); if (c) { c.collapsed = !c.collapsed; renderTree(); } }
     return;
   }
-  if (st.overId && st.overId !== st.id) {
-    const from = novel.chapters.findIndex(c => c.id === st.id);
-    const moved = novel.chapters.splice(from, 1)[0];
-    let to = novel.chapters.findIndex(c => c.id === st.overId);
-    if (st.after) to += 1;
-    novel.chapters.splice(to, 0, moved);
-    renderChapters();
-    markDirty();
-  }
+  if (!d.target) return;
+  if (d.type === 'scene') applySceneDrop(d.id, d.target);
+  else applyChapterDrop(d.id, d.target);
 });
+function applySceneDrop(sceneId, target) {
+  const f = findScene(sceneId);
+  if (!f) return;
+  const from = f.chapter;
+  if (target.kind === 'scene') {
+    const g = findScene(target.id);
+    if (!g || target.id === sceneId) return;
+    if (g.chapter.id !== from.id && from.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+    const idx = from.scenes.findIndex(s => s.id === sceneId);
+    const [moved] = from.scenes.splice(idx, 1);
+    const dest = g.chapter;
+    let di = dest.scenes.findIndex(s => s.id === target.id);
+    if (target.after) di += 1;
+    dest.scenes.splice(di, 0, moved);
+  } else if (target.kind === 'chapter-into') {
+    const dest = findChapter(target.id);
+    if (!dest || dest.id === from.id) return;
+    if (from.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+    const idx = from.scenes.findIndex(s => s.id === sceneId);
+    const [moved] = from.scenes.splice(idx, 1);
+    dest.scenes.push(moved);
+    dest.collapsed = false;
+  }
+  // selection stays on whatever scene was open (currentChapter derives from it)
+  renderTree();
+  updateBreadcrumb();
+  updateCounters();
+  markDirty();
+}
+function applyChapterDrop(chapterId, target) {
+  if (target.kind !== 'chapter' || target.id === chapterId) return;
+  const from = novel.chapters.findIndex(c => c.id === chapterId);
+  const [moved] = novel.chapters.splice(from, 1);
+  let to = novel.chapters.findIndex(c => c.id === target.id);
+  if (target.after) to += 1;
+  novel.chapters.splice(to, 0, moved);
+  renderTree();
+  markDirty();
+}
 
 /* "+" add-chapter button */
 $('#btnAddChapter').addEventListener('click', addChapter);
+bindSceneMeta();
 
 /* ================= NOVEL FILE (one file = one novel) ================= */
 function baseName(p) { return p ? p.replace(/\\/g, '/').split('/').pop() : ''; }
@@ -337,13 +588,15 @@ function refreshUI() {
   $('#novelTitle').textContent = has ? (novel.title || 'Untitled Novel') : '—';
   if (has) {
     currentChapterId = novel.chapters[0] && novel.chapters[0].id;
+    currentSceneId = novel.chapters[0] && novel.chapters[0].scenes[0] && novel.chapters[0].scenes[0].id;
     applyFontSize(novel.settings.fontSize || 18);
     applyDocFont(novel.settings.defaultFont || 'Georgia, serif');
   } else {
     currentChapterId = null;
+    currentSceneId = null;
   }
-  loadChapterIntoEditor();
-  renderChapters();
+  loadSceneIntoEditor();
+  renderTree();
   renderEntities('characters');
   renderEntities('locations');
   renderEntities('races');
@@ -385,29 +638,72 @@ function migrateNovel(d) {
   if (!n.settings.noteTypeColors || typeof n.settings.noteTypeColors !== 'object') n.settings.noteTypeColors = {};
   n.settings.customNoteTypes.forEach(t => { if (!t.id) t.id = uuid(); });
   if (!Array.isArray(n.chapters) || !n.chapters.length) n.chapters = [blankChapter(0)];
+  let migratedToScenes = false;
+  const normNote = nt => {
+    nt.id = nt.id || uuid();
+    if (nt.typeId && RU_NOTE_NAME_TO_ID[nt.typeId]) nt.typeId = RU_NOTE_NAME_TO_ID[nt.typeId];
+    nt.typeId = nt.typeId || 'idea';
+    nt.content = nt.content || '';
+    nt.selectedText = nt.selectedText || '';
+    nt.startOffset = nt.startOffset || 0;
+    nt.endOffset = nt.endOffset || 0;
+    nt.createdAt = nt.createdAt || nowISO();
+    nt.resolved = !!nt.resolved;
+  };
+  const normScene = (s, j) => {
+    s.id = s.id || uuid();
+    s.title = s.title || `Scene ${j + 1}`;
+    s.order = j;
+    s.content = s.content || '';
+    s.markdownContent = s.markdownContent || '';
+    s.wordCount = s.wordCount || countWords(stripHtml(s.content));
+    if (s.povCharacter === undefined) s.povCharacter = null;
+    if (s.location === undefined) s.location = null;
+    s.timeOfDay = s.timeOfDay || 'unknown';
+    s.status = s.status || 'draft';
+    if (!Array.isArray(s.notes)) s.notes = [];
+    s.notes.forEach(normNote);
+    s.createdAt = s.createdAt || nowISO();
+    s.modifiedAt = s.modifiedAt || nowISO();
+  };
   n.chapters.forEach((c, i) => {
     c.id = c.id || uuid();
     c.order = i;
     c.title = c.title || `Chapter ${i + 1}`;
-    c.content = c.content || '';
-    c.markdownContent = c.markdownContent || '';
-    c.wordCount = c.wordCount || countWords(stripHtml(c.content));
-    if (!Array.isArray(c.notes)) c.notes = [];
-    c.notes.forEach(nt => {
-      nt.id = nt.id || uuid();
-      if (nt.typeId && RU_NOTE_NAME_TO_ID[nt.typeId]) nt.typeId = RU_NOTE_NAME_TO_ID[nt.typeId];
-      nt.typeId = nt.typeId || 'idea';
-      nt.content = nt.content || '';
-      nt.selectedText = nt.selectedText || '';
-      nt.startOffset = nt.startOffset || 0;
-      nt.endOffset = nt.endOffset || 0;
-      nt.createdAt = nt.createdAt || new Date().toISOString();
-      nt.resolved = !!nt.resolved;
-    });
+    if (typeof c.collapsed !== 'boolean') c.collapsed = false;
+    if (!Array.isArray(c.scenes) || !c.scenes.length) {
+      // legacy chapter: wrap its content (+notes) into a single default scene
+      const s = blankScene(0);
+      s.title = 'Scene 1';
+      s.content = c.content || '';
+      s.markdownContent = c.markdownContent || '';
+      s.wordCount = countWords(stripHtml(s.content));
+      s.notes = Array.isArray(c.notes) ? c.notes : [];
+      c.scenes = [s];
+      migratedToScenes = true;
+    }
+    delete c.content; delete c.markdownContent; delete c.notes;
+    c.scenes.forEach(normScene);
+    c.wordCount = c.scenes.reduce((sum, s) => sum + (s.wordCount || 0), 0);
   });
+  if (migratedToScenes) setTimeout(() => toast('Migrated chapters to the new scene structure'), 400);
   ['characters', 'locations', 'races'].forEach(k => {
     if (!Array.isArray(n[k])) n[k] = [];
     n[k].forEach(e => { if (!e.id) e.id = uuid(); });
+  });
+  // characters gain relationships[] + graphPosition for the relationship graph
+  n.characters.forEach(ch => {
+    // legacy: `relationships` used to be a free-text field — preserve it
+    if (typeof ch.relationships === 'string') { ch.relationshipNotes = ch.relationships; ch.relationships = []; }
+    if (!Array.isArray(ch.relationships)) ch.relationships = [];
+    ch.relationships.forEach(r => {
+      r.id = r.id || uuid();
+      r.type = r.type || 'friend';
+      r.strength = typeof r.strength === 'number' ? r.strength : 5;
+      r.status = r.status || 'active';
+    });
+    if (!ch.graphPosition || typeof ch.graphPosition.x !== 'number') ch.graphPosition = null;
+    if (ch.hiddenInGraph === undefined) ch.hiddenInGraph = false;
   });
   return n;
 }
@@ -573,30 +869,38 @@ function commitNovelTitle() {
 /* ================= EDITOR ================= */
 editor.addEventListener('input', () => {
   if (isLoadingContent) return;          // skip programmatic loads (Bug 2A)
-  const c = currentChapter();
-  if (!c) return;
-  c.content = editor.innerHTML;
-  c.wordCount = countWords(stripHtml(c.content));
+  const s = currentScene();
+  if (!s) return;
+  s.content = editor.innerHTML;
+  s.wordCount = countWords(stripHtml(s.content));
+  s.modifiedAt = nowISO();
   updateCounters();
-  refreshChapterWordCount(c);
-  reconcileNotes(c);            // keep note offsets valid as text shifts
+  refreshSceneWordCount(s);
+  reconcileNotes(s);            // keep note offsets valid as text shifts
   scheduleNotesRender();
   // only mark dirty if the content really differs from the last saved snapshot (Bug 2B)
-  if (normalizeHTML(c.content) !== (savedContent[c.id] || '')) markDirty();
+  if (normalizeHTML(s.content) !== (savedContent[s.id] || '')) markDirty();
 });
 mdEditor.addEventListener('input', () => {
   if (isLoadingContent) return;
-  const c = currentChapter();
-  if (!c) return;
-  c.markdownContent = mdEditor.value;
-  c.wordCount = countWords(mdEditor.value);
+  const s = currentScene();
+  if (!s) return;
+  s.markdownContent = mdEditor.value;
+  s.wordCount = countWords(mdEditor.value);
+  s.modifiedAt = nowISO();
   updateCounters();
-  refreshChapterWordCount(c);
-  if (c.markdownContent !== (savedMd[c.id] || '')) markDirty();
+  refreshSceneWordCount(s);
+  if (s.markdownContent !== (savedMd[s.id] || '')) markDirty();
 });
-function refreshChapterWordCount(c) {
-  const li = chapterList.querySelector(`[data-id="${c.id}"] .ci-words`);
-  if (li) li.textContent = c.wordCount + ' words';
+function refreshSceneWordCount(s) {
+  const el = chapterList.querySelector(`[data-scene-id="${s.id}"] .ts-words`);
+  if (el) el.textContent = s.wordCount || 0;
+  const c = currentChapter();
+  if (c) {
+    c.wordCount = chapterWordCount(c);
+    const cw = chapterList.querySelector(`.tree-chapter[data-chapter-id="${c.id}"] .tc-words`);
+    if (cw) cw.textContent = c.wordCount;
+  }
 }
 
 function exec(cmd, val = null) {
@@ -648,23 +952,23 @@ document.addEventListener('selectionchange', () => {
 /* markdown mode toggle */
 $('#btnMarkdownMode').addEventListener('click', toggleMarkdownMode);
 function toggleMarkdownMode() {
-  const c = currentChapter();
-  if (!c) return;
+  const s = currentScene();
+  if (!s) return;
   isLoadingContent = true;   // switching views is not an edit (Bug 2C)
   if (!mdMode) {
     // visual -> markdown
-    c.content = editor.innerHTML;
-    mdEditor.value = htmlToMd(c.content);
-    c.markdownContent = mdEditor.value;
+    s.content = editor.innerHTML;
+    mdEditor.value = htmlToMd(s.content);
+    s.markdownContent = mdEditor.value;
     editor.classList.add('hidden');
     mdEditor.classList.remove('hidden');
     $('#btnMarkdownMode').classList.add('active');
     mdMode = true;
   } else {
     // markdown -> visual
-    c.markdownContent = mdEditor.value;
-    c.content = mdToHtml(mdEditor.value);
-    editor.innerHTML = c.content;
+    s.markdownContent = mdEditor.value;
+    s.content = mdToHtml(mdEditor.value);
+    editor.innerHTML = s.content;
     mdEditor.classList.add('hidden');
     editor.classList.remove('hidden');
     $('#btnMarkdownMode').classList.remove('active');
@@ -751,7 +1055,7 @@ $('#docFontSelect').addEventListener('change', e => {
 const ENTITY_DEFS = {
   characters: {
     listEl: '#charList',
-    empty: () => ({ id: uuid(), name: '', role: 'main', age: '', appearance: '', personality: '', bio: '', history: '', motivation: '', relationships: '', notes: '' }),
+    empty: () => ({ id: uuid(), name: '', role: 'main', age: '', appearance: '', personality: '', bio: '', history: '', motivation: '', relationshipNotes: '', notes: '', relationships: [], graphPosition: null, hiddenInGraph: false }),
     subtitle: e => ({ main: 'Main', supporting: 'Supporting', minor: 'Minor' }[e.role] || ''),
     fields: [
       { key: 'name', label: 'Name', type: 'input' },
@@ -762,7 +1066,7 @@ const ENTITY_DEFS = {
       { key: 'bio', label: 'Biography', type: 'textarea' },
       { key: 'history', label: 'Personal History', type: 'textarea' },
       { key: 'motivation', label: 'Motivation', type: 'textarea' },
-      { key: 'relationships', label: 'Relationships', type: 'textarea' },
+      { key: 'relationshipNotes', label: 'Relationships (notes)', type: 'textarea' },
       { key: 'notes', label: 'Notes', type: 'textarea' }
     ]
   },
@@ -831,6 +1135,8 @@ function renderEntities(kind) {
         item[f.key] = ctrl.value;
         if (f.key === 'name') head.querySelector('.ename').textContent = ctrl.value || '(unnamed)';
         if (f.key === 'role' || f.key === 'type') head.querySelector('.erole').textContent = def.subtitle(item);
+        if (kind === 'characters' || kind === 'locations') updateSceneMeta();
+        if (kind === 'characters' && graphOpen) drawGraph();
         markDirty();
       });
       body.appendChild(ctrl);
@@ -841,7 +1147,15 @@ function renderEntities(kind) {
     del.addEventListener('click', () => {
       confirmModal('Delete', `Delete "${item.name || 'this entry'}"?`, () => {
         novel[kind] = novel[kind].filter(x => x.id !== item.id);
+        if (kind === 'characters') {
+          // scrub references to the removed character
+          novel.characters.forEach(c => { c.relationships = (c.relationships || []).filter(r => r.targetCharacterId !== item.id); });
+          novel.chapters.forEach(c => (c.scenes || []).forEach(s => { if (s.povCharacter === item.id) s.povCharacter = null; }));
+        }
+        if (kind === 'locations') novel.chapters.forEach(c => (c.scenes || []).forEach(s => { if (s.location === item.id) s.location = null; }));
         renderEntities(kind);
+        updateSceneMeta();
+        if (graphOpen) { renderLegend(); drawGraph(); }
         markDirty();
         toast('Deleted');
       });
@@ -851,6 +1165,7 @@ function renderEntities(kind) {
     wrap.appendChild(body);
     host.appendChild(wrap);
   });
+  if (kind === 'characters' || kind === 'locations') updateSceneMeta();
 }
 function addEntity(kind) {
   if (!novel) return;
@@ -868,8 +1183,8 @@ $('#btnAddRace').addEventListener('click', () => addEntity('races'));
 function updateCounters() {
   const goal = novel ? (novel.settings.wordGoal || 80000) : 80000;
   const c = currentChapter();
-  const chapWords = c ? c.wordCount || 0 : 0;
-  const total = novel ? novel.chapters.reduce((s, x) => s + (x.wordCount || 0), 0) : 0;
+  const chapWords = c ? chapterWordCount(c) : 0;
+  const total = novel ? novel.chapters.reduce((s, x) => s + chapterWordCount(x), 0) : 0;
   const txt = !novel ? '' : mdMode ? mdEditor.value : stripHtml(editor.innerHTML);
   $('#statChapWords').textContent = chapWords;
   $('#statTotalWords').textContent = total;
@@ -919,46 +1234,54 @@ document.addEventListener('mousemove', e => {
   if (focusMode) $('#exitFocus').classList.toggle('peek', e.clientY < 8);
 });
 
-/* ================= CHAPTER TITLE INLINE EDIT ================= */
-const chTitle = $('#chapterTitle');
-chTitle.addEventListener('dblclick', () => {
-  chTitle.contentEditable = 'true';
-  chTitle.focus();
-  document.execCommand('selectAll', false, null);
-});
-chTitle.addEventListener('blur', commitTitle);
-chTitle.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); chTitle.blur(); }
-});
-function commitTitle() {
-  chTitle.contentEditable = 'false';
-  const c = currentChapter();
-  if (!c) return;
-  const v = chTitle.textContent.trim();
-  if (v) { c.title = v; renderChapters(); markDirty(); }
-  else chTitle.textContent = c.title;
-}
+/* Scene/chapter titles are edited via the breadcrumb and the tree (double-click). */
 
-/* ================= CONTEXT MENU ================= */
+/* ================= TREE CONTEXT MENU (scene / chapter) ================= */
 const ctx = $('#ctxMenu');
-let ctxTargetId = null;
+function hideCtx() { ctx.classList.add('hidden'); ctx.innerHTML = ''; }
+function ctxItem(label, handler, cls) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  if (cls) b.className = cls;
+  b.addEventListener('click', () => { hideCtx(); handler(); });
+  return b;
+}
 chapterList.addEventListener('contextmenu', e => {
-  const li = e.target.closest('.chapter-item');
-  if (!li) return;
+  const sceneEl = e.target.closest('.tree-scene');
+  const chapRow = e.target.closest('.tc-row');
+  if (!sceneEl && !chapRow) return;
   e.preventDefault();
-  ctxTargetId = li.dataset.id;
-  ctx.style.left = e.clientX + 'px';
+  ctx.innerHTML = '';
+  if (sceneEl) {
+    const id = sceneEl.dataset.sceneId;
+    ctx.appendChild(ctxItem('Rename', () => renameScene(id)));
+    ctx.appendChild(ctxItem('Duplicate', () => duplicateScene(id)));
+    ctx.appendChild(ctxItem('Delete', () => deleteScene(id), 'danger'));
+    const others = novel.chapters.filter(c => !(c.scenes || []).some(s => s.id === id));
+    if (others.length) {
+      const sub = document.createElement('div');
+      sub.className = 'ctx-sub';
+      sub.innerHTML = '<button class="ctx-sub-head">Move to Chapter ▸</button>';
+      const list = document.createElement('div');
+      list.className = 'ctx-sub-menu';
+      others.forEach(c => list.appendChild(ctxItem(c.title, () => moveSceneToChapter(id, c.id))));
+      sub.appendChild(list);
+      ctx.appendChild(sub);
+    }
+  } else {
+    const id = chapRow.dataset.chapterId;
+    ctx.appendChild(ctxItem('Rename', () => renameChapter(id)));
+    ctx.appendChild(ctxItem('Duplicate', () => duplicateChapter(id)));
+    ctx.appendChild(ctxItem('Add Scene', () => addScene(id)));
+    ctx.appendChild(ctxItem('Delete', () => deleteChapter(id), 'danger'));
+    ctx.appendChild(ctxItem('Collapse All', () => setAllCollapsed(true)));
+    ctx.appendChild(ctxItem('Expand All', () => setAllCollapsed(false)));
+  }
+  ctx.style.left = Math.min(e.clientX, innerWidth - 190) + 'px';
   ctx.style.top = e.clientY + 'px';
   ctx.classList.remove('hidden');
 });
-document.addEventListener('click', () => ctx.classList.add('hidden'));
-ctx.addEventListener('click', e => {
-  const act = e.target.dataset.ctx;
-  if (!act || !ctxTargetId) return;
-  if (act === 'rename') renameChapter(ctxTargetId);
-  if (act === 'duplicate') duplicateChapter(ctxTargetId);
-  if (act === 'delete') deleteChapter(ctxTargetId);
-});
+document.addEventListener('click', hideCtx);
 
 /* ================= MODAL ================= */
 let modalCb = null;
@@ -1044,16 +1367,25 @@ const newProject = newNovelFile;   // "New"  == new .novel file
 /* ================= EXPORT ================= */
 function buildExport(kind, n) {
   if (!n) return '';
-  if (n === novel) saveCurrentChapter();
+  if (n === novel) saveCurrentScene();
+  const scenesOf = c => c.scenes || [];
   if (kind === 'txt') {
-    return n.chapters.map(c => c.title.toUpperCase() + '\n\n' + stripHtml(c.content).trim()).join('\n\n\n');
+    return n.chapters.map(c =>
+      c.title.toUpperCase() + '\n\n' +
+      scenesOf(c).map(s => stripHtml(s.content).trim()).filter(Boolean).join('\n\n* * *\n\n')
+    ).join('\n\n\n');
   }
   if (kind === 'md') {
-    return n.chapters.map(c => '# ' + c.title + '\n\n' + (c.markdownContent || htmlToMd(c.content)).trim()).join('\n\n---\n\n');
+    return n.chapters.map(c =>
+      '# ' + c.title + '\n\n' +
+      scenesOf(c).map(s => '## ' + s.title + '\n\n' + (s.markdownContent || htmlToMd(s.content)).trim()).join('\n\n')
+    ).join('\n\n---\n\n');
   }
   if (kind === 'html') {
     const body = n.chapters
-      .map(c => `<section><h1>${esc(c.title)}</h1>\n${c.content}</section>`)
+      .map(c => `<section><h1>${esc(c.title)}</h1>\n` +
+        scenesOf(c).map(s => `<article><h2>${esc(s.title)}</h2>\n${s.content}</article>`).join('\n') +
+        `</section>`)
       .join('\n<hr/>\n');
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(n.title)}</title>
 <style>body{font-family:Georgia,serif;max-width:720px;margin:40px auto;line-height:1.7;padding:0 20px;}</style>
@@ -1194,7 +1526,7 @@ function getNoteType(id) {
   const all = getNoteTypes();
   return all.find(t => t.id === id) || all.find(t => t.id === NOTE_FALLBACK_ID) || all[0];
 }
-function chapterNotes() { const c = currentChapter(); return (c && c.notes) || []; }
+function chapterNotes() { const s = currentScene(); return (s && s.notes) || []; }  // notes live on the current scene
 function scheduleNotesRender() {
   if (notesRenderRAF) return;
   notesRenderRAF = requestAnimationFrame(() => { notesRenderRAF = null; renderMargin(); updateHighlights(); positionOpenCard(); });
@@ -1312,7 +1644,7 @@ function positionFloat(el, rect) {
 function openAddNote(sel) {
   const s = sel || getSelectionInEditor();
   if (!s) { toast('Select text to annotate'); return; }
-  if (!novel || !currentChapter()) return;
+  if (!novel || !currentScene()) return;
   pendingSelection = s;
   buildTypeOptions($('#npType'));
   $('#npContent').value = '';
@@ -1322,7 +1654,7 @@ function openAddNote(sel) {
 function closeAddNote() { if (notePopup) { notePopup.classList.add('hidden'); } pendingSelection = null; }
 function confirmAddNote() {
   if (!pendingSelection) return;
-  const c = currentChapter();
+  const c = currentScene();
   if (!c) return;
   if (!Array.isArray(c.notes)) c.notes = [];
   c.notes.push({
@@ -1452,7 +1784,7 @@ function updateHighlights() {
 
 /* ================= EXPANDED NOTE CARD ================= */
 function openNoteCard(id, scroll = true) {
-  const c = currentChapter();
+  const c = currentScene();
   const nt = c && (c.notes || []).find(n => n.id === id);
   if (!nt) return;
   openNoteId = id;
@@ -1486,7 +1818,7 @@ document.addEventListener('mousedown', e => {
 });
 function renderNoteCard() {
   if (!noteCard) return;
-  const c = currentChapter();
+  const c = currentScene();
   const nt = openNoteId && c && (c.notes || []).find(n => n.id === openNoteId);
   if (!nt) { noteCard.classList.add('hidden'); return; }
   const ty = getNoteType(nt.typeId);
@@ -1534,7 +1866,7 @@ function renderNoteCard() {
 }
 function positionOpenCard() {
   if (!noteCard || noteCard.classList.contains('hidden') || !openNoteId) return;
-  const c = currentChapter();
+  const c = currentScene();
   const nt = c && (c.notes || []).find(n => n.id === openNoteId);
   if (!nt) return;
   let rect;
@@ -1554,7 +1886,7 @@ function positionOpenCard() {
   noteCard.style.top = top + 'px';
 }
 function toggleResolve(id) {
-  const c = currentChapter();
+  const c = currentScene();
   const nt = c && (c.notes || []).find(n => n.id === id);
   if (!nt) return;
   nt.resolved = !nt.resolved;
@@ -1564,7 +1896,7 @@ function toggleResolve(id) {
 }
 function deleteNote(id) {
   confirmModal('Delete note', 'Delete this note? This cannot be undone.', () => {
-    const c = currentChapter();
+    const c = currentScene();
     if (!c) return;
     c.notes = (c.notes || []).filter(n => n.id !== id);
     if (openNoteId === id) closeNoteCard();
@@ -1651,7 +1983,7 @@ function setNoteTypeColor(ty, color) {
 function deleteCustomType(ty) {
   confirmModal('Delete type', `Delete the “${ty.name}” type? Its notes will become “Idea”.`, () => {
     novel.settings.customNoteTypes = novel.settings.customNoteTypes.filter(t => t.id !== ty.id);
-    novel.chapters.forEach(c => (c.notes || []).forEach(n => { if (n.typeId === ty.id) n.typeId = NOTE_FALLBACK_ID; }));
+    novel.chapters.forEach(c => (c.scenes || []).forEach(s => (s.notes || []).forEach(n => { if (n.typeId === ty.id) n.typeId = NOTE_FALLBACK_ID; })));
     noteTypeFilter.delete(ty.id);
     markDirty();
     ensureHighlightStyles();
@@ -1754,23 +2086,26 @@ function saveNoteDisplay() {
 function buildNotesExport(kind) {
   const lines = [];
   novel.chapters.forEach(c => {
-    const notes = (c.notes || []).slice().sort((a, b) => a.startOffset - b.startOffset);
-    if (!notes.length) return;
-    if (kind === 'md') {
-      lines.push(`## ${c.title}`, '');
-      notes.forEach(n => {
-        const ty = getNoteType(n.typeId);
-        lines.push(`- **[${ty.name}]** “${n.selectedText}” — ${n.content || ''} _(${fmtNoteDate(n.createdAt)})_${n.resolved ? ' ✓' : ''}`);
-      });
-      lines.push('');
-    } else {
-      lines.push(`NOTES FOR: ${c.title}`, '─'.repeat(42));
-      notes.forEach(n => {
-        const ty = getNoteType(n.typeId);
-        lines.push(`[${ty.name}] “${n.selectedText}” — ${n.content || ''} (${fmtNoteDate(n.createdAt)})${n.resolved ? ' ✓' : ''}`);
-      });
-      lines.push('');
-    }
+    (c.scenes || []).forEach(sc => {
+      const notes = (sc.notes || []).slice().sort((a, b) => a.startOffset - b.startOffset);
+      if (!notes.length) return;
+      const heading = `${c.title} › ${sc.title}`;
+      if (kind === 'md') {
+        lines.push(`## ${heading}`, '');
+        notes.forEach(n => {
+          const ty = getNoteType(n.typeId);
+          lines.push(`- **[${ty.name}]** “${n.selectedText}” — ${n.content || ''} _(${fmtNoteDate(n.createdAt)})_${n.resolved ? ' ✓' : ''}`);
+        });
+        lines.push('');
+      } else {
+        lines.push(`NOTES FOR: ${heading}`, '─'.repeat(42));
+        notes.forEach(n => {
+          const ty = getNoteType(n.typeId);
+          lines.push(`[${ty.name}] “${n.selectedText}” — ${n.content || ''} (${fmtNoteDate(n.createdAt)})${n.resolved ? ' ✓' : ''}`);
+        });
+        lines.push('');
+      }
+    });
   });
   if (!lines.length) return kind === 'md' ? '# Notes\n\n_(no notes)_' : 'NOTES\n\n(no notes)';
   return (kind === 'md' ? '# Notes\n\n' : '') + lines.join('\n');
@@ -1794,6 +2129,654 @@ async function doExportNotes(kind) {
 addEventListener('resize', scheduleNotesRender);
 $('.editor-scroll').addEventListener('scroll', () => { positionOpenCard(); hideDotTooltip(); if (notePopup && !notePopup.classList.contains('hidden')) closeAddNote(); });
 
+/* ================= CORKBOARD ================= */
+let corkboardOpen = false;
+let corkZoomLevel = 1;          // 0 = small, 1 = medium, 2 = large
+let corkFilterStatus = 'all';
+let corkFilterPov = '';
+let corkSort = 'order';
+let corkDrag = null;
+let suppressCorkClick = false;
+
+function charName(id) { const c = novel && novel.characters.find(x => x.id === id); return c ? (c.name || '(unnamed)') : ''; }
+function locName(id) { const l = novel && novel.locations.find(x => x.id === id); return l ? (l.name || '(unnamed)') : ''; }
+function hashStr(s) { let h = 0; for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h); }
+
+function openCorkboard() {
+  if (!novel) return;
+  saveCurrentScene();
+  corkboardOpen = true;
+  document.body.classList.add('corkboard-mode');
+  $('#corkboard').classList.remove('hidden');
+  $('#btnCorkboard').classList.add('active');
+  fillSelect($('#corkPov'), [['', 'All POV'], ...novel.characters.map(c => [c.id, c.name || '(unnamed)'])], corkFilterPov);
+  renderCorkboard();
+}
+function closeCorkboard() {
+  corkboardOpen = false;
+  document.body.classList.remove('corkboard-mode');
+  $('#corkboard').classList.add('hidden');
+  $('#btnCorkboard').classList.remove('active');
+}
+function toggleCorkboard() { corkboardOpen ? closeCorkboard() : openCorkboard(); }
+
+function scenePasses(s) {
+  if (corkFilterStatus !== 'all' && s.status !== corkFilterStatus) return false;
+  if (corkFilterPov && s.povCharacter !== corkFilterPov) return false;
+  return true;
+}
+function sortScenes(scenes) {
+  const arr = scenes.slice();
+  if (corkSort === 'title') arr.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+  else if (corkSort === 'words') arr.sort((a, b) => (b.wordCount || 0) - (a.wordCount || 0));
+  else if (corkSort === 'status') arr.sort((a, b) => SCENE_STATUS.findIndex(x => x[0] === a.status) - SCENE_STATUS.findIndex(x => x[0] === b.status));
+  else if (corkSort === 'time') arr.sort((a, b) => TIME_OF_DAY.findIndex(x => x[0] === a.timeOfDay) - TIME_OF_DAY.findIndex(x => x[0] === b.timeOfDay));
+  return arr;
+}
+function renderCorkboard() {
+  const grid = $('#corkGrid');
+  if (!grid || !novel) return;
+  grid.className = 'cork-grid zoom-' + corkZoomLevel;
+  grid.innerHTML = '';
+  novel.chapters.forEach(c => {
+    const group = document.createElement('div');
+    group.className = 'cork-group';
+    group.dataset.chapterId = c.id;
+    group.innerHTML = `<div class="cork-chap">📁 ${esc(c.title)} <span class="cork-count">${(c.scenes || []).length} scenes</span></div>`;
+    const cards = document.createElement('div');
+    cards.className = 'cork-cards';
+    sortScenes((c.scenes || []).filter(scenePasses)).forEach(s => cards.appendChild(buildSceneCard(s, c)));
+    const ghost = document.createElement('div');
+    ghost.className = 'cork-card cork-ghost';
+    ghost.dataset.chapterId = c.id;
+    ghost.innerHTML = '<div class="cg-plus">＋</div><div>Add scene</div>';
+    ghost.onclick = () => { if (addScene(c.id)) renderCorkboard(); };
+    cards.appendChild(ghost);
+    group.appendChild(cards);
+    grid.appendChild(group);
+  });
+}
+function buildSceneCard(s, c) {
+  const st = statusMeta(s.status), tm = timeMeta(s.timeOfDay);
+  const card = document.createElement('div');
+  card.className = 'cork-card' + (s.id === currentSceneId ? ' current' : '');
+  card.dataset.sceneId = s.id;
+  card.dataset.chapterId = c.id;
+  card.style.setProperty('--sc', st[2]);
+  card.style.setProperty('--rot', (((hashStr(s.id) % 20) / 10) - 1).toFixed(2) + 'deg');
+  const pov = s.povCharacter ? `<div class="cc-meta">👤 ${esc(charName(s.povCharacter))}</div>` : '';
+  const loc = s.location ? `<div class="cc-meta">📍 ${esc(locName(s.location))}</div>` : '';
+  card.innerHTML =
+    `<div class="cc-badge" title="Click to cycle status"><span class="cc-dot"></span>${st[1]}</div>
+     <div class="cc-title">${esc(s.title)}</div>
+     <div class="cc-divider"></div>
+     ${pov}${loc}
+     <div class="cc-meta">${tm[2]} ${tm[1]}</div>
+     <div class="cc-foot"><span>${s.wordCount || 0} words</span><span class="cc-date">${fmtNoteDate(s.modifiedAt || s.createdAt)}</span></div>
+     <div class="cc-actions"><button class="cc-edit" title="Open in editor">Edit</button><button class="cc-del" title="Delete scene">Delete</button></div>`;
+  let clickTimer = null;
+  card.querySelector('.cc-badge').onclick = e => { e.stopPropagation(); cycleStatus(s); };
+  card.querySelector('.cc-edit').onclick = e => { e.stopPropagation(); selectScene(s.id); closeCorkboard(); };
+  card.querySelector('.cc-del').onclick = e => { e.stopPropagation(); deleteScene(s.id); setTimeout(renderCorkboard, 60); };
+  card.querySelector('.cc-title').ondblclick = e => { e.stopPropagation(); if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; } renameScene(s.id); setTimeout(renderCorkboard, 60); };
+  card.onclick = e => {
+    if (suppressCorkClick) return;
+    if (e.target.closest('.cc-actions') || e.target.closest('.cc-badge')) return;
+    if (clickTimer) return;
+    clickTimer = setTimeout(() => { clickTimer = null; selectScene(s.id); closeCorkboard(); }, 230);
+  };
+  return card;
+}
+function cycleStatus(s) {
+  const i = SCENE_STATUS.findIndex(x => x[0] === s.status);
+  s.status = SCENE_STATUS[(i + 1) % SCENE_STATUS.length][0];
+  markDirty(); renderCorkboard(); renderTree(); updateSceneMeta();
+}
+/* corkboard card drag (pointer-based; reorder within a chapter, move between chapters) */
+$('#corkGrid').addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  const card = e.target.closest('.cork-card:not(.cork-ghost)');
+  if (!card || e.target.closest('.cc-actions') || e.target.closest('.cc-badge')) return;
+  corkDrag = { id: card.dataset.sceneId, el: card, startX: e.clientX, startY: e.clientY, started: false, target: null };
+});
+document.addEventListener('mousemove', e => {
+  if (!corkDrag) return;
+  if (!corkDrag.started) {
+    if (Math.abs(e.clientX - corkDrag.startX) < 6 && Math.abs(e.clientY - corkDrag.startY) < 6) return;
+    corkDrag.started = true;
+    corkDrag.el.classList.add('cork-dragging');
+  }
+  e.preventDefault();
+  $$('.cork-card').forEach(x => x.classList.remove('cork-drop'));
+  $$('.cork-group').forEach(x => x.classList.remove('cork-group-drop'));
+  corkDrag.target = null;
+  const over = $$('.cork-card:not(.cork-ghost)').find(x => { if (x === corkDrag.el) return false; const r = x.getBoundingClientRect(); return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom; });
+  if (over) { over.classList.add('cork-drop'); const r = over.getBoundingClientRect(); corkDrag.target = { kind: 'card', id: over.dataset.sceneId, after: e.clientX > r.left + r.width / 2 }; }
+  else { const grp = $$('.cork-group').find(x => { const r = x.getBoundingClientRect(); return e.clientY >= r.top && e.clientY <= r.bottom; }); if (grp) { grp.classList.add('cork-group-drop'); corkDrag.target = { kind: 'group', id: grp.dataset.chapterId }; } }
+});
+document.addEventListener('mouseup', () => {
+  if (!corkDrag) return;
+  const d = corkDrag; corkDrag = null;
+  $$('.cork-card').forEach(x => x.classList.remove('cork-drop', 'cork-dragging'));
+  $$('.cork-group').forEach(x => x.classList.remove('cork-group-drop'));
+  if (!d.started || !d.target) return;
+  applyCorkDrop(d.id, d.target);
+  suppressCorkClick = true;
+  setTimeout(() => (suppressCorkClick = false), 60);
+});
+function applyCorkDrop(sceneId, target) {
+  const f = findScene(sceneId);
+  if (!f) return;
+  const from = f.chapter;
+  if (target.kind === 'card') {
+    const g = findScene(target.id);
+    if (!g || target.id === sceneId) return;
+    if (g.chapter.id !== from.id && from.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+    const idx = from.scenes.findIndex(s => s.id === sceneId);
+    const [moved] = from.scenes.splice(idx, 1);
+    let di = g.chapter.scenes.findIndex(s => s.id === target.id);
+    if (target.after) di += 1;
+    g.chapter.scenes.splice(di, 0, moved);
+  } else {
+    const dest = findChapter(target.id);
+    if (!dest || dest.id === from.id) return;
+    if (from.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+    const idx = from.scenes.findIndex(s => s.id === sceneId);
+    const [moved] = from.scenes.splice(idx, 1);
+    dest.scenes.push(moved);
+  }
+  markDirty(); renderCorkboard(); renderTree();
+}
+/* corkboard toolbar wiring */
+$('#btnCorkboard').addEventListener('click', toggleCorkboard);
+$('#corkBack').addEventListener('click', closeCorkboard);
+$('#corkZoom').addEventListener('input', e => { corkZoomLevel = +e.target.value; renderCorkboard(); });
+$('#corkStatus').addEventListener('change', e => { corkFilterStatus = e.target.value; renderCorkboard(); });
+$('#corkPov').addEventListener('change', e => { corkFilterPov = e.target.value; renderCorkboard(); });
+$('#corkSort').addEventListener('change', e => { corkSort = e.target.value; renderCorkboard(); });
+
+/* ================= CHARACTER RELATIONSHIP GRAPH ================= */
+const REL_TYPES = [
+  ['family', 'Family', '#e74c3c'], ['friend', 'Friend', '#2ecc71'], ['enemy', 'Enemy', '#e67e22'],
+  ['romance', 'Romance', '#e91e63'], ['colleague', 'Colleague', '#3498db'], ['mentor', 'Mentor', '#9b59b6'],
+  ['rival', 'Rival', '#d35400'], ['custom', 'Custom', '#c9a96e']
+];
+const REL_STATUS = [['active', 'Active'], ['past', 'Past'], ['secret', 'Secret'], ['oneSided', 'One-sided']];
+function relColor(t) { const r = REL_TYPES.find(x => x[0] === t); return r ? r[2] : '#c9a96e'; }
+function relTypeName(t) { const r = REL_TYPES.find(x => x[0] === t); return r ? r[1] : 'Custom'; }
+
+let graphOpen = false;
+let gEventsInit = false;
+let gCanvas = null, gCtx = null;
+let gView = { x: 0, y: 0, zoom: 1 };
+let gDragNode = null, gPanning = false, gLast = null, gMoved = false;
+let gSelected = null, gHoverEdge = null, gFilter = 'all';
+let gPanelRel = null;   // relationship being edited in the panel
+
+function nodeRadius(ch) { return ch.role === 'main' ? 30 : ch.role === 'supporting' ? 25 : 21; }
+function roleBadge(ch) { return ch.role === 'main' ? '★' : ch.role === 'supporting' ? '◆' : '●'; }
+function graphChars() {
+  if (!novel) return [];
+  let chars = novel.characters.filter(c => !c.hiddenInGraph);
+  if (gFilter === 'main') chars = chars.filter(c => c.role === 'main');
+  else if (gFilter === 'withrel') chars = chars.filter(c => (c.relationships || []).length || novel.characters.some(o => (o.relationships || []).some(r => r.targetCharacterId === c.id)));
+  else if (gFilter === 'withoutrel') chars = chars.filter(c => !((c.relationships || []).length || novel.characters.some(o => (o.relationships || []).some(r => r.targetCharacterId === c.id))));
+  return chars;
+}
+function graphEdges(chars) {
+  const ids = new Set(chars.map(c => c.id));
+  const edges = [];
+  chars.forEach(src => (src.relationships || []).forEach(r => {
+    if (r.targetCharacterId && ids.has(r.targetCharacterId)) {
+      const tgt = novel.characters.find(c => c.id === r.targetCharacterId);
+      if (tgt) edges.push({ src, tgt, rel: r });
+    }
+  }));
+  return edges;
+}
+function ensureGraphPositions() {
+  const chars = novel.characters;
+  const n = chars.length;
+  chars.forEach((c, i) => {
+    if (!c.graphPosition || typeof c.graphPosition.x !== 'number') {
+      const ang = (i / Math.max(1, n)) * Math.PI * 2;
+      c.graphPosition = { x: Math.cos(ang) * 220 + (Math.random() * 40 - 20), y: Math.sin(ang) * 220 + (Math.random() * 40 - 20) };
+    }
+  });
+}
+function w2s(x, y) { return { x: x * gView.zoom + gView.x, y: y * gView.zoom + gView.y }; }
+function s2w(x, y) { return { x: (x - gView.x) / gView.zoom, y: (y - gView.y) / gView.zoom }; }
+
+function openGraph() {
+  if (!novel) return;
+  graphOpen = true;
+  $('#graphOverlay').classList.remove('hidden');
+  gCanvas = $('#graphCanvas');
+  gCtx = gCanvas.getContext('2d');
+  if (!gEventsInit) { initGraphEvents(); gEventsInit = true; }
+  ensureGraphPositions();
+  fillSelect($('#graphFilter'), [['all', 'Show All'], ['main', 'Main Characters Only'], ['withrel', 'With Relationships'], ['withoutrel', 'Without Relationships']], gFilter);
+  renderLegend();
+  gSelected = null; gPanelRel = null;
+  $('#graphPanel').classList.add('hidden');
+  requestAnimationFrame(() => { gResize(); gCenterView(); });
+}
+function closeGraph() {
+  graphOpen = false;
+  $('#graphOverlay').classList.add('hidden');
+  markDirty();   // positions may have changed
+}
+function gCenterView() {
+  const chars = graphChars();
+  if (!chars.length) { gView = { x: gCanvas.clientWidth / 2, y: gCanvas.clientHeight / 2, zoom: 1 }; drawGraph(); return; }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  chars.forEach(c => { minX = Math.min(minX, c.graphPosition.x); minY = Math.min(minY, c.graphPosition.y); maxX = Math.max(maxX, c.graphPosition.x); maxY = Math.max(maxY, c.graphPosition.y); });
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  gView.zoom = 1;
+  gView.x = gCanvas.clientWidth / 2 - cx * gView.zoom;
+  gView.y = gCanvas.clientHeight / 2 - cy * gView.zoom;
+  drawGraph();
+}
+function gResize() {
+  if (!gCanvas) return;
+  const stage = $('.graph-stage');
+  const r = stage.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  gCanvas.width = r.width * dpr;
+  gCanvas.height = r.height * dpr;
+  gCanvas.style.width = r.width + 'px';
+  gCanvas.style.height = r.height + 'px';
+  gCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawGraph();
+}
+function drawGraph() {
+  if (!gCtx) return;
+  const W = gCanvas.clientWidth, H = gCanvas.clientHeight;
+  gCtx.clearRect(0, 0, W, H);
+  gCtx.fillStyle = '#1a1a1f';
+  gCtx.fillRect(0, 0, W, H);
+  drawGrid(W, H);
+  const chars = graphChars();
+  const edges = graphEdges(chars);
+  const connected = new Set();
+  if (gSelected) { edges.forEach(e => { if (e.src.id === gSelected || e.tgt.id === gSelected) { connected.add(e.src.id); connected.add(e.tgt.id); } }); connected.add(gSelected); }
+  edges.forEach(e => drawEdge(e, connected));
+  chars.forEach(ch => drawNode(ch, connected));
+}
+function drawGrid(W, H) {
+  const step = 50 * gView.zoom;
+  if (step < 12) return;
+  const ox = gView.x % step, oy = gView.y % step;
+  gCtx.fillStyle = '#2a2a35';
+  for (let x = ox; x < W; x += step) for (let y = oy; y < H; y += step) { gCtx.beginPath(); gCtx.arc(x, y, 1, 0, Math.PI * 2); gCtx.fill(); }
+}
+function edgeDash(rel) {
+  if (rel.status === 'past') return [8, 6];
+  if (rel.status === 'secret') return [2, 5];
+  if (rel.strength <= 3) return [5, 4];
+  return [];
+}
+function drawEdge(e, connected) {
+  const a = w2s(e.src.graphPosition.x, e.src.graphPosition.y);
+  const b = w2s(e.tgt.graphPosition.x, e.tgt.graphPosition.y);
+  const faded = gSelected && !(connected.has(e.src.id) && connected.has(e.tgt.id));
+  const hovered = gHoverEdge && gHoverEdge.rel.id === e.rel.id;
+  let width = e.rel.strength >= 9 ? 4 : e.rel.strength >= 7 ? 3 : e.rel.strength >= 4 ? 2 : 1;
+  gCtx.save();
+  gCtx.globalAlpha = faded ? 0.1 : hovered ? 1 : 0.75;
+  gCtx.strokeStyle = e.rel.type === 'custom' && e.rel.color ? e.rel.color : relColor(e.rel.type);
+  gCtx.lineWidth = (width + (hovered ? 1 : 0)) * gView.zoom;
+  gCtx.setLineDash(edgeDash(e.rel).map(v => v * gView.zoom));
+  if (e.rel.strength >= 9 && !faded) { gCtx.shadowColor = gCtx.strokeStyle; gCtx.shadowBlur = 8; }
+  const rt = nodeRadius(e.tgt) * gView.zoom;
+  const ang = Math.atan2(b.y - a.y, b.x - a.x);
+  const ex = b.x - Math.cos(ang) * rt, ey = b.y - Math.sin(ang) * rt;
+  gCtx.beginPath(); gCtx.moveTo(a.x, a.y); gCtx.lineTo(ex, ey); gCtx.stroke();
+  gCtx.setLineDash([]);
+  if (e.rel.status === 'oneSided' && !faded) { drawArrow(ex, ey, ang, gCtx.strokeStyle); }
+  // label
+  if (!faded && (hovered || gView.zoom > 0.6) && e.rel.subtype) {
+    gCtx.globalAlpha = hovered ? 1 : 0.5;
+    gCtx.fillStyle = '#e8e0d5';
+    gCtx.font = (11 * Math.min(1.4, gView.zoom)) + 'px Inter, sans-serif';
+    gCtx.textAlign = 'center';
+    gCtx.fillText(e.rel.subtype, (a.x + b.x) / 2, (a.y + b.y) / 2 - 4);
+  }
+  gCtx.restore();
+}
+function drawArrow(x, y, ang, color) {
+  const s = 9 * gView.zoom;
+  gCtx.save(); gCtx.fillStyle = color; gCtx.translate(x, y); gCtx.rotate(ang);
+  gCtx.beginPath(); gCtx.moveTo(0, 0); gCtx.lineTo(-s, -s * 0.5); gCtx.lineTo(-s, s * 0.5); gCtx.closePath(); gCtx.fill();
+  gCtx.restore();
+}
+function drawNode(ch, connected) {
+  const p = w2s(ch.graphPosition.x, ch.graphPosition.y);
+  const r = nodeRadius(ch) * gView.zoom;
+  const faded = gSelected && !connected.has(ch.id);
+  const isSel = gSelected === ch.id;
+  gCtx.save();
+  gCtx.globalAlpha = faded ? 0.3 : 1;
+  if (isSel) { gCtx.shadowColor = '#c9a96e'; gCtx.shadowBlur = 18; }
+  gCtx.beginPath(); gCtx.arc(p.x, p.y, r * (isSel ? 1.12 : 1), 0, Math.PI * 2);
+  gCtx.fillStyle = ch.color || '#c9a96e';
+  gCtx.fill();
+  gCtx.lineWidth = 2; gCtx.strokeStyle = isSel ? '#f0e2c8' : 'rgba(255,255,255,.5)'; gCtx.stroke();
+  gCtx.shadowBlur = 0;
+  // role badge
+  gCtx.fillStyle = '#1a1a1f'; gCtx.font = (13 * gView.zoom) + 'px sans-serif'; gCtx.textAlign = 'center'; gCtx.textBaseline = 'middle';
+  gCtx.fillText(roleBadge(ch), p.x, p.y);
+  // name label
+  gCtx.globalAlpha = faded ? 0.3 : 1;
+  gCtx.fillStyle = '#ffffff'; gCtx.font = '14px Inter, sans-serif'; gCtx.textBaseline = 'top';
+  gCtx.fillText(ch.name || '(unnamed)', p.x, p.y + r + 4);
+  gCtx.restore();
+}
+function nodeAt(sx, sy) {
+  const chars = graphChars();
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const ch = chars[i]; const p = w2s(ch.graphPosition.x, ch.graphPosition.y);
+    if (Math.hypot(sx - p.x, sy - p.y) <= nodeRadius(ch) * gView.zoom + 2) return ch;
+  }
+  return null;
+}
+function edgeAt(sx, sy) {
+  const chars = graphChars();
+  const edges = graphEdges(chars);
+  for (const e of edges) {
+    const a = w2s(e.src.graphPosition.x, e.src.graphPosition.y);
+    const b = w2s(e.tgt.graphPosition.x, e.tgt.graphPosition.y);
+    if (distToSeg(sx, sy, a.x, a.y, b.x, b.y) < 6) return e;
+  }
+  return null;
+}
+function distToSeg(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1; const l2 = dx * dx + dy * dy;
+  let t = l2 ? ((px - x1) * dx + (py - y1) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+/* ---- graph interactions ---- */
+function graphMouse(e) { const r = gCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+function initGraphEvents() {
+  gCanvas.addEventListener('mousedown', e => {
+    const m = graphMouse(e);
+    const node = nodeAt(m.x, m.y);
+    gMoved = false;
+    if (node) { gDragNode = node; gLast = m; }
+    else { gPanning = true; gLast = m; }
+  });
+  window.addEventListener('mousemove', e => {
+    if (!graphOpen) return;
+    if (gDragNode) {
+      const m = graphMouse(e); gMoved = true;
+      gDragNode.graphPosition.x += (m.x - gLast.x) / gView.zoom;
+      gDragNode.graphPosition.y += (m.y - gLast.y) / gView.zoom;
+      gLast = m; drawGraph();
+    } else if (gPanning) {
+      const m = graphMouse(e); gMoved = true;
+      gView.x += m.x - gLast.x; gView.y += m.y - gLast.y; gLast = m; drawGraph();
+    } else {
+      const m = graphMouse(e); const eg = edgeAt(m.x, m.y);
+      if ((eg && (!gHoverEdge || eg.rel.id !== gHoverEdge.rel.id)) || (!eg && gHoverEdge)) { gHoverEdge = eg; drawGraph(); }
+      gCanvas.style.cursor = nodeAt(m.x, m.y) ? 'grab' : eg ? 'pointer' : 'default';
+    }
+  });
+  window.addEventListener('mouseup', e => {
+    if (!graphOpen) return;
+    if (gDragNode) { if (gMoved) markDirty(); else onNodeClick(gDragNode); gDragNode = null; }
+    else if (gPanning) { gPanning = false; if (!gMoved) onCanvasClick(e); }
+  });
+  gCanvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const m = graphMouse(e);
+    const before = s2w(m.x, m.y);
+    gView.zoom = Math.max(0.25, Math.min(3, gView.zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+    const after = w2s(before.x, before.y);
+    gView.x += m.x - after.x; gView.y += m.y - after.y;
+    drawGraph();
+  }, { passive: false });
+  gCanvas.addEventListener('dblclick', e => { const m = graphMouse(e); const node = nodeAt(m.x, m.y); if (node) openCharPanel(node); });
+  gCanvas.addEventListener('contextmenu', e => {
+    const m = graphMouse(e); const node = nodeAt(m.x, m.y);
+    if (!node) return;
+    e.preventDefault();
+    ctx.innerHTML = '';
+    ctx.appendChild(ctxItem('Edit Character', () => openCharPanel(node)));
+    ctx.appendChild(ctxItem('Add Relationship', () => openRelPanel(null, node.id)));
+    ctx.appendChild(ctxItem('Hide from Graph', () => { node.hiddenInGraph = true; markDirty(); drawGraph(); }));
+    ctx.style.left = Math.min(e.clientX, innerWidth - 190) + 'px';
+    ctx.style.top = e.clientY + 'px';
+    ctx.classList.remove('hidden');
+  });
+}
+function onNodeClick(node) { gSelected = gSelected === node.id ? null : node.id; gHoverEdge = null; drawGraph(); }
+function onCanvasClick(e) {
+  const m = graphMouse(e);
+  const eg = edgeAt(m.x, m.y);
+  if (eg) { openRelPanel(eg.rel, eg.src.id, eg.tgt.id); return; }
+  gSelected = null; $('#graphPanel').classList.add('hidden'); drawGraph();
+}
+
+/* ---- relationship + character panels ---- */
+function openRelPanel(rel, aId, bId) {
+  const panel = $('#graphPanel');
+  gPanelRel = rel;
+  const a = novel.characters.find(c => c.id === (rel ? findRelSource(rel).id : aId));
+  const b = novel.characters.find(c => c.id === (rel ? rel.targetCharacterId : bId));
+  const charOpts = novel.characters.map(c => [c.id, c.name || '(unnamed)']);
+  const dots = n => '●'.repeat(n) + '○'.repeat(10 - n);
+  panel.classList.remove('hidden');
+  panel.innerHTML =
+    `<div class="gp-head">${rel ? 'Edit Relationship' : 'Add Relationship'}<button class="gp-x" id="gpClose">✕</button></div>
+     <label class="field-label">Character A</label>
+     <select id="relA" class="control" ${rel ? 'disabled' : ''}></select>
+     <label class="field-label">Character B</label>
+     <select id="relB" class="control" ${rel ? 'disabled' : ''}></select>
+     <label class="field-label">Relationship type</label>
+     <select id="relType" class="control"></select>
+     <label class="field-label">Subtype</label>
+     <input type="text" id="relSubtype" class="control" placeholder="e.g. father, best friend" />
+     <label class="field-label">Description</label>
+     <textarea id="relDesc" class="control" rows="2"></textarea>
+     <label class="field-label">Strength: <span id="relStrengthDots">${dots(rel ? rel.strength : 5)}</span></label>
+     <input type="range" id="relStrength" class="slider" min="1" max="10" value="${rel ? rel.strength : 5}" />
+     <label class="field-label">Status</label>
+     <select id="relStatus" class="control"></select>
+     <label class="field-label">First appears in</label>
+     <input type="text" id="relStart" class="control" placeholder="e.g. Chapter 3, Scene 2" />
+     <label class="field-label">Notes</label>
+     <textarea id="relNotes" class="control" rows="2"></textarea>
+     <div class="gp-actions">
+       ${rel ? '<button class="tbtn nc-danger" id="relDelete">Delete</button>' : ''}
+       <button class="tbtn subtle" id="relCancel">Cancel</button>
+       <button class="tbtn accent" id="relSave">Save</button>
+     </div>`;
+  fillSelect($('#relA'), charOpts, a ? a.id : (aId || (charOpts[0] && charOpts[0][0])));
+  fillSelect($('#relB'), charOpts, b ? b.id : (bId || (charOpts[1] && charOpts[1][0])));
+  fillSelect($('#relType'), REL_TYPES.map(t => [t[0], t[1]]), rel ? rel.type : 'friend');
+  fillSelect($('#relStatus'), REL_STATUS, rel ? rel.status : 'active');
+  $('#relSubtype').value = rel ? (rel.subtype || '') : '';
+  $('#relDesc').value = rel ? (rel.description || '') : '';
+  $('#relStart').value = rel ? (rel.startedAt || '') : '';
+  $('#relNotes').value = rel ? (rel.notes || '') : '';
+  $('#relStrength').addEventListener('input', e => { $('#relStrengthDots').textContent = dots(+e.target.value); });
+  $('#gpClose').onclick = () => panel.classList.add('hidden');
+  $('#relCancel').onclick = () => panel.classList.add('hidden');
+  $('#relSave').onclick = () => saveRelFromPanel(rel);
+  if (rel) $('#relDelete').onclick = () => deleteRel(rel);
+}
+function findRelSource(rel) { return novel.characters.find(c => (c.relationships || []).some(r => r.id === rel.id)); }
+function saveRelFromPanel(rel) {
+  const aId = $('#relA').value, bId = $('#relB').value;
+  if (aId === bId) { toast('Pick two different characters'); return; }
+  const data = {
+    targetCharacterId: bId,
+    type: $('#relType').value,
+    subtype: $('#relSubtype').value.trim(),
+    description: $('#relDesc').value.trim(),
+    strength: +$('#relStrength').value,
+    status: $('#relStatus').value,
+    startedAt: $('#relStart').value.trim(),
+    notes: $('#relNotes').value.trim()
+  };
+  if (rel) {
+    const src = findRelSource(rel);
+    Object.assign(rel, data);
+    if (src && src.id !== aId) {   // source changed: move relationship
+      src.relationships = src.relationships.filter(r => r.id !== rel.id);
+      const na = novel.characters.find(c => c.id === aId);
+      na.relationships = na.relationships || []; na.relationships.push(rel);
+    }
+    toast('Relationship updated');
+  } else {
+    const a = novel.characters.find(c => c.id === aId);
+    a.relationships = a.relationships || [];
+    a.relationships.push({ id: uuid(), ...data });
+    toast('Relationship added');
+  }
+  markDirty();
+  $('#graphPanel').classList.add('hidden');
+  renderEntities('characters');
+  drawGraph();
+}
+function deleteRel(rel) {
+  confirmModal('Delete relationship', 'Delete this relationship?', () => {
+    const src = findRelSource(rel);
+    if (src) src.relationships = src.relationships.filter(r => r.id !== rel.id);
+    markDirty(); $('#graphPanel').classList.add('hidden'); renderEntities('characters'); drawGraph();
+    toast('Relationship deleted');
+  });
+}
+function openCharPanel(ch) {
+  const panel = $('#graphPanel');
+  panel.classList.remove('hidden');
+  const rels = (ch.relationships || []).map(r => {
+    const t = novel.characters.find(c => c.id === r.targetCharacterId);
+    return `<li><span class="gp-reldot" style="background:${relColor(r.type)}"></span>${esc(r.subtype || relTypeName(r.type))} → ${esc(t ? (t.name || '(unnamed)') : '?')}</li>`;
+  }).join('') || '<li class="gp-empty">No relationships yet</li>';
+  panel.innerHTML =
+    `<div class="gp-head">Character<button class="gp-x" id="gpClose">✕</button></div>
+     <label class="field-label">Name</label>
+     <input type="text" id="gcName" class="control" value="${esc(ch.name || '')}" />
+     <label class="field-label">Role</label>
+     <select id="gcRole" class="control"></select>
+     <label class="field-label">Node colour</label>
+     <input type="color" id="gcColor" class="nt-color" value="${ch.color || '#c9a96e'}" />
+     <div class="gp-rels"><div class="field-label">Relationships</div><ul>${rels}</ul></div>
+     <div class="gp-actions">
+       <button class="tbtn" id="gcAddRel">Add Relationship</button>
+       <button class="tbtn subtle" id="gcProfile">View Full Profile</button>
+       <button class="tbtn accent" id="gcSave">Save</button>
+     </div>`;
+  fillSelect($('#gcRole'), [['main', 'Main'], ['supporting', 'Supporting'], ['minor', 'Minor']], ch.role || 'main');
+  $('#gpClose').onclick = () => panel.classList.add('hidden');
+  $('#gcColor').oninput = e => { ch.color = e.target.value; markDirty(); drawGraph(); };
+  $('#gcAddRel').onclick = () => openRelPanel(null, ch.id);
+  $('#gcProfile').onclick = () => { closeGraph(); openCharacterInPanel(ch.id); };
+  $('#gcSave').onclick = () => {
+    ch.name = $('#gcName').value.trim() || ch.name;
+    ch.role = $('#gcRole').value;
+    markDirty(); renderEntities('characters'); drawGraph();
+    panel.classList.add('hidden');
+    toast('Character updated');
+  };
+}
+function openCharacterInPanel(id) {
+  const acc = $('.accordion[data-acc="chars"]');
+  if (acc) acc.classList.add('open');
+  const wrap = $$('#charList .entity')[novel.characters.findIndex(c => c.id === id)];
+  if (wrap) { wrap.classList.add('open'); wrap.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+}
+
+/* ---- graph layouts ---- */
+function circularLayout() {
+  const chars = graphChars(); const n = chars.length; const R = 60 + n * 26;
+  chars.forEach((c, i) => { const a = (i / Math.max(1, n)) * Math.PI * 2 - Math.PI / 2; c.graphPosition = { x: Math.cos(a) * R, y: Math.sin(a) * R }; });
+  markDirty(); animateTo();
+}
+function forceLayout() {
+  const chars = graphChars();
+  if (!chars.length) return;
+  const pos = {}; chars.forEach(c => (pos[c.id] = { x: c.graphPosition.x, y: c.graphPosition.y }));
+  const edges = graphEdges(chars);
+  let repulsion = 90000;
+  const ideal = 160, attract = 0.02;
+  for (let iter = 0; iter < 120; iter++) {
+    for (let i = 0; i < chars.length; i++) for (let j = i + 1; j < chars.length; j++) {
+      const A = pos[chars[i].id], B = pos[chars[j].id];
+      let dx = A.x - B.x, dy = A.y - B.y; let dist = Math.max(Math.hypot(dx, dy), 1);
+      const f = repulsion / (dist * dist);
+      A.x += (dx / dist) * f; A.y += (dy / dist) * f; B.x -= (dx / dist) * f; B.y -= (dy / dist) * f;
+    }
+    edges.forEach(e => {
+      const A = pos[e.src.id], B = pos[e.tgt.id]; if (!A || !B) return;
+      let dx = B.x - A.x, dy = B.y - A.y; let dist = Math.max(Math.hypot(dx, dy), 1);
+      const f = (dist - ideal) * attract * (e.rel.strength / 5);
+      A.x += (dx / dist) * f * 0.5; A.y += (dy / dist) * f * 0.5; B.x -= (dx / dist) * f * 0.5; B.y -= (dy / dist) * f * 0.5;
+    });
+    repulsion *= 0.99;
+  }
+  chars.forEach(c => (c._target = pos[c.id]));
+  markDirty(); animateTo();
+}
+function animateTo() {
+  const chars = graphChars();
+  const start = {}; chars.forEach(c => (start[c.id] = { x: c.graphPosition.x, y: c.graphPosition.y }));
+  const target = {}; chars.forEach(c => (target[c.id] = c._target || { x: c.graphPosition.x, y: c.graphPosition.y }));
+  const t0 = performance.now(); const dur = 900;
+  function step(now) {
+    const k = Math.min(1, (now - t0) / dur); const e = 1 - Math.pow(1 - k, 3);
+    chars.forEach(c => { c.graphPosition.x = start[c.id].x + (target[c.id].x - start[c.id].x) * e; c.graphPosition.y = start[c.id].y + (target[c.id].y - start[c.id].y) * e; });
+    drawGraph();
+    if (k < 1 && graphOpen) requestAnimationFrame(step);
+    else { chars.forEach(c => delete c._target); gCenterView(); }
+  }
+  requestAnimationFrame(step);
+}
+
+/* ---- legend ---- */
+function renderLegend() {
+  const body = $('#legendBody');
+  body.innerHTML = REL_TYPES.map(t => `<div class="lg-row"><span class="lg-line" style="background:${t[2]}"></span>${t[1]}</div>`).join('');
+}
+
+/* ---- export PNG ---- */
+function exportGraphPng() {
+  if (!gCanvas) return;
+  const url = gCanvas.toDataURL('image/png');
+  const name = (novel.title || 'novel') + '-graph.png';
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.click();
+  toast('Graph exported (' + name + ')');
+}
+
+/* ---- graph toolbar wiring ---- */
+$('#btnGraphView').addEventListener('click', openGraph);
+$('#graphClose').addEventListener('click', closeGraph);
+$('#graphOverlay').addEventListener('mousedown', e => { if (e.target === $('#graphOverlay')) closeGraph(); });
+$('#graphAddChar').addEventListener('click', () => {
+  promptModal('Add character', 'Character name:', '', name => {
+    if (!name) return;
+    const c = ENTITY_DEFS.characters.empty(); c.name = name;
+    c.graphPosition = { x: Math.random() * 200 - 100, y: Math.random() * 200 - 100 };
+    novel.characters.push(c);
+    markDirty(); renderEntities('characters'); renderLegend(); drawGraph();
+    toast('Character added');
+  });
+});
+$('#graphAddRel').addEventListener('click', () => { if (novel.characters.length < 2) { toast('Add at least two characters first'); return; } openRelPanel(null, novel.characters[0].id, novel.characters[1].id); });
+$('#graphLayout').addEventListener('change', e => {
+  if (e.target.value === 'auto') forceLayout();
+  else if (e.target.value === 'circular') circularLayout();
+  e.target.value = 'manual';
+});
+$('#graphFilter').addEventListener('change', e => { gFilter = e.target.value; gSelected = null; drawGraph(); });
+$('#graphExport').addEventListener('click', exportGraphPng);
+$('#graphReset').addEventListener('click', () => { novel.characters.forEach(c => (c.graphPosition = null)); ensureGraphPositions(); forceLayout(); });
+$('#legendToggle').addEventListener('click', () => { const b = $('#legendBody'); const hidden = b.classList.toggle('collapsed'); $('#legendToggle').textContent = 'Legend ' + (hidden ? '▴' : '▾'); });
+addEventListener('resize', () => { if (graphOpen) gResize(); });
+
 /* ================= KEYBOARD SHORTCUTS ================= */
 function navigateNotes(dir) {
   const notes = filteredNotes();
@@ -1804,6 +2787,9 @@ function navigateNotes(dir) {
 }
 document.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey;
+  if (mod && !e.shiftKey && (e.key === 'g' || e.key === 'G')) { e.preventDefault(); if (graphOpen) closeGraph(); else openGraph(); return; }
+  if (e.key === 'Escape' && graphOpen) { if (!$('#graphPanel').classList.contains('hidden')) { $('#graphPanel').classList.add('hidden'); } else closeGraph(); return; }
+  if (e.key === 'Escape' && corkboardOpen) { closeCorkboard(); return; }
   if (mod && e.shiftKey && (e.key === 'M' || e.key === 'm' || e.key === 'ь')) { e.preventDefault(); openAddNote(); return; }
   if (e.key === 'Escape' && openNoteId) { closeNoteCard(); return; }
   if (e.key === 'Escape' && notePopup && !notePopup.classList.contains('hidden')) { closeAddNote(); return; }

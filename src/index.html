@@ -19,7 +19,7 @@
     </div>
 
     <div class="topbar-center" data-tauri-drag-region>
-      <span id="chapterTitle" class="chapter-title" title="Double-click to rename">Chapter 1</span>
+      <nav id="breadcrumb" class="breadcrumb" title="Novel › Chapter › Scene"></nav>
       <span id="saveIndicator" class="save-indicator">Saved</span>
     </div>
 
@@ -68,10 +68,11 @@
       <div class="lp-section" id="chaptersSection">
         <div class="panel-head">
           <span class="lp-title">📖 Chapters</span>
+          <button class="icon-btn" id="btnCorkboard" title="Toggle corkboard view">📋</button>
           <button class="icon-btn" id="btnAddChapter" title="Add chapter">＋</button>
         </div>
         <div class="lp-body">
-          <ul id="chapterList" class="chapter-list"></ul>
+          <ul id="chapterList" class="chapter-list tree-list"></ul>
         </div>
       </div>
 
@@ -86,6 +87,16 @@
 
     <!-- CENTER: editor -->
     <section id="editorArea">
+      <!-- scene metadata bar -->
+      <div id="sceneMeta" class="scene-meta hidden">
+        <select id="metaPov" class="meta-select" title="POV character"></select>
+        <select id="metaLoc" class="meta-select" title="Location"></select>
+        <select id="metaTime" class="meta-select" title="Time of day"></select>
+        <select id="metaStatus" class="meta-select" title="Status"></select>
+        <button id="metaHide" class="meta-hide" title="Hide scene bar">✕</button>
+      </div>
+      <button id="metaShow" class="meta-show hidden" title="Show scene bar">▾ Scene info</button>
+
       <div class="editor-scroll">
         <div id="editorWrap">
           <div id="editor" class="editor" contenteditable="true" spellcheck="true"></div>
@@ -94,6 +105,37 @@
         </div>
       </div>
       <button id="exitFocus" class="exit-focus hidden">Exit Focus (Esc)</button>
+
+      <!-- corkboard view (overlays the editor) -->
+      <div id="corkboard" class="corkboard hidden">
+        <div class="cork-toolbar">
+          <button id="corkBack" class="tbtn accent">← Back to Editor</button>
+          <label class="cork-ctl">Size
+            <input type="range" id="corkZoom" min="0" max="2" step="1" value="1" />
+          </label>
+          <label class="cork-ctl">Status
+            <select id="corkStatus" class="control">
+              <option value="all">All</option>
+              <option value="draft">Draft</option>
+              <option value="review">Review</option>
+              <option value="done">Done</option>
+            </select>
+          </label>
+          <label class="cork-ctl">POV
+            <select id="corkPov" class="control"></select>
+          </label>
+          <label class="cork-ctl">Sort
+            <select id="corkSort" class="control">
+              <option value="order">Order</option>
+              <option value="title">Title</option>
+              <option value="words">Word count</option>
+              <option value="status">Status</option>
+              <option value="time">Time of day</option>
+            </select>
+          </label>
+        </div>
+        <div id="corkGrid" class="cork-grid"></div>
+      </div>
     </section>
 
     <!-- RIGHT: tools accordion -->
@@ -141,6 +183,7 @@
       <div class="accordion" data-acc="chars">
         <button class="acc-head">Characters <span class="chev">▾</span></button>
         <div class="acc-body">
+          <button class="graph-btn" id="btnGraphView" title="Open the character relationship graph (Ctrl+G)">🔗 Graph View</button>
           <button class="add-entity" id="btnAddChar">＋ Add Character</button>
           <div id="charList" class="entity-list"></div>
         </div>
@@ -282,6 +325,45 @@
         <button id="closeSaveBtn" class="tbtn accent">Save and Close</button>
         <button id="closeDiscardBtn" class="tbtn">Discard Changes</button>
         <button id="closeCancelBtn" class="tbtn subtle">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ CHARACTER RELATIONSHIP GRAPH ============ -->
+  <div id="graphOverlay" class="graph-overlay hidden">
+    <div class="graph-modal">
+      <div class="graph-toolbar">
+        <span class="graph-title">🔗 Character Graph</span>
+        <button class="tbtn" id="graphAddChar">＋ Character</button>
+        <button class="tbtn" id="graphAddRel">＋ Relationship</button>
+        <label class="graph-ctl">Layout
+          <select id="graphLayout" class="control">
+            <option value="manual">Manual</option>
+            <option value="auto">Auto-Arrange</option>
+            <option value="circular">Circular</option>
+          </select>
+        </label>
+        <label class="graph-ctl">Filter
+          <select id="graphFilter" class="control">
+            <option value="all">Show All</option>
+            <option value="main">Main Characters Only</option>
+            <option value="withrel">With Relationships</option>
+            <option value="withoutrel">Without Relationships</option>
+          </select>
+        </label>
+        <button class="tbtn" id="graphExport">Export PNG</button>
+        <button class="tbtn" id="graphReset">Reset Positions</button>
+        <button class="tbtn subtle graph-close" id="graphClose" title="Close (Esc)">✕</button>
+      </div>
+      <div class="graph-stage">
+        <canvas id="graphCanvas"></canvas>
+        <!-- details / relationship panel -->
+        <div id="graphPanel" class="graph-panel hidden"></div>
+        <!-- legend -->
+        <div id="graphLegend" class="graph-legend">
+          <button id="legendToggle" class="legend-toggle">Legend ▾</button>
+          <div id="legendBody" class="legend-body"></div>
+        </div>
       </div>
     </div>
   </div>
