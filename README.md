@@ -12,7 +12,9 @@ A distraction‑free desktop **novel‑writing studio** built with **Tauri v2** 
 - **Warm dark theme** (`#1a1a1f` / panels `#22222b` / cream text `#e8e0d5` / amber accent `#c9a96e`), thin themed scrollbars.
 - **Hybrid editor** — WYSIWYG *Visual Mode* (`contenteditable` + `execCommand`) with a toggleable raw **Markdown Mode**. Bold / Italic / H1–H3 / per‑selection font, live active‑state highlighting on the toolbar.
 - **Global font controls** — size slider (14–24 px) and default document font (Georgia, Lora, Merriweather, Inter, Roboto, Arial).
-- **Chapters panel** (left) — add, rename, duplicate, delete, **drag‑and‑drop reorder** with drop indicators, per‑chapter live word counts, right‑click context menu.
+- **Scenes & chapter tree** (left) — chapters are collapsible folders containing **scenes** (the writing unit the editor edits). 🎬 scenes show live word counts and a status dot (draft / review / done). Add, rename, duplicate, delete, **drag‑and‑drop** to reorder within a chapter, move between chapters, or reorder chapters; right‑click for a context menu (incl. *Move to Chapter*). Breadcrumb navigation (Novel › Chapter › Scene) and a per‑scene metadata bar (POV character, location, time of day, status).
+- **Corkboard view** — toggle the tree into a Scrivener‑style board of draggable scene cards grouped by chapter, with status badges, POV/location/time, zoom, status/POV filters, and sorting. Drag cards to reorder or move between chapters; click to open a scene; click a badge to cycle its status.
+- **Character relationship graph** (`Ctrl+G`) — an interactive HTML‑canvas network of characters (nodes) and relationships (edges). Drag nodes, pan/zoom, colour‑coded edge types with thickness by strength and style by status (active/past/secret/one‑sided), click a node to spotlight its connections, edit relationships in a side panel, auto‑arrange (force‑directed) / circular / manual layouts, filters, a legend, and **Export as PNG**. Positions persist in the `.novel` file.
 - **Worldbuilding panels** (right accordion) — Characters, Locations, Races/Peoples with full editable field sets, plus a **Counters** section (chapter/total words, chars with & without spaces, configurable word‑goal progress bar).
 - **Margin notes** — attach colour‑coded comments to any text selection (right‑click ▸ *Add Note* or `Ctrl+Shift+M`). Notes appear as dots in the editor's right margin with hover tooltips and an expandable card (resolve / edit / delete), underline the annotated text via the CSS Custom Highlight API, and are tracked by character offset so they survive edits. A **Notes** panel filters by type and resolved state; five default types (Исправить / Проверить факт / Развить мысль / Перенести / Идея) plus user‑defined **custom types** (name, colour, emoji) managed in **Settings**. Export all notes to TXT / Markdown.
 - **Focus Mode** (`Ctrl+Shift+F`) — hides chrome, centers a 720 px column, hover‑top / `Esc` to exit.
@@ -104,17 +106,24 @@ Plain JSON. **One `.novel` file = one novel:**
 {
   "version": "1.0",
   "title": "My Novel",
-  "settings": { "fontSize": 18, "defaultFont": "Georgia, serif", "wordGoal": 80000 },
-  "chapters":   [ { "id": "…", "order": 0, "title": "Chapter 1", "content": "<p>…</p>", "markdownContent": "…", "wordCount": 0 } ],
-  "characters": [ /* name, role, age, appearance, personality, bio, history, motivation, relationships, notes */ ],
+  "settings": { "fontSize": 18, "defaultFont": "Georgia, serif", "wordGoal": 80000, "customNoteTypes": [] },
+  "chapters": [ {
+    "id": "…", "order": 0, "title": "Chapter 1", "wordCount": 0, "collapsed": false,
+    "scenes": [ {
+      "id": "…", "order": 0, "title": "Scene 1", "content": "<p>…</p>", "markdownContent": "…",
+      "wordCount": 0, "povCharacter": null, "location": null, "timeOfDay": "morning",
+      "status": "draft", "notes": [], "createdAt": "…", "modifiedAt": "…"
+    } ]
+  } ],
+  "characters": [ /* …, relationshipNotes, notes, relationships:[{targetCharacterId,type,subtype,strength,status,…}], graphPosition:{x,y} */ ],
   "locations":  [ /* name, type, description, history, atmosphere, notes */ ],
   "races":      [ /* name, description, appearance, culture, history, traits */ ]
 }
 ```
 
-Each chapter stores both `content` (HTML) and `markdownContent`. The current file path is shown next to the novel title in the top bar (or "• Unsaved" for a new novel). The last 5 opened files are kept in **Recent** (top bar) and the native **File ▸ Open Recent** menu.
+Each **scene** stores both `content` (HTML) and `markdownContent`. The current file path is shown next to the novel title in the top bar (or "• Unsaved" for a new novel). The last 5 opened files are kept in **Recent** (top bar) and the native **File ▸ Open Recent** menu.
 
-**Backward compatible:** an old multi-novel *library* file (with a top-level `novels` array) is detected on open — the active novel loads in place and NovelCraft offers to split the others into their own `.novel` files.
+**Backward compatible:** older files are migrated on open — a multi-novel *library* file (top-level `novels` array) offers to split into one‑novel files, and a pre‑scenes chapter (with its own `content`) is wrapped into a single default "Scene 1". Characters' former free‑text `relationships` field is preserved as `relationshipNotes`.
 
 ## Keyboard shortcuts
 
@@ -125,6 +134,8 @@ Each chapter stores both `content` (HTML) and `markdownContent`. The current fil
 | Open | `Ctrl/Cmd+O` |
 | Bold / Italic | `Ctrl/Cmd+B` / `Ctrl/Cmd+I` |
 | Focus Mode | `Ctrl/Cmd+Shift+F` (`Esc` to exit) |
+| Add margin note | `Ctrl/Cmd+Shift+M` |
+| Character graph | `Ctrl/Cmd+G` |
 | Toggle chapters / tools | `Ctrl/Cmd+\` / `Ctrl/Cmd+/` |
 | Undo / Redo | `Ctrl/Cmd+Z` / `Ctrl/Cmd+Shift+Z` |
 
