@@ -137,14 +137,18 @@ const SCENE_STATUS = [
 function timeMeta(id) { return TIME_OF_DAY.find(t => t[0] === id) || TIME_OF_DAY[6]; }
 function statusMeta(id) { return SCENE_STATUS.find(s => s[0] === id) || SCENE_STATUS[0]; }
 
+/* currentChapter/currentScene derive from currentSceneId so a stale
+   currentChapterId (after a drag/move) can never disagree with the loaded scene. */
 function currentChapter() {
   if (!novel) return null;
+  if (currentSceneId) { const f = findScene(currentSceneId); if (f) return f.chapter; }
   return novel.chapters.find(c => c.id === currentChapterId) || novel.chapters[0];
 }
 function currentScene() {
-  const c = currentChapter();
-  if (!c) return null;
-  return (c.scenes || []).find(s => s.id === currentSceneId) || c.scenes[0] || null;
+  if (!novel) return null;
+  if (currentSceneId) { const f = findScene(currentSceneId); if (f) return f.scene; }
+  const c = novel.chapters.find(c => c.id === currentChapterId) || novel.chapters[0];
+  return c ? (c.scenes[0] || null) : null;
 }
 function findScene(id) {
   if (!novel) return null;
@@ -317,9 +321,7 @@ function moveSceneToChapter(sceneId, chapterId) {
   const [moved] = f.chapter.scenes.splice(idx, 1);
   dest.scenes.push(moved);
   dest.collapsed = false;
-  currentChapterId = dest.id;
-  currentSceneId = moved.id;
-  renderTree(); updateCounters(); markDirty();
+  renderTree(); updateBreadcrumb(); updateCounters(); markDirty();
   toast('Scene moved to ' + dest.title);
 }
 
@@ -524,7 +526,6 @@ function applySceneDrop(sceneId, target) {
     let di = dest.scenes.findIndex(s => s.id === target.id);
     if (target.after) di += 1;
     dest.scenes.splice(di, 0, moved);
-    currentChapterId = dest.id;
   } else if (target.kind === 'chapter-into') {
     const dest = findChapter(target.id);
     if (!dest || dest.id === from.id) return;
@@ -533,10 +534,10 @@ function applySceneDrop(sceneId, target) {
     const [moved] = from.scenes.splice(idx, 1);
     dest.scenes.push(moved);
     dest.collapsed = false;
-    currentChapterId = dest.id;
   }
-  currentSceneId = sceneId;
+  // selection stays on whatever scene was open (currentChapter derives from it)
   renderTree();
+  updateBreadcrumb();
   updateCounters();
   markDirty();
 }
