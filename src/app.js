@@ -3988,10 +3988,228 @@ async function doCompExport(kind) {
   if (kind === 'epub') return exportCompEPUB();
   if (kind === 'docx') return exportCompDOCX();
 }
-/* PDF / EPUB / DOCX are implemented in the export section */
-function exportCompPDF() { toast('PDF export loading…'); }
-function exportCompEPUB() { toast('EPUB export loading…'); }
-function exportCompDOCX() { toast('DOCX export loading…'); }
+/* ---- binary output helpers (ZIP / base64) ---- */
+function bytesToBase64(bytes) {
+  let bin = ''; const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  return btoa(bin);
+}
+async function saveBinary(name, bytes, mime) {
+  if (hasTauri) {
+    const path = await invoke('pick_save', { defaultName: name });
+    if (!path) return;
+    await invoke('write_binary', { path, base64: bytesToBase64(bytes) });
+    toast('Saved ' + baseName(path));
+  } else {
+    const blob = new Blob([bytes], { type: mime });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('Exported ' + name);
+  }
+}
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+/* Minimal ZIP writer (store / no compression) — enough for EPUB and DOCX. */
+function makeZip(files) {
+  const u16 = n => [n & 255, (n >> 8) & 255];
+  const u32 = n => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+  const parts = [], central = [];
+  let offset = 0;
+  files.forEach(f => {
+    const nameB = new TextEncoder().encode(f.name);
+    const data = f.bytes;
+    const crc = crc32(data);
+    const local = [0x50, 0x4b, 0x03, 0x04, ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nameB.length), ...u16(0)];
+    parts.push(new Uint8Array(local), nameB, data);
+    const cen = [0x50, 0x4b, 0x01, 0x02, ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nameB.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset)];
+    central.push(new Uint8Array(cen), nameB);
+    offset += local.length + nameB.length + data.length;
+  });
+  let cdSize = 0; central.forEach(a => (cdSize += a.length));
+  const end = new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(cdSize), ...u32(offset), ...u16(0)]);
+  const all = [...parts, ...central, end];
+  const total = all.reduce((s, a) => s + a.length, 0);
+  const out = new Uint8Array(total);
+  let p = 0; all.forEach(a => { out.set(a, p); p += a.length; });
+  return out;
+}
+
+/* ---- PDF (browser print to PDF) ---- */
+function exportCompPDF() {
+  const s = comp.settings;
+  const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${esc(s.titleText || novel.title)}</title>` +
+    `<style>${compileCSS(true)}</style></head><body><div class="${compDocClasses()}" style="${compDocStyle()}">${docBodyHTML(false)}</div></body></html>`;
+  let ifr = document.getElementById('__printFrame');
+  if (ifr) ifr.remove();
+  ifr = document.createElement('iframe');
+  ifr.id = '__printFrame';
+  ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  document.body.appendChild(ifr);
+  const doc = ifr.contentWindow.document;
+  doc.open(); doc.write(html); doc.close();
+  setTimeout(() => { try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch (e) { toast('Could not open the print dialog'); } }, 350);
+  toast('Opening print dialog — choose “Save as PDF”');
+}
+
+/* ---- EPUB (valid EPUB3 package) ---- */
+function exportCompEPUB() {
+  const s = comp.settings;
+  const title = s.titleText || novel.title || 'Untitled';
+  const author = s.author || 'Unknown';
+  const uid = 'urn:uuid:' + uuid();
+  const flow = buildFlow();
+  const body = flowToBodyHTML(flow, true);
+  const inner = titlePageHTMLx() + (s.toc && s.tocPosition === 'afterTitle' ? tocHTMLx(flow) : '') + body + (s.toc && s.tocPosition === 'end' ? tocHTMLx(flow) : '');
+  const bookXhtml = `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en"><head><meta charset="utf-8"/><title>${esc(title)}</title><link rel="stylesheet" type="text/css" href="style.css"/></head><body><div class="${compDocClasses()}">${inner}</div></body></html>`;
+  const navEntries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  const navItems = navEntries.length ? navEntries : [{ anchor: null, title }];
+  const navOl = navItems.map(f => `<li><a href="book.xhtml${f.anchor ? '#' + f.anchor : ''}">${esc(f.title)}</a></li>`).join('');
+  const navXhtml = `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en"><head><meta charset="utf-8"/><title>Contents</title></head><body><nav epub:type="toc" id="toc"><h1>Contents</h1><ol>${navOl}</ol></nav></body></html>`;
+  const ncxPts = navItems.map((f, i) => `<navPoint id="n${i}" playOrder="${i + 1}"><navLabel><text>${esc(f.title)}</text></navLabel><content src="book.xhtml${f.anchor ? '#' + f.anchor : ''}"/></navPoint>`).join('');
+  const ncx = `<?xml version="1.0" encoding="utf-8"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="${uid}"/></head><docTitle><text>${esc(title)}</text></docTitle><navMap>${ncxPts}</navMap></ncx>`;
+  const opf = `<?xml version="1.0" encoding="utf-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">${uid}</dc:identifier><dc:title>${esc(title)}</dc:title><dc:creator>${esc(author)}</dc:creator><dc:language>en</dc:language><meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="book" href="book.xhtml" media-type="application/xhtml+xml"/><item id="css" href="style.css" media-type="text/css"/></manifest><spine toc="ncx"><itemref idref="book"/></spine></package>`;
+  const container = `<?xml version="1.0" encoding="utf-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`;
+  const css = `html,body{margin:0;padding:1em;font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};}\n` + compileCSS(false);
+  const enc = new TextEncoder();
+  const files = [
+    { name: 'mimetype', bytes: enc.encode('application/epub+zip') },
+    { name: 'META-INF/container.xml', bytes: enc.encode(container) },
+    { name: 'OEBPS/content.opf', bytes: enc.encode(opf) },
+    { name: 'OEBPS/nav.xhtml', bytes: enc.encode(navXhtml) },
+    { name: 'OEBPS/toc.ncx', bytes: enc.encode(ncx) },
+    { name: 'OEBPS/book.xhtml', bytes: enc.encode(bookXhtml) },
+    { name: 'OEBPS/style.css', bytes: enc.encode(css) }
+  ];
+  saveBinary(compFileName('epub'), makeZip(files), 'application/epub+zip');
+}
+/* XHTML-safe title page / TOC (avoid unescaped entities) */
+function titlePageHTMLx() {
+  const s = comp.settings;
+  if (!s.titlePage) return '';
+  return `<section class="c-titlepage"><h1 class="c-booktitle">${esc(s.titleText || novel.title)}</h1>` +
+    (s.subtitle ? `<p class="c-subtitle">${esc(s.subtitle)}</p>` : '') +
+    (s.author ? `<p class="c-author">${esc(s.author)}</p>` : '') +
+    (s.dateText ? `<p class="c-date">${esc(s.dateText)}</p>` : '') + `</section>`;
+}
+function tocHTMLx(flow) {
+  const s = comp.settings;
+  if (!s.toc) return '';
+  const entries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  if (!entries.length) return '';
+  return `<section class="c-toc"><h1 class="c-toc-title">Contents</h1><ul>` +
+    entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') + `</ul></section>`;
+}
+
+/* ---- DOCX (minimal OOXML) ---- */
+function xmlEsc(s) { return esc(String(s == null ? '' : s)); }
+function htmlToBlocks(html) {
+  const d = document.createElement('div');
+  d.innerHTML = html || '';
+  const blocks = [];
+  const runsOf = (node, b, i) => {
+    let out = [];
+    node.childNodes.forEach(ch => {
+      if (ch.nodeType === 3) { if (ch.textContent) out.push({ text: ch.textContent, b, i }); return; }
+      const t = ch.tagName;
+      if (t === 'BR') { out.push({ text: '\n', b, i }); return; }
+      out = out.concat(runsOf(ch, b || /^(B|STRONG)$/.test(t), i || /^(I|EM)$/.test(t)));
+    });
+    return out;
+  };
+  Array.from(d.childNodes).forEach(ch => {
+    if (ch.nodeType === 3) { if (ch.textContent.trim()) blocks.push({ tag: 'p', runs: [{ text: ch.textContent }] }); return; }
+    const t = ch.tagName;
+    const tag = (t === 'H1' || t === 'H2' || t === 'H3') ? t.toLowerCase() : 'p';
+    blocks.push({ tag, runs: runsOf(ch, false, false) });
+  });
+  if (!blocks.length && stripHtml(html).trim()) blocks.push({ tag: 'p', runs: [{ text: stripHtml(html) }] });
+  return blocks;
+}
+function docxP(runs, opts) {
+  opts = opts || {};
+  const s = comp.settings;
+  let ppr = '';
+  const jc = opts.align === 'center' ? 'center' : (s.align === 'justify' ? 'both' : 'left');
+  ppr += `<w:jc w:val="${jc}"/>`;
+  const sp = [];
+  if (s.lineSpacing && s.lineSpacing !== 1) sp.push(`w:line="${Math.round(s.lineSpacing * 240)}" w:lineRule="auto"`);
+  if (s.paraSpacing === 'space') sp.push('w:after="120"');
+  if (sp.length) ppr += `<w:spacing ${sp.join(' ')}/>`;
+  if (s.indent === 'indent' && !opts.noIndent) ppr += '<w:ind w:firstLine="720"/>';
+  let rs = '';
+  (runs || []).forEach(r => {
+    const segs = String(r.text == null ? '' : r.text).split('\n');
+    segs.forEach((seg, i) => {
+      let rpr = '';
+      if (r.b || opts.b) rpr += '<w:b/>';
+      if (r.i || opts.i) rpr += '<w:i/>';
+      if (opts.sz) rpr += `<w:sz w:val="${opts.sz}"/>`;
+      rs += `<w:r>${rpr ? `<w:rPr>${rpr}</w:rPr>` : ''}<w:t xml:space="preserve">${xmlEsc(seg)}</w:t></w:r>`;
+      if (i < segs.length - 1) rs += '<w:r><w:br/></w:r>';
+    });
+  });
+  if (!rs) rs = '<w:r><w:t xml:space="preserve"></w:t></w:r>';
+  return `<w:p>${ppr ? `<w:pPr>${ppr}</w:pPr>` : ''}${rs}</w:p>`;
+}
+function docxPageBreak() { return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'; }
+function docxTOC(flow) {
+  const s = comp.settings;
+  const entries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  let x = docxP([{ text: 'Contents', b: true }], { sz: 32, align: 'center', noIndent: true });
+  entries.forEach(f => { x += docxP([{ text: f.title }], { noIndent: true }); });
+  return x;
+}
+function exportCompDOCX() {
+  const s = comp.settings;
+  const flow = buildFlow();
+  let bodyXml = '';
+  if (s.titlePage) {
+    bodyXml += docxP([{ text: s.titleText || novel.title, b: true }], { sz: 56, align: 'center', noIndent: true });
+    if (s.subtitle) bodyXml += docxP([{ text: s.subtitle, i: true }], { align: 'center', noIndent: true });
+    if (s.author) bodyXml += docxP([{ text: s.author }], { align: 'center', noIndent: true });
+    if (s.dateText) bodyXml += docxP([{ text: s.dateText }], { align: 'center', noIndent: true });
+    bodyXml += docxPageBreak();
+  }
+  if (s.toc && s.tocPosition === 'afterTitle') { bodyXml += docxTOC(flow); bodyXml += docxPageBreak(); }
+  let lastScene = false;
+  flow.forEach(f => {
+    if (f.type === 'part') { bodyXml += docxP([{ text: f.title, b: true }], { sz: 44, align: 'center', noIndent: true }); lastScene = false; }
+    else if (f.type === 'chapter') { bodyXml += docxP([{ text: f.title, b: true }], { sz: 34, align: 'center', noIndent: true }); lastScene = false; }
+    else if (f.type === 'break') { bodyXml += docxP([{ text: sepText() || '* * *' }], { align: 'center', noIndent: true }); lastScene = false; }
+    else {
+      if (lastScene) bodyXml += docxP([{ text: sepText() || '' }], { align: 'center', noIndent: true });
+      if (f.showTitle) bodyXml += docxP([{ text: f.title, b: true }], { sz: 26, noIndent: true });
+      htmlToBlocks(f.html).forEach(bl => {
+        const heading = bl.tag[0] === 'h';
+        const sz = bl.tag === 'h1' ? 32 : bl.tag === 'h2' ? 28 : bl.tag === 'h3' ? 24 : null;
+        bodyXml += docxP(bl.runs, { sz, b: heading || undefined, noIndent: heading });
+      });
+      lastScene = true;
+    }
+  });
+  if (s.toc && s.tocPosition === 'end') { bodyXml += docxPageBreak(); bodyXml += docxTOC(flow); }
+  const letter = s.pageSize === 'Letter';
+  const sect = `<w:sectPr><w:pgSz w:w="${letter ? 12240 : 11906}" w:h="${letter ? 15840 : 16838}"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${bodyXml}${sect}</w:body></w:document>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`;
+  const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
+  const enc = new TextEncoder();
+  const files = [
+    { name: '[Content_Types].xml', bytes: enc.encode(contentTypes) },
+    { name: '_rels/.rels', bytes: enc.encode(rels) },
+    { name: 'word/document.xml', bytes: enc.encode(documentXml) }
+  ];
+  saveBinary(compFileName('docx'), makeZip(files), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+}
 
 /* ---- presets ---- */
 function renderPresetSelect() {
