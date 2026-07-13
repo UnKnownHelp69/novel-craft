@@ -3892,11 +3892,9 @@ function compDocStyle() {
   const s = comp.settings;
   return `font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};`;
 }
-function compileCSS(forPrint) {
-  const s = comp.settings;
-  const marg = { narrow: '1.5cm', normal: '2.2cm', wide: '3.2cm' }[s.margins] || '2.2cm';
-  let css =
-    `.comp-doc{color:#111;max-width:${forPrint ? 'none' : '46em'};margin:0 auto;text-align:left;}
+/* Screen/HTML/EPUB stylesheet for the compiled document (no print rules). */
+function compileCSS() {
+  return `.comp-doc{color:#111;max-width:46em;margin:0 auto;text-align:left;}
      .comp-doc.comp-justify p{text-align:justify;}
      .comp-doc.comp-indent p{text-indent:1.27cm;margin:0;}
      .comp-doc.comp-indent p.c-sep{text-indent:0;}
@@ -3914,21 +3912,12 @@ function compileCSS(forPrint) {
      .comp-doc .c-toc ul{list-style:none;padding:0;} .comp-doc .c-toc a{color:#111;text-decoration:none;}
      .comp-doc .c-toc-scene{padding-left:1.5em;color:#444;font-size:.95em;}
      .comp-doc .c-toc-title{font-size:1.7em;}`;
-  if (forPrint) {
-    const pn = s.pageNumber;
-    css += `@page{size:${s.pageSize};margin:${marg};` +
-      (pn !== 'none' ? `@bottom-${pn === 'right' ? 'right' : 'center'}{content:counter(page);}` : '') + `}
-     .c-titlepage,.c-toc{page-break-after:always;}
-     h1.c-chapter,h1.c-part{page-break-before:always;}
-     body{margin:0;}`;
-  }
-  return css;
 }
 
 function renderCompPreview() {
   const s = comp.settings;
   const host = $('#compPreview');
-  host.innerHTML = `<style>${compileCSS(false)}</style>` +
+  host.innerHTML = `<style>${compileCSS()}</style>` +
     `<div class="${compDocClasses()}" style="${compDocStyle()}">${docBodyHTML(false)}</div>`;
 }
 
@@ -3976,7 +3965,7 @@ function compileTXT() {
 function compileHTML() {
   const s = comp.settings;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${esc(s.titleText || novel.title)}</title>
-<style>body{background:#fff;margin:0;padding:40px 20px;}${compileCSS(false)}</style></head>
+<style>body{background:#fff;margin:0;padding:40px 20px;}${compileCSS()}</style></head>
 <body><div class="${compDocClasses()}" style="${compDocStyle()}">${docBodyHTML(false)}</div></body></html>`;
 }
 async function doCompExport(kind) {
@@ -4043,21 +4032,161 @@ function makeZip(files) {
   return out;
 }
 
-/* ---- PDF (browser print to PDF) ---- */
+/* ---- PDF (generate a real .pdf file, saved via the native dialog — no print) ----
+   Dependency-free: lays the compiled text out with the standard Courier family
+   (monospaced -> exact wrapping, no metrics tables) into paginated PDF pages.
+   Latin-1 text renders directly; other scripts are best-effort (use EPUB/DOCX/
+   HTML for full Unicode fidelity). */
+function normalizeForPdf(str) {
+  let o = '';
+  for (const ch of (str || '')) {
+    const code = ch.codePointAt(0);
+    if (code === 0x2018 || code === 0x2019 || code === 0x2032) { o += "'"; continue; }
+    if (code === 0x201C || code === 0x201D) { o += '"'; continue; }
+    if (code === 0x2013 || code === 0x2014) { o += '-'; continue; }
+    if (code === 0x2026) { o += '...'; continue; }
+    if (code === 0x00A0) { o += ' '; continue; }
+    if (code === 9) { o += '    '; continue; }
+    if (code < 32) continue;
+    if (code > 255) { o += '?'; continue; }
+    o += String.fromCharCode(code);
+  }
+  return o;
+}
+function pdfEsc(s) { return s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)'); }
 function exportCompPDF() {
   const s = comp.settings;
-  const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${esc(s.titleText || novel.title)}</title>` +
-    `<style>${compileCSS(true)}</style></head><body><div class="${compDocClasses()}" style="${compDocStyle()}">${docBodyHTML(false)}</div></body></html>`;
-  let ifr = document.getElementById('__printFrame');
-  if (ifr) ifr.remove();
-  ifr = document.createElement('iframe');
-  ifr.id = '__printFrame';
-  ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
-  document.body.appendChild(ifr);
-  const doc = ifr.contentWindow.document;
-  doc.open(); doc.write(html); doc.close();
-  setTimeout(() => { try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch (e) { toast('Could not open the print dialog'); } }, 350);
-  toast('Opening print dialog — choose “Save as PDF”');
+  const flow = buildFlow();
+  const pageW = s.pageSize === 'Letter' ? 612 : 595;
+  const pageH = s.pageSize === 'Letter' ? 792 : 842;
+  const marg = ({ narrow: 42, normal: 64, wide: 90 })[s.margins] || 64;
+  const size = s.fontSize || 12;
+  const lh = size * (s.lineSpacing || 1.5);
+  const usableW = pageW - marg * 2;
+  const charW = size * 0.6;                       // Courier advance = 0.6em
+  const maxChars = Math.max(8, Math.floor(usableW / charW));
+  const F = { normal: 'F1', bold: 'F2', italic: 'F3' };
+
+  const pages = []; let cur = []; let y = pageH - marg;
+  const newPage = () => { pages.push(cur); cur = []; y = pageH - marg; };
+  const ensure = () => { if (y - lh < marg) newPage(); };
+  const line = (text, opts = {}) => {
+    ensure();
+    const font = opts.font || F.normal;
+    const fs = opts.fsize || size;
+    const cw = fs * 0.6;
+    let x = marg + (opts.indent || 0) * charW;
+    if (opts.align === 'center') x = marg + (usableW - text.length * cw) / 2;
+    cur.push({ x: Math.max(marg, x), y, text, font, fs });
+    y -= (opts.lh || lh);
+  };
+  const blank = (n = 1) => { y -= lh * n; if (y < marg) newPage(); };
+  const wrap = (text, opts = {}) => {
+    const words = normalizeForPdf(text).split(/\s+/).filter(Boolean);
+    if (!words.length) return;
+    const limit = opts.maxChars || maxChars;
+    let ln = '', indent = opts.firstIndent || 0;
+    words.forEach(w => {
+      const cand = ln ? ln + ' ' + w : w;
+      if (cand.length + indent > limit && ln) { line(ln, { font: opts.font, indent, align: opts.align }); ln = w; indent = 0; }
+      else ln = cand;
+    });
+    if (ln) line(ln, { font: opts.font, indent, align: opts.align });
+  };
+  const heading = (text, fsize, center) => {
+    ensure(); blank(0.4);
+    const cw = fsize * 0.6;
+    const lim = Math.max(6, Math.floor(usableW / cw));
+    const norm = normalizeForPdf(text);
+    const segs = norm.match(new RegExp('.{1,' + lim + '}(\\s+|$)', 'g'));
+    const parts = (segs && segs.length) ? segs : [norm];
+    parts.forEach(seg => {
+      const t = seg.trim();
+      if (t) line(t, { font: F.bold, fsize, lh: fsize * 1.3, align: center ? 'center' : 'left' });
+    });
+    blank(0.5);
+  };
+
+  // title page
+  if (s.titlePage) {
+    y = pageH * 0.62;
+    line(normalizeForPdf((s.titleText || novel.title || 'Untitled')), { font: F.bold, fsize: size + 10, lh: (size + 10) * 1.3, align: 'center' });
+    if (s.subtitle) { blank(0.4); line(normalizeForPdf(s.subtitle), { font: F.italic, align: 'center' }); }
+    if (s.author) { blank(2); line(normalizeForPdf(s.author), { align: 'center' }); }
+    if (s.dateText) { blank(0.5); line(normalizeForPdf(s.dateText), { align: 'center' }); }
+    newPage();
+  }
+  // toc (after title)
+  const tocEntries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  const emitTOC = () => {
+    if (!s.toc || !tocEntries.length) return;
+    line('Contents', { font: F.bold, fsize: size + 4, lh: (size + 4) * 1.4, align: 'center' });
+    blank(0.6);
+    tocEntries.forEach(f => line(normalizeForPdf(f.title), { indent: f.type === 'scene' ? 3 : 0 }));
+    newPage();
+  };
+  if (s.toc && s.tocPosition === 'afterTitle') emitTOC();
+
+  let lastScene = false;
+  flow.forEach(f => {
+    if (f.type === 'part') { if (cur.length) newPage(); y = pageH * 0.5; heading(f.title, size + 8, true); lastScene = false; }
+    else if (f.type === 'chapter') { if (cur.length) newPage(); heading(f.title, size + 5, true); lastScene = false; }
+    else if (f.type === 'break') { blank(0.5); line(normalizeForPdf(sepText() || '* * *'), { align: 'center' }); blank(0.5); lastScene = false; }
+    else {
+      if (lastScene) { blank(0.4); line(normalizeForPdf(sepText() || ''), { align: 'center' }); blank(0.4); }
+      if (f.showTitle) heading(f.title, size + 2, false);
+      htmlToBlocks(f.html).forEach(bl => {
+        const txt = bl.runs.map(r => r.text).join('');
+        if (!txt.trim()) { blank(0.5); return; }
+        if (bl.tag[0] === 'h') heading(txt, size + (bl.tag === 'h1' ? 4 : bl.tag === 'h2' ? 2 : 1), false);
+        else wrap(txt, { firstIndent: s.indent === 'indent' ? 5 : 0 });
+      });
+      lastScene = true;
+    }
+  });
+  if (s.toc && s.tocPosition === 'end') { if (cur.length) newPage(); emitTOC(); }
+  if (cur.length || !pages.length) newPage();
+
+  // serialize
+  const objs = [];
+  const add = body => { objs.push(body); return objs.length; };   // returns 1-based obj number
+  const catalog = add('');            // 1 (filled later)
+  const pagesObj = add('');           // 2
+  const fontObjs = {
+    F1: add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>'),
+    F2: add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>'),
+    F3: add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Oblique /Encoding /WinAnsiEncoding >>')
+  };
+  const pageRefs = [];
+  pages.forEach((pg, pi) => {
+    let stream = 'BT\n';
+    pg.forEach(l => {
+      stream += `/${l.font} ${l.fs} Tf 1 0 0 1 ${l.x.toFixed(2)} ${l.y.toFixed(2)} Tm (${pdfEsc(l.text)}) Tj\n`;
+    });
+    if (s.pageNumber && s.pageNumber !== 'none') {
+      const label = String((s.startPage || 1) + pi);
+      const pnx = s.pageNumber === 'right' ? (pageW - marg - label.length * (size * 0.6)) : (pageW / 2 - label.length * (size * 0.6) / 2);
+      stream += `/F1 ${Math.max(9, size - 1)} Tf 1 0 0 1 ${pnx.toFixed(2)} ${(marg * 0.6).toFixed(2)} Tm (${label}) Tj\n`;
+    }
+    stream += 'ET';
+    const contentNum = add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+    const fontDict = `<< /Font << /F1 ${fontObjs.F1} 0 R /F2 ${fontObjs.F2} 0 R /F3 ${fontObjs.F3} 0 R >> >>`;
+    const pageNum = add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources ${fontDict} /Contents ${contentNum} 0 R >>`);
+    pageRefs.push(pageNum);
+  });
+  objs[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
+  objs[pagesObj - 1] = `<< /Type /Pages /Kids [${pageRefs.map(n => n + ' 0 R').join(' ')}] /Count ${pageRefs.length} >>`;
+
+  let pdf = '%PDF-1.4\n';
+  const offsets = [];
+  objs.forEach((body, i) => { offsets[i] = pdf.length; pdf += `${i + 1} 0 obj\n${body}\nendobj\n`; });
+  const xrefStart = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  offsets.forEach(off => { pdf += String(off).padStart(10, '0') + ' 00000 n \n'; });
+  pdf += `trailer\n<< /Size ${objs.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+
+  const bytes = Uint8Array.from(pdf, c => c.charCodeAt(0) & 0xff);
+  saveBinary(compFileName('pdf'), bytes, 'application/pdf');
 }
 
 /* ---- EPUB (valid EPUB3 package) ---- */
@@ -4078,7 +4207,7 @@ function exportCompEPUB() {
   const ncx = `<?xml version="1.0" encoding="utf-8"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="${uid}"/></head><docTitle><text>${esc(title)}</text></docTitle><navMap>${ncxPts}</navMap></ncx>`;
   const opf = `<?xml version="1.0" encoding="utf-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">${uid}</dc:identifier><dc:title>${esc(title)}</dc:title><dc:creator>${esc(author)}</dc:creator><dc:language>en</dc:language><meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="book" href="book.xhtml" media-type="application/xhtml+xml"/><item id="css" href="style.css" media-type="text/css"/></manifest><spine toc="ncx"><itemref idref="book"/></spine></package>`;
   const container = `<?xml version="1.0" encoding="utf-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`;
-  const css = `html,body{margin:0;padding:1em;font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};}\n` + compileCSS(false);
+  const css = `html,body{margin:0;padding:1em;font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};}\n` + compileCSS();
   const enc = new TextEncoder();
   const files = [
     { name: 'mimetype', bytes: enc.encode('application/epub+zip') },

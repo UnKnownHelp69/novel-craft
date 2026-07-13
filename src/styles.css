@@ -138,6 +138,9 @@ body.native-titlebar .win-controls{display:none;}
 #rightPanel{width:300px;min-width:300px;overflow-y:auto;border-left:1px solid var(--border);}
 #leftPanel{border-right:1px solid var(--border);}
 .side-panel.collapsed{width:0;min-width:0;opacity:0;pointer-events:none;}
+/* ID-level override so the collapsed state beats #rightPanel's width:300px
+   (an ID selector) — both panels now fully slide to 0 identically. */
+#leftPanel.collapsed,#rightPanel.collapsed{width:0;min-width:0;padding:0;border:none;opacity:0;pointer-events:none;overflow:hidden;}
 
 .panel-head{
   display:flex;align-items:center;gap:6px;
