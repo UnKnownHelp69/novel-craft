@@ -193,6 +193,7 @@
       <div class="accordion" data-acc="locs">
         <button class="acc-head">Locations <span class="chev">▾</span></button>
         <div class="acc-body">
+          <button class="graph-btn" id="btnWorldMap" title="Open the interactive world map">🗺️ Open World Map</button>
           <button class="add-entity" id="btnAddLoc">＋ Add Location</button>
           <div id="locList" class="entity-list"></div>
         </div>
@@ -365,6 +366,68 @@
           <div id="legendBody" class="legend-body"></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- ============ WORLD MAP ============ -->
+  <div id="mapOverlay" class="map-overlay hidden">
+    <div class="map-modal">
+      <div class="map-toolbar">
+        <span class="map-title">🗺️ World Map</span>
+        <button class="tbtn" id="mapUpload" title="Upload a background map image">Upload Map Image</button>
+        <div class="map-zoomctl">
+          <button class="tbtn map-zbtn" id="mapZoomOut" title="Zoom out">−</button>
+          <span id="mapZoomLabel" class="map-zoom">100%</span>
+          <button class="tbtn map-zbtn" id="mapZoomIn" title="Zoom in">＋</button>
+        </div>
+        <button class="tbtn" id="mapFit" title="Fit map to screen">Fit to Screen</button>
+        <button class="tbtn" id="mapOriginal" title="Original size (100%)">100%</button>
+        <button class="tbtn" id="mapAddRoute" title="Add a travel route between two locations">Add Route</button>
+        <label class="map-ctl">Draw layer
+          <select id="mapActiveLayer" class="control"></select>
+        </label>
+        <button class="tbtn" id="mapExport" title="Export current view as PNG">Export PNG</button>
+        <button class="tbtn subtle map-close" id="mapClose" title="Close (Esc)">✕</button>
+      </div>
+      <div class="map-main">
+        <aside class="map-side">
+          <div class="map-side-head">📍 Locations</div>
+          <input type="text" id="mapLocSearch" class="control map-search" placeholder="Search locations…" />
+          <button class="tbtn map-place-all" id="mapPlaceAll">Place All Unplaced</button>
+          <div id="mapLocList" class="map-loc-list"></div>
+          <div class="map-side-head">🗂️ Layers</div>
+          <div id="mapLayerList" class="map-layer-list"></div>
+          <button class="add-entity map-add-layer" id="mapAddLayer">＋ Add Layer</button>
+          <div id="mapDrawTools" class="map-draw-tools hidden">
+            <div class="map-side-sub">Drawing tools</div>
+            <div class="map-tool-row">
+              <button class="map-tool active" data-tool="pen" title="Freehand pen">✏️</button>
+              <button class="map-tool" data-tool="line" title="Line">╱</button>
+              <button class="map-tool" data-tool="rect" title="Rectangle">▭</button>
+              <button class="map-tool" data-tool="circle" title="Circle">◯</button>
+              <button class="map-tool" data-tool="text" title="Text">T</button>
+              <button class="map-tool" data-tool="eraser" title="Eraser">🩹</button>
+            </div>
+            <div class="map-tool-row">
+              <input type="color" id="mapDrawColor" class="nt-color" value="#c9a96e" title="Drawing color" />
+              <button class="tbtn subtle" id="mapClearLayer">Clear layer</button>
+            </div>
+          </div>
+        </aside>
+        <div class="map-stage">
+          <canvas id="mapCanvas"></canvas>
+          <div id="mapDetails" class="map-details hidden"></div>
+          <div id="mapHint" class="map-hint hidden"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ROUTE DETAILS ============ -->
+  <div id="routeOverlay" class="modal-overlay hidden">
+    <div class="modal route-modal">
+      <h3 id="routeTitle">Route</h3>
+      <div id="routeForm"></div>
     </div>
   </div>
 
