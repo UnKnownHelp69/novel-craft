@@ -4264,7 +4264,11 @@ document.addEventListener('keydown', e => {
   if (mod && !e.shiftKey && (e.key === 'g' || e.key === 'G')) { e.preventDefault(); if (graphOpen) closeGraph(); else openGraph(); return; }
   if (e.key === 'Escape' && graphOpen) { if (!$('#graphPanel').classList.contains('hidden')) { $('#graphPanel').classList.add('hidden'); } else closeGraph(); return; }
   if (e.key === 'Escape' && corkboardOpen) { closeCorkboard(); return; }
-  if (e.key === 'Escape' && mapOpen) { if (mRouteMode) { cancelRouteMode(); mapDraw(); updateMapHint(); } else closeMap(); return; }
+  if (e.key === 'Escape' && mapOpen) {
+    if (!$('#routeOverlay').classList.contains('hidden')) { closeRouteEditor(); return; }
+    if (mRouteMode) { cancelRouteMode(); mapDraw(); updateMapHint(); return; }
+    closeMap(); return;
+  }
   if (e.key === 'Escape' && compOpen && !$('#routeOverlay').classList.contains('hidden')) { return; }
   if (e.key === 'Escape' && compOpen) { closeCompile(); return; }
   if (mod && e.shiftKey && (e.key === 'M' || e.key === 'm' || e.key === 'ь')) { e.preventDefault(); openAddNote(); return; }
