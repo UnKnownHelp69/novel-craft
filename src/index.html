@@ -90,11 +90,13 @@
     <section id="editorArea">
       <!-- scene metadata bar -->
       <div id="sceneMeta" class="scene-meta hidden">
-        <select id="metaPov" class="meta-select" title="POV character"></select>
-        <select id="metaLoc" class="meta-select" title="Location"></select>
-        <select id="metaTime" class="meta-select" title="Time of day"></select>
-        <select id="metaStatus" class="meta-select" title="Status"></select>
-        <button id="metaHide" class="meta-hide" title="Hide scene bar">✕</button>
+        <div class="scene-meta-inner">
+          <select id="metaPov" class="meta-select" title="POV character"></select>
+          <select id="metaLoc" class="meta-select" title="Location"></select>
+          <select id="metaTime" class="meta-select" title="Time of day"></select>
+          <select id="metaStatus" class="meta-select" title="Status"></select>
+          <button id="metaHide" class="meta-hide" title="Hide scene bar">✕</button>
+        </div>
       </div>
       <button id="metaShow" class="meta-show hidden" title="Show scene bar">▾ Scene info</button>
 

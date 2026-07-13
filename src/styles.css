@@ -221,8 +221,10 @@ body.native-titlebar .win-controls{display:none;}
 .bc-scene{color:var(--accent);font-weight:600;}
 .bc-sep{color:var(--text-dim);font-size:11px;}
 
-/* scene metadata bar */
-.scene-meta{display:flex;align-items:center;gap:6px;padding:5px 10px;background:var(--panel);border-bottom:1px solid var(--border);flex-wrap:wrap;}
+/* scene metadata bar — the bar background spans full width, but its content is
+   constrained to the editor column so the dropdowns stay put when panels hide */
+.scene-meta{padding:5px 0;background:var(--panel);border-bottom:1px solid var(--border);}
+.scene-meta-inner{display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%;max-width:820px;margin:0 auto;padding:0 30px;}
 .meta-select{
   background:var(--editor-bg);border:1px solid var(--border);color:var(--text);
   border-radius:5px;padding:4px 6px;font-size:11px;max-width:160px;cursor:pointer;transition:.15s ease;
@@ -237,7 +239,7 @@ body.focus .scene-meta,body.focus .meta-show{display:none;}
 /* ========= EDITOR ========= */
 #editorArea{flex:1;display:flex;flex-direction:column;position:relative;min-width:0;background:var(--bg);}
 .editor-scroll{flex:1;overflow-y:auto;display:flex;justify-content:center;}
-#editorWrap{width:100%;max-width:820px;margin:0 auto;padding:40px 30px 120px;position:relative;transition:max-width .3s ease, padding .3s ease;}
+#editorWrap{width:100%;max-width:820px;margin:0 auto;padding:40px 30px 120px;position:relative;transition:max-width .3s ease, width .3s ease, padding .3s ease;}
 .editor,.md-editor{
   width:100%;min-height:60vh;background:var(--editor-bg);
   border:1px solid var(--border);border-radius:10px;
@@ -257,7 +259,9 @@ body.focus .scene-meta,body.focus .meta-show{display:none;}
 /* Focus mode */
 body.focus #topbar{transform:translateY(-100%);height:0;min-height:0;opacity:0;overflow:hidden;}
 body.focus #leftPanel,body.focus #rightPanel{width:0;min-width:0;opacity:0;pointer-events:none;}
-body.focus #editorWrap{max-width:720px;}
+/* Focus mode hides the side panels, so the editor expands into a wider,
+   comfortable column (~850px, or up to 70% of the window) — more space, not less. */
+body.focus #editorWrap{width:70%;max-width:850px;}
 body.focus.typewriter .editor{padding-top:30vh;padding-bottom:30vh;}
 .exit-focus{
   position:absolute;top:-40px;left:50%;transform:translateX(-50%);
