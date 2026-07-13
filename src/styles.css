@@ -227,13 +227,14 @@ body.native-titlebar .win-controls{display:none;}
 /* scene metadata bar — the bar background spans full width, but its content is
    constrained to the editor column so the dropdowns stay put when panels hide */
 .scene-meta{padding:5px 0;background:var(--panel);border-bottom:1px solid var(--border);}
-.scene-meta-inner{display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%;max-width:820px;margin:0 auto;padding:0 30px;}
+.scene-meta-inner{display:flex;align-items:center;width:100%;max-width:820px;margin:0 auto;padding:0 30px;}
+.metadata-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;}
 .meta-select{
   background:var(--editor-bg);border:1px solid var(--border);color:var(--text);
   border-radius:5px;padding:4px 6px;font-size:11px;max-width:160px;cursor:pointer;transition:.15s ease;
 }
 .meta-select:hover{border-color:var(--accent-dim);}
-.meta-hide{margin-left:auto;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:12px;border-radius:4px;padding:2px 6px;}
+.meta-hide{margin-left:auto;flex-shrink:0;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:12px;border-radius:4px;padding:2px 6px;}
 .meta-hide:hover{color:var(--accent);}
 .meta-show{background:var(--panel);border:none;border-bottom:1px solid var(--border);color:var(--text-dim);cursor:pointer;font-size:11px;padding:3px 10px;text-align:left;}
 .meta-show:hover{color:var(--accent);}
