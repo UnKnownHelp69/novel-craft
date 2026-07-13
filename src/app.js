@@ -3246,7 +3246,13 @@ function initMapEvents() {
       mMoved = true; mapDraw(); return;
     }
     if (mPanning) { mView.x += m.x - mLast.x; mView.y += m.y - mLast.y; mLast = m; mMoved = true; mapDraw(); return; }
-    if (!activeLayer()) mCanvas.style.cursor = pinAt(m.x, m.y) ? 'pointer' : (mRouteMode ? 'crosshair' : 'grab');
+    if (!activeLayer()) {
+      const overPin = pinAt(m.x, m.y);
+      const overRoute = overPin ? null : routeAt(m.x, m.y);
+      const hid = overRoute ? overRoute.id : null;
+      if (hid !== mHoverRoute) { mHoverRoute = hid; mapDraw(); }
+      mCanvas.style.cursor = overPin ? 'pointer' : overRoute ? 'pointer' : (mRouteMode ? 'crosshair' : 'grab');
+    }
   });
   window.addEventListener('mouseup', () => {
     if (!mapOpen) return;
@@ -3258,7 +3264,10 @@ function initMapEvents() {
       mapDraw(); return;
     }
     if (mDragPin) { if (mMoved) markDirty(); else showLocDetails(mDragPin); mDragPin = null; return; }
-    if (mPanning) { mPanning = false; if (!mMoved) hideMapDetails(); }
+    if (mPanning) {
+      mPanning = false;
+      if (!mMoved) { const rt = routeAt(mLast.x, mLast.y); if (rt) openRouteEditor(rt); else hideMapDetails(); }
+    }
   });
   mCanvas.addEventListener('wheel', e => {
     e.preventDefault();
@@ -3355,11 +3364,163 @@ function drawRouteArrow(x, y, ang, color) {
   mCtx.restore();
 }
 let mHoverRoute = null;
-/* route creation/editing helpers are defined in the routes section */
-function startRouteFrom() { toast('Routes are available in the next update'); }
-function routePickTarget() {}
-function cancelRouteMode() { mRouteMode = null; }
-function updateMapHint() {}
+let routeEditing = null, routeCharSel = null;
+
+/* Quadratic-curve control point used for both drawing and hit-testing a route. */
+function routeControl(pa, pb) {
+  const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+  const nx = -(pb.y - pa.y), ny = (pb.x - pa.x);
+  const len = Math.hypot(nx, ny) || 1;
+  return { x: mx + (nx / len) * 22, y: my + (ny / len) * 22 };
+}
+function routeEndpoints(rt) {
+  const wm = worldMap();
+  const a = novel.locations.find(l => l.id === rt.fromLocationId);
+  const b = novel.locations.find(l => l.id === rt.toLocationId);
+  if (!a || !b || !wm.locations[a.id] || !wm.locations[b.id]) return null;
+  return { pa: mw2s(...Object.values(locWorld(a))), pb: mw2s(...Object.values(locWorld(b))) };
+}
+function routeAt(sx, sy) {
+  const wm = worldMap();
+  if (!wm.baseLayers.routes) return null;
+  for (let i = wm.routes.length - 1; i >= 0; i--) {
+    const rt = wm.routes[i];
+    const e = routeEndpoints(rt);
+    if (!e) continue;
+    const c = routeControl(e.pa, e.pb);
+    let prev = e.pa;
+    for (let t = 1; t <= 12; t++) {
+      const k = t / 12, ik = 1 - k;
+      const x = ik * ik * e.pa.x + 2 * ik * k * c.x + k * k * e.pb.x;
+      const y = ik * ik * e.pa.y + 2 * ik * k * c.y + k * k * e.pb.y;
+      if (distToSeg(sx, sy, prev.x, prev.y, x, y) < 7) return rt;
+      prev = { x, y };
+    }
+  }
+  return null;
+}
+/* enter route mode: fromId may start null (pick a source first) */
+function beginRoute() {
+  if (placedLocs().length < 2) { toast('Place at least two locations on the map first'); return; }
+  mActiveLayerId = ''; $('#mapActiveLayer').value = ''; updateDrawToolsVisibility();
+  mRouteMode = { fromId: null };
+  hideMapDetails(); updateMapHint(); mapDraw();
+}
+function startRouteFrom(fromId) {
+  if (!worldMap().locations[fromId]) { toast('Place this location on the map first'); return; }
+  mActiveLayerId = ''; $('#mapActiveLayer').value = ''; updateDrawToolsVisibility();
+  mRouteMode = { fromId };
+  hideMapDetails(); updateMapHint(); mapDraw();
+}
+function routePickTarget(pinId) {
+  if (!mRouteMode) return;
+  if (mRouteMode.fromId === null) { mRouteMode.fromId = pinId; updateMapHint(); mapDraw(); return; }
+  if (pinId === mRouteMode.fromId) { toast('Pick a different destination'); return; }
+  const rt = {
+    id: uuid(), fromLocationId: mRouteMode.fromId, toLocationId: pinId,
+    name: '', travelTime: '', distance: '', terrain: '', characterIds: [],
+    color: '#c9a96e', notes: '', bidirectional: true
+  };
+  worldMap().routes.push(rt);
+  cancelRouteMode();
+  markDirty(); mapDraw();
+  openRouteEditor(rt);
+}
+function cancelRouteMode() { mRouteMode = null; updateMapHint(); }
+function updateMapHint() {
+  const el = $('#mapHint');
+  if (!el) return;
+  if (!mRouteMode) { el.classList.add('hidden'); return; }
+  el.textContent = mRouteMode.fromId === null
+    ? 'Add Route: click the first location  (Esc to cancel)'
+    : 'Add Route: click the destination location  (Esc to cancel)';
+  el.classList.remove('hidden');
+}
+
+/* ---- route details editor ---- */
+function openRouteEditor(rt) {
+  routeEditing = rt;
+  routeCharSel = new Set(rt.characterIds || []);
+  const placed = placedLocs();
+  const locOpts = placed.map(l => [l.id, l.name || '(unnamed)']);
+  $('#routeTitle').textContent = 'Route Details';
+  const form = $('#routeForm');
+  form.innerHTML =
+    `<label class="field-label">Route name</label>
+     <input type="text" id="rfName" class="control" placeholder="e.g. The King's Road" />
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">From</label><select id="rfFrom" class="control"></select></div>
+       <div class="rf-col"><label class="field-label">To</label><select id="rfTo" class="control"></select></div>
+     </div>
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">Travel time</label><input type="text" id="rfTime" class="control" placeholder="3 days on horseback" /></div>
+       <div class="rf-col"><label class="field-label">Distance</label><input type="text" id="rfDist" class="control" placeholder="200 miles" /></div>
+     </div>
+     <label class="field-label">Terrain</label>
+     <input type="text" id="rfTerrain" class="control" placeholder="Mountain pass, dangerous in winter" />
+     <label class="field-label">Used by characters</label>
+     <div id="rfChars" class="rf-chars"></div>
+     <label class="field-label">Notes</label>
+     <textarea id="rfNotes" class="control" rows="2"></textarea>
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">Line color</label><input type="color" id="rfColor" class="nt-color" /></div>
+       <div class="rf-col"><label class="field-label">Direction</label>
+         <label class="toggle-row"><input type="checkbox" id="rfBidir" /> <span>Bidirectional (no arrow)</span></label>
+       </div>
+     </div>
+     <div class="modal-actions">
+       <button class="tbtn nc-danger" id="rfDelete">Delete Route</button>
+       <button class="tbtn subtle" id="rfCancel">Close</button>
+       <button class="tbtn accent" id="rfSave">Save</button>
+     </div>`;
+  fillSelect($('#rfFrom'), locOpts, rt.fromLocationId);
+  fillSelect($('#rfTo'), locOpts, rt.toLocationId);
+  $('#rfName').value = rt.name || '';
+  $('#rfTime').value = rt.travelTime || '';
+  $('#rfDist').value = rt.distance || '';
+  $('#rfTerrain').value = rt.terrain || '';
+  $('#rfNotes').value = rt.notes || '';
+  $('#rfColor').value = rt.color || '#c9a96e';
+  $('#rfBidir').checked = rt.bidirectional !== false;
+  const chost = $('#rfChars');
+  if (!novel.characters.length) chost.innerHTML = '<span class="map-empty">No characters yet.</span>';
+  else novel.characters.forEach(c => {
+    const chip = document.createElement('button');
+    chip.className = 'rf-char' + (routeCharSel.has(c.id) ? ' on' : '');
+    chip.textContent = c.name || '(unnamed)';
+    chip.onclick = () => { if (routeCharSel.has(c.id)) routeCharSel.delete(c.id); else routeCharSel.add(c.id); chip.classList.toggle('on'); };
+    chost.appendChild(chip);
+  });
+  $('#rfDelete').onclick = () => deleteRoute(rt);
+  $('#rfCancel').onclick = closeRouteEditor;
+  $('#rfSave').onclick = () => {
+    rt.name = $('#rfName').value.trim();
+    rt.fromLocationId = $('#rfFrom').value;
+    rt.toLocationId = $('#rfTo').value;
+    rt.travelTime = $('#rfTime').value.trim();
+    rt.distance = $('#rfDist').value.trim();
+    rt.terrain = $('#rfTerrain').value.trim();
+    rt.notes = $('#rfNotes').value.trim();
+    rt.color = $('#rfColor').value;
+    rt.bidirectional = $('#rfBidir').checked;
+    rt.characterIds = [...routeCharSel];
+    if (rt.fromLocationId === rt.toLocationId) { toast('A route needs two different locations'); return; }
+    markDirty(); closeRouteEditor(); mapDraw();
+    toast('Route saved');
+  };
+  $('#routeOverlay').classList.remove('hidden');
+}
+function closeRouteEditor() { routeEditing = null; $('#routeOverlay').classList.add('hidden'); }
+function deleteRoute(rt) {
+  confirmModal('Delete route', 'Delete this route?', () => {
+    const wm = worldMap();
+    wm.routes = wm.routes.filter(r => r.id !== rt.id);
+    markDirty(); closeRouteEditor(); mapDraw();
+    toast('Route deleted');
+  });
+}
+$('#mapAddRoute').addEventListener('click', beginRoute);
+$('#routeOverlay').addEventListener('mousedown', e => { if (e.target === $('#routeOverlay')) closeRouteEditor(); });
 
 /* ---- map toolbar wiring ---- */
 $('#btnWorldMap').addEventListener('click', openMap);
