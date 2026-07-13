@@ -63,7 +63,8 @@ gracefully in a plain browser (`hasTauri === false`) — file dialogs fall back 
 ### Backend commands (`src-tauri/src/lib.rs`)
 
 File I/O and dialogs (via `tauri-plugin-dialog`): `pick_open`, `pick_save`,
-`read_text`, `write_text`, `get_last_file`, `set_last_file`, `autosave`.
+`read_text`, `write_text`, `write_binary` (base64 → file, for EPUB/DOCX exports),
+`get_last_file`, `set_last_file`, `autosave`.
 Window controls (frameless window): `minimize_window`, `maximize_window`,
 `unmaximize_window`, `close_window`, `is_maximized`, `set_decorations`,
 `set_window_title`. Recent files (stored as `recent.json` in app config dir):

@@ -15,6 +15,8 @@ A distraction‑free desktop **novel‑writing studio** built with **Tauri v2** 
 - **Scenes & chapter tree** (left) — chapters are collapsible folders containing **scenes** (the writing unit the editor edits). 🎬 scenes show live word counts and a status dot (draft / review / done). Add, rename, duplicate, delete, **drag‑and‑drop** to reorder within a chapter, move between chapters, or reorder chapters; right‑click for a context menu (incl. *Move to Chapter*). Breadcrumb navigation (Novel › Chapter › Scene) and a per‑scene metadata bar (POV character, location, time of day, status).
 - **Corkboard view** — toggle the tree into a Scrivener‑style board of draggable scene cards grouped by chapter, with status badges, POV/location/time, zoom, status/POV filters, and sorting. Drag cards to reorder or move between chapters; click to open a scene; click a badge to cycle its status.
 - **Character relationship graph** (`Ctrl+G`) — an interactive HTML‑canvas network of characters (nodes) and relationships (edges). Drag nodes, pan/zoom, colour‑coded edge types with thickness by strength and style by status (active/past/secret/one‑sided), click a node to spotlight its connections, edit relationships in a side panel, auto‑arrange (force‑directed) / circular / manual layouts, filters, a legend, and **Export as PNG**. Positions persist in the `.novel` file.
+- **Interactive world map** — upload a background map image (PNG/JPG/WebP/SVG, stored inline in the `.novel`) and drop **location pins** (drag to move, colour‑coded by type, click for a details card, double‑click to edit). Draw **travel routes** between locations with names, travel time, distance, terrain, characters and colour. Toggleable **layers** (background / locations / routes / labels) plus custom **drawing layers** (pen / line / rectangle / circle / text / eraser, opacity). Pan/zoom, Fit to Screen, and **Export as PNG**.
+- **Compile Novel** — assemble all scenes into one document: drag to reorder, add **part dividers** and **section breaks**, rename items for the compilation only, live **preview**, and formatting/title‑page/**table‑of‑contents** settings with saveable presets. Export to **PDF** (print), **EPUB**, **HTML**, **TXT** and **DOCX**.
 - **Worldbuilding panels** (right accordion) — Characters, Locations, Races/Peoples with full editable field sets, plus a **Counters** section (chapter/total words, chars with & without spaces, configurable word‑goal progress bar).
 - **Margin notes** — attach colour‑coded comments to any text selection (right‑click ▸ *Add Note* or `Ctrl+Shift+M`). Notes appear as dots in the editor's right margin with hover tooltips and an expandable card (resolve / edit / delete), underline the annotated text via the CSS Custom Highlight API, and are tracked by character offset so they survive edits. A **Notes** panel filters by type and resolved state; five default types (Исправить / Проверить факт / Развить мысль / Перенести / Идея) plus user‑defined **custom types** (name, colour, emoji) managed in **Settings**. Export all notes to TXT / Markdown.
 - **Focus Mode** (`Ctrl+Shift+F`) — hides chrome, centers a 720 px column, hover‑top / `Esc` to exit.
@@ -106,7 +108,11 @@ Plain JSON. **One `.novel` file = one novel:**
 {
   "version": "1.0",
   "title": "My Novel",
-  "settings": { "fontSize": 18, "defaultFont": "Georgia, serif", "wordGoal": 80000, "customNoteTypes": [] },
+  "settings": {
+    "fontSize": 18, "defaultFont": "Georgia, serif", "wordGoal": 80000, "customNoteTypes": [],
+    "worldMap": { "backgroundImage": "", "locations": {}, "routes": [], "layers": [], "baseLayers": {} },
+    "compilationPresets": []
+  },
   "chapters": [ {
     "id": "…", "order": 0, "title": "Chapter 1", "wordCount": 0, "collapsed": false,
     "scenes": [ {

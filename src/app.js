@@ -40,13 +40,25 @@ function blankScene(n) {
 function blankChapter(n) {
   return { id: uuid(), order: n, title: `Chapter ${n + 1}`, wordCount: 0, collapsed: false, scenes: [blankScene(0)] };
 }
+/* A fresh, empty world map (lives in novel.settings.worldMap). The background
+   image is stored inline as a base64 data URL so the map is self-contained and
+   works in the browser fallback (no external file to resolve). */
+function blankWorldMap() {
+  return {
+    backgroundImage: '', imageW: 0, imageH: 0,
+    locations: {},              // locationId -> { x:0-1, y:0-1, visible }
+    routes: [],
+    layers: [],                 // custom drawing layers
+    baseLayers: { background: true, locations: true, routes: true, labels: true }
+  };
+}
 /* One .novel file = ONE novel. Structure matches the original spec:
    { version, title, settings, chapters[], characters[], locations[], races[] } */
 function newNovel(title) {
   return {
     version: '1.0',
     title: title || 'Untitled Novel',
-    settings: { fontSize: 18, defaultFont: 'Georgia, serif', wordGoal: 80000, customNoteTypes: [], noteTypeColors: {} },
+    settings: { fontSize: 18, defaultFont: 'Georgia, serif', wordGoal: 80000, customNoteTypes: [], noteTypeColors: {}, worldMap: blankWorldMap(), compilationPresets: [] },
     chapters: [blankChapter(0)],
     characters: [],
     locations: [],
@@ -637,6 +649,27 @@ function migrateNovel(d) {
   if (!Array.isArray(n.settings.customNoteTypes)) n.settings.customNoteTypes = [];
   if (!n.settings.noteTypeColors || typeof n.settings.noteTypeColors !== 'object') n.settings.noteTypeColors = {};
   n.settings.customNoteTypes.forEach(t => { if (!t.id) t.id = uuid(); });
+  // world map
+  const wm = { ...blankWorldMap(), ...(n.settings.worldMap || {}) };
+  if (typeof wm.locations !== 'object' || !wm.locations) wm.locations = {};
+  if (!Array.isArray(wm.routes)) wm.routes = [];
+  if (!Array.isArray(wm.layers)) wm.layers = [];
+  wm.baseLayers = { ...blankWorldMap().baseLayers, ...(wm.baseLayers || {}) };
+  wm.layers.forEach(l => {
+    l.id = l.id || uuid();
+    l.name = l.name || 'Layer';
+    if (typeof l.visible !== 'boolean') l.visible = true;
+    if (typeof l.opacity !== 'number') l.opacity = 1;
+    if (!Array.isArray(l.drawings)) l.drawings = [];
+  });
+  wm.routes.forEach(r => {
+    r.id = r.id || uuid();
+    if (!Array.isArray(r.characterIds)) r.characterIds = [];
+    r.color = r.color || '#c9a96e';
+    if (typeof r.bidirectional !== 'boolean') r.bidirectional = true;
+  });
+  n.settings.worldMap = wm;
+  if (!Array.isArray(n.settings.compilationPresets)) n.settings.compilationPresets = [];
   if (!Array.isArray(n.chapters) || !n.chapters.length) n.chapters = [blankChapter(0)];
   let migratedToScenes = false;
   const normNote = nt => {
@@ -2777,6 +2810,1576 @@ $('#graphReset').addEventListener('click', () => { novel.characters.forEach(c =>
 $('#legendToggle').addEventListener('click', () => { const b = $('#legendBody'); const hidden = b.classList.toggle('collapsed'); $('#legendToggle').textContent = 'Legend ' + (hidden ? '▴' : '▾'); });
 addEventListener('resize', () => { if (graphOpen) gResize(); });
 
+/* ================= WORLD MAP ================= */
+const LOC_TYPE_COLOR = { city: '#4a90d9', building: '#c9a96e', natural: '#5cb85c', other: '#8f887c' };
+function locColor(l) { return LOC_TYPE_COLOR[l.type] || '#8f887c'; }
+
+let mapOpen = false, mapEventsInit = false;
+let mCanvas = null, mCtx = null;
+let mView = { x: 0, y: 0, zoom: 1 };
+let mImg = null;
+let mDragPin = null, mPanning = false, mLast = null, mMoved = false;
+let mActiveLayerId = '';           // '' = pin/pan mode; else a custom layer id -> drawing mode
+let mDrawTool = 'pen', mDrawColor = '#c9a96e';
+let mDrawing = null;               // in-progress drawing object
+let mLocSearch = '';
+let mRouteMode = null;             // { fromId } while placing a route (see routes section)
+
+function worldMap() { return novel && novel.settings && novel.settings.worldMap; }
+function mapImageSize() {
+  const wm = worldMap();
+  if (mImg && mImg.complete && mImg.naturalWidth) return { w: mImg.naturalWidth, h: mImg.naturalHeight };
+  if (wm && wm.imageW) return { w: wm.imageW, h: wm.imageH };
+  return { w: 1200, h: 800 };      // virtual canvas when no image is uploaded
+}
+function mw2s(x, y) { return { x: x * mView.zoom + mView.x, y: y * mView.zoom + mView.y }; }
+function ms2w(x, y) { return { x: (x - mView.x) / mView.zoom, y: (y - mView.y) / mView.zoom }; }
+function locRel(l) { const wm = worldMap(); return wm.locations[l.id] || null; }
+function locWorld(l) { const sz = mapImageSize(); const p = locRel(l); const rx = p ? p.x : 0.5, ry = p ? p.y : 0.5; return { x: rx * sz.w, y: ry * sz.h }; }
+function placedLocs() { const wm = worldMap(); return novel.locations.filter(l => wm.locations[l.id]); }
+function pinScreenR() { return Math.max(9, Math.min(20, 13 * mView.zoom)); }
+
+function openMap() {
+  if (!novel) return;
+  mapOpen = true;
+  $('#mapOverlay').classList.remove('hidden');
+  mCanvas = $('#mapCanvas');
+  mCtx = mCanvas.getContext('2d');
+  if (!mapEventsInit) { initMapEvents(); mapEventsInit = true; }
+  mActiveLayerId = '';
+  loadMapImage();
+  renderMapLocList();
+  renderMapLayers();
+  renderMapLayerSelect();
+  updateDrawToolsVisibility();
+  hideMapDetails();
+  cancelRouteMode();
+  requestAnimationFrame(() => { mapResize(); mapFit(); });
+}
+function closeMap() {
+  mapOpen = false;
+  cancelRouteMode();
+  $('#mapOverlay').classList.add('hidden');
+  markDirty();   // pin positions / drawings may have changed
+}
+function loadMapImage() {
+  const wm = worldMap();
+  if (wm.backgroundImage) {
+    mImg = new Image();
+    mImg.onload = () => { wm.imageW = mImg.naturalWidth; wm.imageH = mImg.naturalHeight; mapDraw(); };
+    mImg.src = wm.backgroundImage;
+  } else { mImg = null; }
+}
+function mapResize() {
+  if (!mCanvas) return;
+  const stage = $('.map-stage');
+  const r = stage.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  mCanvas.width = r.width * dpr;
+  mCanvas.height = r.height * dpr;
+  mCanvas.style.width = r.width + 'px';
+  mCanvas.style.height = r.height + 'px';
+  mCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  mapDraw();
+}
+function updateMapZoom() { const el = $('#mapZoomLabel'); if (el) el.textContent = Math.round(mView.zoom * 100) + '%'; }
+function mapFit() {
+  const sz = mapImageSize();
+  const W = mCanvas.clientWidth, H = mCanvas.clientHeight;
+  const pad = 40;
+  const z = Math.min((W - pad) / sz.w, (H - pad) / sz.h);
+  mView.zoom = Math.max(0.05, Math.min(4, z));
+  mView.x = (W - sz.w * mView.zoom) / 2;
+  mView.y = (H - sz.h * mView.zoom) / 2;
+  updateMapZoom(); mapDraw();
+}
+function mapOriginal() {
+  const sz = mapImageSize();
+  const W = mCanvas.clientWidth, H = mCanvas.clientHeight;
+  mView.zoom = 1;
+  mView.x = (W - sz.w) / 2;
+  mView.y = (H - sz.h) / 2;
+  updateMapZoom(); mapDraw();
+}
+function mapZoomBy(factor) {
+  const W = mCanvas.clientWidth / 2, H = mCanvas.clientHeight / 2;
+  const before = ms2w(W, H);
+  mView.zoom = Math.max(0.05, Math.min(6, mView.zoom * factor));
+  const after = mw2s(before.x, before.y);
+  mView.x += W - after.x; mView.y += H - after.y;
+  updateMapZoom(); mapDraw();
+}
+
+/* ---- drawing the map ---- */
+function mapDraw() {
+  if (!mCtx) return;
+  const W = mCanvas.clientWidth, H = mCanvas.clientHeight;
+  const wm = worldMap();
+  mCtx.clearRect(0, 0, W, H);
+  mCtx.fillStyle = '#15151a';
+  mCtx.fillRect(0, 0, W, H);
+  const sz = mapImageSize();
+  const tl = mw2s(0, 0);
+  if (mImg && mImg.complete && mImg.naturalWidth && wm.baseLayers.background) {
+    mCtx.drawImage(mImg, tl.x, tl.y, sz.w * mView.zoom, sz.h * mView.zoom);
+  } else {
+    mCtx.strokeStyle = '#33333f'; mCtx.setLineDash([7, 7]);
+    mCtx.strokeRect(tl.x, tl.y, sz.w * mView.zoom, sz.h * mView.zoom);
+    mCtx.setLineDash([]);
+    if (!mImg) {
+      mCtx.fillStyle = '#4a4a58'; mCtx.font = '13px Inter, sans-serif'; mCtx.textAlign = 'center';
+      mCtx.fillText('No map image — click “Upload Map Image” to add one', tl.x + sz.w * mView.zoom / 2, tl.y + sz.h * mView.zoom / 2);
+    }
+  }
+  wm.layers.forEach(l => { if (l.visible) drawLayer(l); });
+  if (mDrawing) drawOneDrawing(mDrawing, 1);
+  if (wm.baseLayers.routes) drawRoutes();
+  if (wm.baseLayers.locations) drawPins();
+}
+function drawPins() {
+  const wm = worldMap();
+  const showLabels = wm.baseLayers.labels;
+  placedLocs().forEach(l => {
+    const p = mw2s(...Object.values(locWorld(l)));
+    const r = pinScreenR();
+    const cy = p.y - r * 1.5;
+    mCtx.save();
+    mCtx.fillStyle = locColor(l);
+    mCtx.strokeStyle = 'rgba(0,0,0,.45)'; mCtx.lineWidth = 1.5;
+    mCtx.beginPath();
+    mCtx.arc(p.x, cy, r, Math.PI * 0.15, Math.PI * 0.85, true);   // top circle
+    mCtx.lineTo(p.x, p.y);                                         // pointer tip
+    mCtx.closePath();
+    mCtx.fill(); mCtx.stroke();
+    mCtx.beginPath(); mCtx.arc(p.x, cy, r * 0.42, 0, Math.PI * 2);
+    mCtx.fillStyle = 'rgba(0,0,0,.35)'; mCtx.fill();
+    if (showLabels) {
+      const name = l.name || '(unnamed)';
+      mCtx.font = '600 12px Inter, sans-serif'; mCtx.textAlign = 'center'; mCtx.textBaseline = 'top';
+      const tw = mCtx.measureText(name).width;
+      mCtx.fillStyle = 'rgba(20,20,26,.75)';
+      mCtx.fillRect(p.x - tw / 2 - 4, p.y + 3, tw + 8, 16);
+      mCtx.fillStyle = '#e8e0d5';
+      mCtx.fillText(name, p.x, p.y + 5);
+    }
+    mCtx.restore();
+  });
+}
+function pinAt(sx, sy) {
+  const locs = placedLocs();
+  for (let i = locs.length - 1; i >= 0; i--) {
+    const l = locs[i];
+    const p = mw2s(...Object.values(locWorld(l)));
+    const r = pinScreenR();
+    const cy = p.y - r * 1.5;
+    if (Math.hypot(sx - p.x, sy - cy) <= r + 2 || (sy <= p.y && sy >= cy && Math.abs(sx - p.x) <= r)) return l;
+  }
+  return null;
+}
+function drawLayer(l) {
+  mCtx.save();
+  mCtx.globalAlpha = typeof l.opacity === 'number' ? l.opacity : 1;
+  (l.drawings || []).forEach(d => drawOneDrawing(d, 1));
+  mCtx.restore();
+}
+function drawOneDrawing(d, alpha) {
+  mCtx.save();
+  mCtx.globalAlpha *= alpha;
+  mCtx.strokeStyle = d.color || '#c9a96e';
+  mCtx.fillStyle = d.color || '#c9a96e';
+  mCtx.lineWidth = Math.max(1, (d.width || 2) * mView.zoom);
+  mCtx.lineJoin = 'round'; mCtx.lineCap = 'round';
+  const P = (pt) => mw2s(pt.x, pt.y);
+  if (d.tool === 'pen' && d.points && d.points.length) {
+    mCtx.beginPath();
+    d.points.forEach((pt, i) => { const s = P(pt); i ? mCtx.lineTo(s.x, s.y) : mCtx.moveTo(s.x, s.y); });
+    mCtx.stroke();
+  } else if (d.tool === 'line' && d.points && d.points.length >= 2) {
+    const a = P(d.points[0]), b = P(d.points[1]);
+    mCtx.beginPath(); mCtx.moveTo(a.x, a.y); mCtx.lineTo(b.x, b.y); mCtx.stroke();
+  } else if (d.tool === 'rect' && d.points && d.points.length >= 2) {
+    const a = P(d.points[0]), b = P(d.points[1]);
+    mCtx.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+  } else if (d.tool === 'circle' && d.points && d.points.length >= 2) {
+    const a = P(d.points[0]), b = P(d.points[1]);
+    mCtx.beginPath(); mCtx.ellipse((a.x + b.x) / 2, (a.y + b.y) / 2, Math.abs(b.x - a.x) / 2, Math.abs(b.y - a.y) / 2, 0, 0, Math.PI * 2); mCtx.stroke();
+  } else if (d.tool === 'text' && d.points && d.points.length) {
+    const s = P(d.points[0]);
+    mCtx.font = '600 ' + Math.max(10, 16 * mView.zoom) + 'px Inter, sans-serif';
+    mCtx.textAlign = 'left'; mCtx.textBaseline = 'middle';
+    mCtx.fillText(d.text || '', s.x, s.y);
+  }
+  mCtx.restore();
+}
+
+/* ---- image upload ---- */
+async function uploadMapImage() {
+  const wm = worldMap();
+  const apply = dataUrl => {
+    wm.backgroundImage = dataUrl;
+    loadMapImage();
+    markDirty();
+    setTimeout(() => mapFit(), 60);
+    toast('Map image set');
+  };
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/png,image/jpeg,image/webp,image/svg+xml,.png,.jpg,.jpeg,.webp,.svg';
+  inp.onchange = () => {
+    const f = inp.files[0];
+    if (!f) return;
+    if (f.size > 12 * 1024 * 1024) { toast('Image is too large (max 12 MB)'); return; }
+    const rd = new FileReader();
+    rd.onload = () => apply(rd.result);
+    rd.readAsDataURL(f);
+  };
+  inp.click();
+}
+
+/* ---- left panel: locations ---- */
+function renderMapLocList() {
+  const host = $('#mapLocList');
+  if (!host || !novel) return;
+  host.innerHTML = '';
+  const wm = worldMap();
+  const q = mLocSearch.trim().toLowerCase();
+  const locs = novel.locations.filter(l => !q || (l.name || '').toLowerCase().includes(q));
+  if (!novel.locations.length) { host.innerHTML = '<div class="map-empty">No locations yet. Add some in the Locations panel.</div>'; return; }
+  if (!locs.length) { host.innerHTML = '<div class="map-empty">No matches.</div>'; return; }
+  locs.forEach(l => {
+    const placed = !!wm.locations[l.id];
+    const row = document.createElement('div');
+    row.className = 'map-loc-row' + (placed ? ' placed' : '');
+    row.innerHTML =
+      `<span class="mlr-dot" style="background:${locColor(l)}"></span>
+       <span class="mlr-name">${esc(l.name || '(unnamed)')}</span>
+       ${placed ? '<span class="mlr-pin" title="On map">📍</span>'
+                : '<button class="mlr-place" title="Place on map">Place</button>'}`;
+    if (placed) {
+      row.querySelector('.mlr-name').onclick = () => { centerOnLoc(l); showLocDetails(l); };
+      row.querySelector('.mlr-pin').onclick = () => { centerOnLoc(l); showLocDetails(l); };
+    } else {
+      row.querySelector('.mlr-place').onclick = () => placeLocation(l.id);
+    }
+    host.appendChild(row);
+  });
+}
+function centerOnLoc(l) {
+  const w = locWorld(l);
+  const W = mCanvas.clientWidth / 2, H = mCanvas.clientHeight / 2;
+  mView.x = W - w.x * mView.zoom; mView.y = H - w.y * mView.zoom;
+  mapDraw();
+}
+function placeLocation(id, rel) {
+  const wm = worldMap();
+  if (!rel) {
+    // drop at the current view centre (in relative image coords)
+    const sz = mapImageSize();
+    const c = ms2w(mCanvas.clientWidth / 2, mCanvas.clientHeight / 2);
+    rel = { x: Math.max(0, Math.min(1, c.x / sz.w)), y: Math.max(0, Math.min(1, c.y / sz.h)) };
+  }
+  wm.locations[id] = { x: rel.x, y: rel.y, visible: true };
+  markDirty(); renderMapLocList(); mapDraw();
+}
+function placeAllUnplaced() {
+  const wm = worldMap();
+  const unplaced = novel.locations.filter(l => !wm.locations[l.id]);
+  if (!unplaced.length) { toast('All locations are already placed'); return; }
+  const cols = Math.ceil(Math.sqrt(unplaced.length));
+  unplaced.forEach((l, i) => {
+    const c = i % cols, r = Math.floor(i / cols);
+    const rows = Math.ceil(unplaced.length / cols);
+    wm.locations[l.id] = { x: (c + 1) / (cols + 1), y: (r + 1) / (rows + 1), visible: true };
+  });
+  markDirty(); renderMapLocList(); mapDraw();
+  toast('Placed ' + unplaced.length + ' location' + (unplaced.length > 1 ? 's' : ''));
+}
+function removePin(id) {
+  const wm = worldMap();
+  delete wm.locations[id];
+  wm.routes = wm.routes.filter(r => r.fromLocationId !== id && r.toLocationId !== id);
+  markDirty(); renderMapLocList(); mapDraw(); hideMapDetails();
+  toast('Removed from map');
+}
+
+/* ---- location details card ---- */
+function showLocDetails(l) {
+  const el = $('#mapDetails');
+  const desc = (l.description || '').trim();
+  el.innerHTML =
+    `<div class="md-head"><span class="md-dot" style="background:${locColor(l)}"></span>
+       <span class="md-name">${esc(l.name || '(unnamed)')}</span>
+       <button class="md-x" title="Close">✕</button></div>
+     <div class="md-type">${esc(({ city: 'City', building: 'Building', natural: 'Natural', other: 'Other' }[l.type]) || 'Location')}</div>
+     ${desc ? `<div class="md-desc">${esc(desc.slice(0, 220))}${desc.length > 220 ? '…' : ''}</div>` : ''}
+     <div class="md-actions">
+       <button class="tbtn" id="mdEdit">Edit in Locations</button>
+       <button class="tbtn" id="mdRoute">Add Route</button>
+       <button class="tbtn nc-danger" id="mdRemove">Remove Pin</button>
+     </div>`;
+  const p = mw2s(...Object.values(locWorld(l)));
+  el.classList.remove('hidden');
+  const stage = $('.map-stage').getBoundingClientRect();
+  let left = p.x + 16, top = p.y - 10;
+  if (left + el.offsetWidth > stage.width - 8) left = p.x - el.offsetWidth - 16;
+  if (left < 8) left = 8;
+  if (top + el.offsetHeight > stage.height - 8) top = Math.max(8, stage.height - el.offsetHeight - 8);
+  el.style.left = left + 'px'; el.style.top = Math.max(8, top) + 'px';
+  el.querySelector('.md-x').onclick = hideMapDetails;
+  $('#mdEdit').onclick = () => { closeMap(); openLocationInPanel(l.id); };
+  $('#mdRoute').onclick = () => startRouteFrom(l.id);
+  $('#mdRemove').onclick = () => removePin(l.id);
+}
+function hideMapDetails() { const el = $('#mapDetails'); if (el) el.classList.add('hidden'); }
+function openLocationInPanel(id) {
+  const acc = $('.accordion[data-acc="locs"]');
+  if (acc) acc.classList.add('open');
+  const wrap = $$('#locList .entity')[novel.locations.findIndex(l => l.id === id)];
+  if (wrap) { wrap.classList.add('open'); wrap.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+}
+
+/* ---- layers ---- */
+function renderMapLayers() {
+  const host = $('#mapLayerList');
+  if (!host) return;
+  const wm = worldMap();
+  host.innerHTML = '';
+  const base = [
+    ['background', '🗺️ Background Image'], ['locations', '📍 Locations'],
+    ['routes', '🛤️ Travel Routes'], ['labels', '🏷️ Labels']
+  ];
+  base.forEach(([key, label]) => {
+    const row = document.createElement('div');
+    row.className = 'map-layer-row base';
+    row.innerHTML = `<button class="ml-eye" title="Toggle">${wm.baseLayers[key] ? '👁' : '🚫'}</button><span class="ml-name">${label}</span>`;
+    row.querySelector('.ml-eye').onclick = () => { wm.baseLayers[key] = !wm.baseLayers[key]; markDirty(); renderMapLayers(); mapDraw(); };
+    host.appendChild(row);
+  });
+  wm.layers.forEach(l => {
+    const row = document.createElement('div');
+    row.className = 'map-layer-row' + (l.id === mActiveLayerId ? ' active' : '');
+    row.innerHTML =
+      `<button class="ml-eye" title="Toggle">${l.visible ? '👁' : '🚫'}</button>
+       <span class="ml-name" title="Double-click to rename">${esc(l.name)}</span>
+       <input type="range" class="ml-op" min="0" max="1" step="0.1" value="${l.opacity}" title="Opacity">
+       <button class="ml-draw" title="Draw on this layer">✏️</button>
+       <button class="ml-del" title="Delete layer">🗑</button>`;
+    row.querySelector('.ml-eye').onclick = () => { l.visible = !l.visible; markDirty(); renderMapLayers(); mapDraw(); };
+    row.querySelector('.ml-op').oninput = e => { l.opacity = +e.target.value; markDirty(); mapDraw(); };
+    row.querySelector('.ml-name').ondblclick = () => promptModal('Rename layer', 'Layer name:', l.name, v => { if (v) { l.name = v; markDirty(); renderMapLayers(); renderMapLayerSelect(); } });
+    row.querySelector('.ml-draw').onclick = () => { mActiveLayerId = (mActiveLayerId === l.id ? '' : l.id); $('#mapActiveLayer').value = mActiveLayerId; updateDrawToolsVisibility(); renderMapLayers(); };
+    row.querySelector('.ml-del').onclick = () => confirmModal('Delete layer', `Delete layer “${l.name}” and its drawings?`, () => {
+      wm.layers = wm.layers.filter(x => x.id !== l.id);
+      if (mActiveLayerId === l.id) mActiveLayerId = '';
+      markDirty(); renderMapLayers(); renderMapLayerSelect(); updateDrawToolsVisibility(); mapDraw();
+    });
+    host.appendChild(row);
+  });
+  if (!wm.layers.length) host.insertAdjacentHTML('beforeend', '<div class="map-empty">No custom layers.</div>');
+}
+function renderMapLayerSelect() {
+  const sel = $('#mapActiveLayer');
+  if (!sel) return;
+  const wm = worldMap();
+  sel.innerHTML = '<option value="">— none (move/place) —</option>' +
+    wm.layers.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+  sel.value = mActiveLayerId;
+}
+function addMapLayer() {
+  const wm = worldMap();
+  wm.layers.push({ id: uuid(), name: 'Layer ' + (wm.layers.length + 1), visible: true, opacity: 1, drawings: [] });
+  markDirty(); renderMapLayers(); renderMapLayerSelect();
+}
+function activeLayer() { return worldMap().layers.find(l => l.id === mActiveLayerId) || null; }
+function updateDrawToolsVisibility() {
+  const on = !!mActiveLayerId;
+  $('#mapDrawTools').classList.toggle('hidden', !on);
+  if (mCanvas) mCanvas.style.cursor = on ? 'crosshair' : 'default';
+}
+
+/* ---- drawing interactions ---- */
+function eraseAt(w) {
+  const layer = activeLayer();
+  if (!layer) return;
+  const thresh = 10 / mView.zoom;
+  const before = layer.drawings.length;
+  layer.drawings = layer.drawings.filter(d => !(d.points || []).some(pt => Math.hypot(pt.x - w.x, pt.y - w.y) < thresh));
+  if (layer.drawings.length !== before) { markDirty(); mapDraw(); }
+}
+
+/* ---- map events ---- */
+function mapMouse(e) { const r = mCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+function initMapEvents() {
+  mCanvas.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const m = mapMouse(e);
+    mMoved = false;
+    const layer = activeLayer();
+    if (layer) {
+      const w = ms2w(m.x, m.y);
+      if (mDrawTool === 'eraser') { eraseAt(w); return; }
+      if (mDrawTool === 'text') {
+        promptModal('Add text', 'Text label:', '', v => { if (v) { layer.drawings.push({ tool: 'text', color: mDrawColor, width: 2, points: [w], text: v }); markDirty(); mapDraw(); } });
+        return;
+      }
+      mDrawing = { tool: mDrawTool, color: mDrawColor, width: 2, points: [w] };
+      return;
+    }
+    const pin = pinAt(m.x, m.y);
+    if (mRouteMode) { if (pin) routePickTarget(pin.id); return; }
+    if (pin) { mDragPin = pin; mLast = m; hideMapDetails(); }
+    else { mPanning = true; mLast = m; }
+  });
+  window.addEventListener('mousemove', e => {
+    if (!mapOpen) return;
+    const m = mapMouse(e);
+    if (mDrawing) {
+      const w = ms2w(m.x, m.y);
+      if (mDrawing.tool === 'pen') mDrawing.points.push(w);
+      else mDrawing.points[1] = w;
+      mMoved = true; mapDraw(); return;
+    }
+    if (mDragPin) {
+      const sz = mapImageSize(); const w = ms2w(m.x, m.y);
+      const wm = worldMap();
+      wm.locations[mDragPin.id] = { x: Math.max(0, Math.min(1, w.x / sz.w)), y: Math.max(0, Math.min(1, w.y / sz.h)), visible: true };
+      mMoved = true; mapDraw(); return;
+    }
+    if (mPanning) { mView.x += m.x - mLast.x; mView.y += m.y - mLast.y; mLast = m; mMoved = true; mapDraw(); return; }
+    if (!activeLayer()) {
+      const overPin = pinAt(m.x, m.y);
+      const overRoute = overPin ? null : routeAt(m.x, m.y);
+      const hid = overRoute ? overRoute.id : null;
+      if (hid !== mHoverRoute) { mHoverRoute = hid; mapDraw(); }
+      mCanvas.style.cursor = overPin ? 'pointer' : overRoute ? 'pointer' : (mRouteMode ? 'crosshair' : 'grab');
+    }
+  });
+  window.addEventListener('mouseup', () => {
+    if (!mapOpen) return;
+    if (mDrawing) {
+      const layer = activeLayer();
+      const d = mDrawing; mDrawing = null;
+      const enough = d.tool === 'pen' ? d.points.length > 1 : d.points.length >= 2;
+      if (layer && enough) { layer.drawings.push(d); markDirty(); }
+      mapDraw(); return;
+    }
+    if (mDragPin) { if (mMoved) markDirty(); else showLocDetails(mDragPin); mDragPin = null; return; }
+    if (mPanning) {
+      mPanning = false;
+      if (!mMoved) { const rt = routeAt(mLast.x, mLast.y); if (rt) openRouteEditor(rt); else hideMapDetails(); }
+    }
+  });
+  mCanvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const m = mapMouse(e);
+    const before = ms2w(m.x, m.y);
+    mView.zoom = Math.max(0.05, Math.min(6, mView.zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+    const after = mw2s(before.x, before.y);
+    mView.x += m.x - after.x; mView.y += m.y - after.y;
+    updateMapZoom(); mapDraw();
+  }, { passive: false });
+  mCanvas.addEventListener('dblclick', e => { const m = mapMouse(e); const pin = pinAt(m.x, m.y); if (pin) { closeMap(); openLocationInPanel(pin.id); } });
+  mCanvas.addEventListener('contextmenu', e => {
+    const m = mapMouse(e);
+    const pin = pinAt(m.x, m.y);
+    e.preventDefault();
+    ctx.innerHTML = '';
+    if (pin) {
+      ctx.appendChild(ctxItem('Edit in Locations', () => { closeMap(); openLocationInPanel(pin.id); }));
+      ctx.appendChild(ctxItem('Add Route from Here', () => startRouteFrom(pin.id)));
+      ctx.appendChild(ctxItem('Remove from Map', () => removePin(pin.id), 'danger'));
+    } else {
+      const wm = worldMap();
+      const unplaced = novel.locations.filter(l => !wm.locations[l.id]);
+      const w = ms2w(m.x, m.y); const sz = mapImageSize();
+      const rel = { x: Math.max(0, Math.min(1, w.x / sz.w)), y: Math.max(0, Math.min(1, w.y / sz.h)) };
+      if (!unplaced.length) ctx.appendChild(ctxItem('All locations placed', () => {}, 'ctx-disabled'));
+      else {
+        const sub = document.createElement('div');
+        sub.className = 'ctx-sub';
+        sub.innerHTML = '<button class="ctx-sub-head">Place Location ▸</button>';
+        const list = document.createElement('div'); list.className = 'ctx-sub-menu';
+        unplaced.forEach(l => list.appendChild(ctxItem(l.name || '(unnamed)', () => placeLocation(l.id, rel))));
+        sub.appendChild(list); ctx.appendChild(sub);
+      }
+    }
+    ctx.style.left = Math.min(e.clientX, innerWidth - 200) + 'px';
+    ctx.style.top = e.clientY + 'px';
+    ctx.classList.remove('hidden');
+  });
+}
+
+/* ---- export PNG ---- */
+function exportMapPng() {
+  if (!mCanvas) return;
+  const url = mCanvas.toDataURL('image/png');
+  const a = document.createElement('a');
+  a.href = url; a.download = (novel.title || 'novel') + '-map.png'; a.click();
+  toast('Map exported as PNG');
+}
+
+/* ---- travel routes (rendering; creation wired in the routes section) ---- */
+function drawRoutes() {
+  const wm = worldMap();
+  wm.routes.forEach(rt => {
+    const a = novel.locations.find(l => l.id === rt.fromLocationId);
+    const b = novel.locations.find(l => l.id === rt.toLocationId);
+    if (!a || !b || !wm.locations[a.id] || !wm.locations[b.id]) return;
+    const pa = mw2s(...Object.values(locWorld(a)));
+    const pb = mw2s(...Object.values(locWorld(b)));
+    const hovered = mHoverRoute === rt.id;
+    mCtx.save();
+    mCtx.strokeStyle = rt.color || '#c9a96e';
+    mCtx.lineWidth = (hovered ? 4 : 2);
+    mCtx.globalAlpha = hovered ? 1 : 0.9;
+    mCtx.setLineDash(rt.terrain && /secret|passage/i.test(rt.terrain) ? [6, 6] : []);
+    const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+    const nx = -(pb.y - pa.y), ny = (pb.x - pa.x);
+    const len = Math.hypot(nx, ny) || 1;
+    const cx = mx + (nx / len) * 22, cy = my + (ny / len) * 22;   // gentle curve
+    mCtx.beginPath(); mCtx.moveTo(pa.x, pa.y); mCtx.quadraticCurveTo(cx, cy, pb.x, pb.y); mCtx.stroke();
+    mCtx.setLineDash([]);
+    if (!rt.bidirectional) { const ang = Math.atan2(pb.y - cy, pb.x - cx); drawRouteArrow(cx, cy, ang, mCtx.strokeStyle); }
+    if (rt.name) {
+      mCtx.font = '600 12px Inter, sans-serif'; mCtx.textAlign = 'center'; mCtx.textBaseline = 'bottom';
+      const tw = mCtx.measureText(rt.name).width;
+      mCtx.fillStyle = 'rgba(20,20,26,.72)'; mCtx.fillRect(cx - tw / 2 - 4, cy - 18, tw + 8, 16);
+      mCtx.fillStyle = rt.color || '#c9a96e'; mCtx.fillText(rt.name, cx, cy - 4);
+    }
+    mCtx.restore();
+  });
+  if (mRouteMode) {
+    const a = novel.locations.find(l => l.id === mRouteMode.fromId);
+    if (a && worldMap().locations[a.id]) {
+      const pa = mw2s(...Object.values(locWorld(a)));
+      mCtx.save(); mCtx.fillStyle = '#c9a96e'; mCtx.globalAlpha = 0.9;
+      mCtx.beginPath(); mCtx.arc(pa.x, pa.y - pinScreenR() * 1.5, pinScreenR() + 4, 0, Math.PI * 2); mCtx.stroke(); mCtx.restore();
+    }
+  }
+}
+function drawRouteArrow(x, y, ang, color) {
+  const s = 9;
+  mCtx.save(); mCtx.fillStyle = color; mCtx.translate(x, y); mCtx.rotate(ang);
+  mCtx.beginPath(); mCtx.moveTo(0, 0); mCtx.lineTo(-s, -s * 0.5); mCtx.lineTo(-s, s * 0.5); mCtx.closePath(); mCtx.fill();
+  mCtx.restore();
+}
+let mHoverRoute = null;
+let routeEditing = null, routeCharSel = null;
+
+/* Quadratic-curve control point used for both drawing and hit-testing a route. */
+function routeControl(pa, pb) {
+  const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
+  const nx = -(pb.y - pa.y), ny = (pb.x - pa.x);
+  const len = Math.hypot(nx, ny) || 1;
+  return { x: mx + (nx / len) * 22, y: my + (ny / len) * 22 };
+}
+function routeEndpoints(rt) {
+  const wm = worldMap();
+  const a = novel.locations.find(l => l.id === rt.fromLocationId);
+  const b = novel.locations.find(l => l.id === rt.toLocationId);
+  if (!a || !b || !wm.locations[a.id] || !wm.locations[b.id]) return null;
+  return { pa: mw2s(...Object.values(locWorld(a))), pb: mw2s(...Object.values(locWorld(b))) };
+}
+function routeAt(sx, sy) {
+  const wm = worldMap();
+  if (!wm.baseLayers.routes) return null;
+  for (let i = wm.routes.length - 1; i >= 0; i--) {
+    const rt = wm.routes[i];
+    const e = routeEndpoints(rt);
+    if (!e) continue;
+    const c = routeControl(e.pa, e.pb);
+    let prev = e.pa;
+    for (let t = 1; t <= 12; t++) {
+      const k = t / 12, ik = 1 - k;
+      const x = ik * ik * e.pa.x + 2 * ik * k * c.x + k * k * e.pb.x;
+      const y = ik * ik * e.pa.y + 2 * ik * k * c.y + k * k * e.pb.y;
+      if (distToSeg(sx, sy, prev.x, prev.y, x, y) < 7) return rt;
+      prev = { x, y };
+    }
+  }
+  return null;
+}
+/* enter route mode: fromId may start null (pick a source first) */
+function beginRoute() {
+  if (placedLocs().length < 2) { toast('Place at least two locations on the map first'); return; }
+  mActiveLayerId = ''; $('#mapActiveLayer').value = ''; updateDrawToolsVisibility();
+  mRouteMode = { fromId: null };
+  hideMapDetails(); updateMapHint(); mapDraw();
+}
+function startRouteFrom(fromId) {
+  if (!worldMap().locations[fromId]) { toast('Place this location on the map first'); return; }
+  mActiveLayerId = ''; $('#mapActiveLayer').value = ''; updateDrawToolsVisibility();
+  mRouteMode = { fromId };
+  hideMapDetails(); updateMapHint(); mapDraw();
+}
+function routePickTarget(pinId) {
+  if (!mRouteMode) return;
+  if (mRouteMode.fromId === null) { mRouteMode.fromId = pinId; updateMapHint(); mapDraw(); return; }
+  if (pinId === mRouteMode.fromId) { toast('Pick a different destination'); return; }
+  const rt = {
+    id: uuid(), fromLocationId: mRouteMode.fromId, toLocationId: pinId,
+    name: '', travelTime: '', distance: '', terrain: '', characterIds: [],
+    color: '#c9a96e', notes: '', bidirectional: true
+  };
+  worldMap().routes.push(rt);
+  cancelRouteMode();
+  markDirty(); mapDraw();
+  openRouteEditor(rt);
+}
+function cancelRouteMode() { mRouteMode = null; updateMapHint(); }
+function updateMapHint() {
+  const el = $('#mapHint');
+  if (!el) return;
+  if (!mRouteMode) { el.classList.add('hidden'); return; }
+  el.textContent = mRouteMode.fromId === null
+    ? 'Add Route: click the first location  (Esc to cancel)'
+    : 'Add Route: click the destination location  (Esc to cancel)';
+  el.classList.remove('hidden');
+}
+
+/* ---- route details editor ---- */
+function openRouteEditor(rt) {
+  routeEditing = rt;
+  routeCharSel = new Set(rt.characterIds || []);
+  const placed = placedLocs();
+  const locOpts = placed.map(l => [l.id, l.name || '(unnamed)']);
+  $('#routeTitle').textContent = 'Route Details';
+  const form = $('#routeForm');
+  form.innerHTML =
+    `<label class="field-label">Route name</label>
+     <input type="text" id="rfName" class="control" placeholder="e.g. The King's Road" />
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">From</label><select id="rfFrom" class="control"></select></div>
+       <div class="rf-col"><label class="field-label">To</label><select id="rfTo" class="control"></select></div>
+     </div>
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">Travel time</label><input type="text" id="rfTime" class="control" placeholder="3 days on horseback" /></div>
+       <div class="rf-col"><label class="field-label">Distance</label><input type="text" id="rfDist" class="control" placeholder="200 miles" /></div>
+     </div>
+     <label class="field-label">Terrain</label>
+     <input type="text" id="rfTerrain" class="control" placeholder="Mountain pass, dangerous in winter" />
+     <label class="field-label">Used by characters</label>
+     <div id="rfChars" class="rf-chars"></div>
+     <label class="field-label">Notes</label>
+     <textarea id="rfNotes" class="control" rows="2"></textarea>
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">Line color</label><input type="color" id="rfColor" class="nt-color" /></div>
+       <div class="rf-col"><label class="field-label">Direction</label>
+         <label class="toggle-row"><input type="checkbox" id="rfBidir" /> <span>Bidirectional (no arrow)</span></label>
+       </div>
+     </div>
+     <div class="modal-actions">
+       <button class="tbtn nc-danger" id="rfDelete">Delete Route</button>
+       <button class="tbtn subtle" id="rfCancel">Close</button>
+       <button class="tbtn accent" id="rfSave">Save</button>
+     </div>`;
+  fillSelect($('#rfFrom'), locOpts, rt.fromLocationId);
+  fillSelect($('#rfTo'), locOpts, rt.toLocationId);
+  $('#rfName').value = rt.name || '';
+  $('#rfTime').value = rt.travelTime || '';
+  $('#rfDist').value = rt.distance || '';
+  $('#rfTerrain').value = rt.terrain || '';
+  $('#rfNotes').value = rt.notes || '';
+  $('#rfColor').value = rt.color || '#c9a96e';
+  $('#rfBidir').checked = rt.bidirectional !== false;
+  const chost = $('#rfChars');
+  if (!novel.characters.length) chost.innerHTML = '<span class="map-empty">No characters yet.</span>';
+  else novel.characters.forEach(c => {
+    const chip = document.createElement('button');
+    chip.className = 'rf-char' + (routeCharSel.has(c.id) ? ' on' : '');
+    chip.textContent = c.name || '(unnamed)';
+    chip.onclick = () => { if (routeCharSel.has(c.id)) routeCharSel.delete(c.id); else routeCharSel.add(c.id); chip.classList.toggle('on'); };
+    chost.appendChild(chip);
+  });
+  $('#rfDelete').onclick = () => deleteRoute(rt);
+  $('#rfCancel').onclick = closeRouteEditor;
+  $('#rfSave').onclick = () => {
+    rt.name = $('#rfName').value.trim();
+    rt.fromLocationId = $('#rfFrom').value;
+    rt.toLocationId = $('#rfTo').value;
+    rt.travelTime = $('#rfTime').value.trim();
+    rt.distance = $('#rfDist').value.trim();
+    rt.terrain = $('#rfTerrain').value.trim();
+    rt.notes = $('#rfNotes').value.trim();
+    rt.color = $('#rfColor').value;
+    rt.bidirectional = $('#rfBidir').checked;
+    rt.characterIds = [...routeCharSel];
+    if (rt.fromLocationId === rt.toLocationId) { toast('A route needs two different locations'); return; }
+    markDirty(); closeRouteEditor(); mapDraw();
+    toast('Route saved');
+  };
+  $('#routeOverlay').classList.remove('hidden');
+}
+function closeRouteEditor() { routeEditing = null; $('#routeOverlay').classList.add('hidden'); }
+function deleteRoute(rt) {
+  confirmModal('Delete route', 'Delete this route?', () => {
+    const wm = worldMap();
+    wm.routes = wm.routes.filter(r => r.id !== rt.id);
+    markDirty(); closeRouteEditor(); mapDraw();
+    toast('Route deleted');
+  });
+}
+$('#mapAddRoute').addEventListener('click', beginRoute);
+$('#routeOverlay').addEventListener('mousedown', e => { if (e.target === $('#routeOverlay')) closeRouteEditor(); });
+
+/* ---- map toolbar wiring ---- */
+$('#btnWorldMap').addEventListener('click', openMap);
+$('#mapClose').addEventListener('click', closeMap);
+$('#mapUpload').addEventListener('click', uploadMapImage);
+$('#mapFit').addEventListener('click', mapFit);
+$('#mapOriginal').addEventListener('click', mapOriginal);
+$('#mapZoomIn').addEventListener('click', () => mapZoomBy(1.2));
+$('#mapZoomOut').addEventListener('click', () => mapZoomBy(1 / 1.2));
+$('#mapExport').addEventListener('click', exportMapPng);
+$('#mapPlaceAll').addEventListener('click', placeAllUnplaced);
+$('#mapAddLayer').addEventListener('click', addMapLayer);
+$('#mapLocSearch').addEventListener('input', e => { mLocSearch = e.target.value; renderMapLocList(); });
+$('#mapActiveLayer').addEventListener('change', e => { mActiveLayerId = e.target.value; updateDrawToolsVisibility(); renderMapLayers(); });
+$('#mapDrawColor').addEventListener('input', e => { mDrawColor = e.target.value; });
+$('#mapClearLayer').addEventListener('click', () => { const l = activeLayer(); if (!l) { toast('Select a layer to draw on first'); return; } confirmModal('Clear layer', `Remove all drawings from “${l.name}”?`, () => { l.drawings = []; markDirty(); mapDraw(); }); });
+$$('#mapDrawTools .map-tool').forEach(btn => btn.addEventListener('click', () => {
+  mDrawTool = btn.dataset.tool;
+  $$('#mapDrawTools .map-tool').forEach(b => b.classList.toggle('active', b === btn));
+}));
+$('#mapOverlay').addEventListener('mousedown', e => { if (e.target === $('#mapOverlay')) closeMap(); });
+addEventListener('resize', () => { if (mapOpen) mapResize(); });
+
+/* ================= COMPILE NOVEL ================= */
+let compOpen = false, compEventsInit = false;
+let comp = null;                 // { items:[...], settings:{...} }
+let compPreview = false;
+let compDrag = null;
+
+const ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+const TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+function numWord(n) { if (n < 20) return ONES[n] || String(n); if (n < 100) return TENS[Math.floor(n / 10)] + (n % 10 ? '-' + ONES[n % 10] : ''); return String(n); }
+
+function defaultCompSettings() {
+  return {
+    font: 'Georgia, serif', fontSize: 12, lineSpacing: 1.5, align: 'left',
+    indent: 'indent', paraSpacing: 'none',
+    sceneTitles: 'no', includeParts: true, sceneSeparator: '***', sceneSepCustom: '',
+    numberChapters: 'arabic', pageNumber: 'none', startPage: 1,
+    titlePage: true, titleText: '', author: '', subtitle: '', dateText: '',
+    toc: false, tocDepth: 'chapters', tocPosition: 'afterTitle',
+    pageSize: 'A4', margins: 'normal'
+  };
+}
+const STANDARD_PRESET = defaultCompSettings();
+
+function buildDefaultOrder() {
+  const items = [];
+  novel.chapters.forEach(c => (c.scenes || []).forEach(s => {
+    items.push({ id: uuid(), type: 'scene', sceneId: s.id, chapterId: c.id, title: s.title });
+  }));
+  return items;
+}
+function syncCompItems() {
+  comp.items = comp.items.filter(it => it.type !== 'scene' || findScene(it.sceneId));
+}
+
+function openCompile() {
+  if (!novel) { toast('No novel open'); return; }
+  saveCurrentScene();
+  if (!comp) comp = { items: buildDefaultOrder(), settings: defaultCompSettings() };
+  else syncCompItems();
+  if (!comp.settings.titleText) comp.settings.titleText = novel.title || '';
+  compPreview = false;
+  $('#compileOverlay').classList.remove('hidden');
+  if (!compEventsInit) { initCompEvents(); compEventsInit = true; }
+  renderPresetSelect();
+  renderComp();
+}
+function closeCompile() { compOpen = false; $('#compileOverlay').classList.add('hidden'); }
+
+function renderComp() {
+  compOpen = true;
+  renderCompAvailable();
+  renderCompOrder();
+  renderCompSettings();
+  updateCompTotals();
+  $('#compPreviewBtn').classList.toggle('active', compPreview);
+  $('#compOrder').classList.toggle('hidden', compPreview);
+  $('.compile-order-tools').style.display = compPreview ? 'none' : '';
+  $('#compPreview').classList.toggle('hidden', !compPreview);
+  if (compPreview) renderCompPreview();
+}
+
+/* ---- available scenes ---- */
+function renderCompAvailable() {
+  const host = $('#compAvailable');
+  const q = ($('#compSearch').value || '').trim().toLowerCase();
+  host.innerHTML = '';
+  novel.chapters.forEach(c => {
+    const scenes = (c.scenes || []).filter(s => !q || (s.title || '').toLowerCase().includes(q) || (c.title || '').toLowerCase().includes(q));
+    if (!scenes.length) return;
+    const grp = document.createElement('div');
+    grp.className = 'ca-group';
+    grp.innerHTML = `<div class="ca-chap">📁 ${esc(c.title)}</div>`;
+    scenes.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'ca-scene';
+      row.dataset.sceneId = s.id;
+      row.dataset.chapterId = c.id;
+      row.innerHTML = `<span class="ca-t">🎬 ${esc(s.title)}</span><span class="ca-w">${s.wordCount || 0}</span><button class="ca-add" title="Add to compilation">＋</button>`;
+      row.querySelector('.ca-add').onclick = e => { e.stopPropagation(); comp.items.push({ id: uuid(), type: 'scene', sceneId: s.id, chapterId: c.id, title: s.title }); renderComp(); };
+      grp.appendChild(row);
+    });
+    host.appendChild(grp);
+  });
+  if (!host.children.length) host.innerHTML = '<div class="map-empty">No scenes match.</div>';
+}
+
+/* ---- compilation order ---- */
+function renderCompOrder() {
+  const host = $('#compOrder');
+  host.innerHTML = '';
+  if (!comp.items.length) { host.innerHTML = '<div class="co-empty">Empty. Drag or add scenes from the left, or “Restore Default Order”.</div>'; return; }
+  comp.items.forEach((it, idx) => {
+    const row = document.createElement('div');
+    row.dataset.idx = idx;
+    if (it.type === 'part') {
+      row.className = 'co-item co-part';
+      row.innerHTML = `<span class="co-handle">⠿</span><span class="co-part-t">${esc(it.title || 'Part')}</span><button class="co-x" title="Remove">✕</button>`;
+      row.querySelector('.co-part-t').ondblclick = () => promptModal('Part title', 'Text:', it.title, v => { it.title = v || it.title; renderComp(); });
+    } else if (it.type === 'break') {
+      row.className = 'co-item co-break';
+      row.innerHTML = `<span class="co-handle">⠿</span><span class="co-break-t">— section break —</span><button class="co-x" title="Remove">✕</button>`;
+    } else {
+      const f = findScene(it.sceneId);
+      const words = f ? (f.scene.wordCount || 0) : 0;
+      const ci = f ? novel.chapters.indexOf(f.chapter) + 1 : '?';
+      row.className = 'co-item co-scene';
+      row.innerHTML =
+        `<span class="co-handle">⠿</span>
+         <span class="co-title" title="Double-click to rename for the compilation">${esc(it.title || (f ? f.scene.title : '(missing)'))}</span>
+         <span class="co-src">from Ch. ${ci}</span>
+         <span class="co-w">${words}</span>
+         <button class="co-x" title="Remove from compilation">✕</button>`;
+      row.querySelector('.co-title').ondblclick = () => promptModal('Rename in compilation', 'Title (does not change the original scene):', it.title, v => { it.title = v || it.title; renderComp(); });
+    }
+    row.querySelector('.co-x').onclick = () => { comp.items.splice(idx, 1); renderComp(); };
+    host.appendChild(row);
+  });
+}
+function updateCompTotals() {
+  let words = 0;
+  comp.items.forEach(it => { if (it.type === 'scene') { const f = findScene(it.sceneId); if (f) words += f.scene.wordCount || 0; } });
+  $('#compTotal').textContent = 'Compiled document: ' + words.toLocaleString() + ' words';
+  $('#compPages').textContent = '~' + Math.max(1, Math.round(words / 300)) + ' pages';
+}
+
+/* ---- order drag & drop (pointer based) ---- */
+function initCompEvents() {
+  const order = $('#compOrder');
+  const avail = $('#compAvailable');
+  const start = (e, data) => { compDrag = { ...data, startX: e.clientX, startY: e.clientY, started: false, targetIdx: null }; };
+  order.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const row = e.target.closest('.co-item');
+    if (!row || e.target.closest('.co-x')) return;
+    start(e, { mode: 'move', idx: +row.dataset.idx, el: row });
+  });
+  avail.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const row = e.target.closest('.ca-scene');
+    if (!row || e.target.closest('.ca-add')) return;
+    start(e, { mode: 'new', sceneId: row.dataset.sceneId, chapterId: row.dataset.chapterId, el: row });
+  });
+  document.addEventListener('mousemove', e => {
+    if (!compDrag) return;
+    if (!compDrag.started) {
+      if (Math.abs(e.clientX - compDrag.startX) < 5 && Math.abs(e.clientY - compDrag.startY) < 5) return;
+      compDrag.started = true;
+      compDrag.el.classList.add('co-dragging');
+    }
+    e.preventDefault();
+    $$('#compOrder .co-item').forEach(x => x.classList.remove('co-drop-before', 'co-drop-after'));
+    const rows = $$('#compOrder .co-item');
+    let ti = comp.items.length;
+    for (const r of rows) {
+      const rect = r.getBoundingClientRect();
+      if (e.clientY < rect.top + rect.height / 2) { r.classList.add('co-drop-before'); ti = +r.dataset.idx; break; }
+    }
+    if (ti === comp.items.length && rows.length) rows[rows.length - 1].classList.add('co-drop-after');
+    compDrag.targetIdx = ti;
+  });
+  document.addEventListener('mouseup', () => {
+    if (!compDrag) return;
+    const d = compDrag; compDrag = null;
+    $$('#compOrder .co-item').forEach(x => x.classList.remove('co-drop-before', 'co-drop-after', 'co-dragging'));
+    if (d.el) d.el.classList.remove('co-dragging');
+    if (!d.started || d.targetIdx === null) return;
+    if (d.mode === 'new') {
+      const f = findScene(d.sceneId);
+      const item = { id: uuid(), type: 'scene', sceneId: d.sceneId, chapterId: d.chapterId, title: f ? f.scene.title : 'Scene' };
+      comp.items.splice(d.targetIdx, 0, item);
+    } else {
+      let ti = d.targetIdx;
+      const [moved] = comp.items.splice(d.idx, 1);
+      if (ti > d.idx) ti -= 1;
+      comp.items.splice(ti, 0, moved);
+    }
+    renderComp();
+  });
+}
+
+/* ---- settings panel ---- */
+function renderCompSettings() {
+  const s = comp.settings;
+  const host = $('#compSettingsBody');
+  const opt = (v, t, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${t}</option>`;
+  host.innerHTML =
+    `<div class="cs-group">Formatting</div>
+     <label class="field-label">Font</label>
+     <select class="control" data-cs="font">
+       ${['Georgia, serif|Georgia', "'Lora', serif|Lora", "'Merriweather', serif|Merriweather", "'Inter', sans-serif|Inter", 'Roboto, sans-serif|Roboto', 'Arial, sans-serif|Arial'].map(o => { const [v, t] = o.split('|'); return opt(v, t, s.font); }).join('')}
+     </select>
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">Font size</label><select class="control" data-cs="fontSize">${[10, 11, 12, 14].map(v => opt(v, v + 'pt', s.fontSize)).join('')}</select></div>
+       <div class="rf-col"><label class="field-label">Line spacing</label><select class="control" data-cs="lineSpacing">${[[1, 'Single'], [1.5, '1.5'], [2, 'Double']].map(([v, t]) => opt(v, t, s.lineSpacing)).join('')}</select></div>
+     </div>
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">Alignment</label><select class="control" data-cs="align">${[['left', 'Left'], ['justify', 'Justified']].map(([v, t]) => opt(v, t, s.align)).join('')}</select></div>
+       <div class="rf-col"><label class="field-label">First-line indent</label><select class="control" data-cs="indent">${[['none', 'None'], ['indent', '1.27 cm']].map(([v, t]) => opt(v, t, s.indent)).join('')}</select></div>
+     </div>
+     <label class="field-label">Paragraph spacing</label>
+     <select class="control" data-cs="paraSpacing">${[['none', 'None'], ['space', '6pt after']].map(([v, t]) => opt(v, t, s.paraSpacing)).join('')}</select>
+
+     <div class="cs-group">Content</div>
+     <label class="field-label">Scene / chapter titles</label>
+     <select class="control" data-cs="sceneTitles">${[['yes', 'Chapter + scene titles'], ['chapters', 'Only chapter titles'], ['no', 'No titles']].map(([v, t]) => opt(v, t, s.sceneTitles)).join('')}</select>
+     <label class="toggle-row"><input type="checkbox" data-cs="includeParts"${s.includeParts ? ' checked' : ''}> <span>Include part dividers</span></label>
+     <label class="field-label">Scene separator</label>
+     <select class="control" data-cs="sceneSeparator">${[['***', '* * *'], ['blank', 'Blank line'], ['custom', 'Custom…']].map(([v, t]) => opt(v, t, s.sceneSeparator)).join('')}</select>
+     ${s.sceneSeparator === 'custom' ? `<input type="text" class="control" data-cs="sceneSepCustom" value="${esc(s.sceneSepCustom || '')}" placeholder="Separator text">` : ''}
+     <label class="field-label">Number chapters</label>
+     <select class="control" data-cs="numberChapters">${[['arabic', 'Chapter 1'], ['word', 'Chapter One'], ['plain', '1.'], ['none', 'None']].map(([v, t]) => opt(v, t, s.numberChapters)).join('')}</select>
+
+     <div class="cs-group">Title page</div>
+     <label class="toggle-row"><input type="checkbox" data-cs="titlePage"${s.titlePage ? ' checked' : ''}> <span>Include title page</span></label>
+     <label class="field-label">Title</label><input type="text" class="control" data-cs="titleText" value="${esc(s.titleText || '')}">
+     <label class="field-label">Subtitle</label><input type="text" class="control" data-cs="subtitle" value="${esc(s.subtitle || '')}">
+     <label class="field-label">Author</label><input type="text" class="control" data-cs="author" value="${esc(s.author || '')}">
+     <label class="field-label">Date</label><input type="text" class="control" data-cs="dateText" value="${esc(s.dateText || '')}" placeholder="e.g. 2026">
+
+     <div class="cs-group">Table of contents</div>
+     <label class="toggle-row"><input type="checkbox" data-cs="toc"${s.toc ? ' checked' : ''}> <span>Include table of contents</span></label>
+     <label class="field-label">TOC depth</label>
+     <select class="control" data-cs="tocDepth">${[['chapters', 'Chapters only'], ['scenes', 'Chapters + scenes']].map(([v, t]) => opt(v, t, s.tocDepth)).join('')}</select>
+     <label class="field-label">TOC position</label>
+     <select class="control" data-cs="tocPosition">${[['afterTitle', 'After title page'], ['end', 'End of document']].map(([v, t]) => opt(v, t, s.tocPosition)).join('')}</select>
+
+     <div class="cs-group">Page (PDF)</div>
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">Page size</label><select class="control" data-cs="pageSize">${[['A4', 'A4'], ['Letter', 'US Letter']].map(([v, t]) => opt(v, t, s.pageSize)).join('')}</select></div>
+       <div class="rf-col"><label class="field-label">Margins</label><select class="control" data-cs="margins">${[['narrow', 'Narrow'], ['normal', 'Normal'], ['wide', 'Wide']].map(([v, t]) => opt(v, t, s.margins)).join('')}</select></div>
+     </div>
+     <label class="field-label">Page numbering</label>
+     <select class="control" data-cs="pageNumber">${[['none', 'None'], ['center', 'Bottom center'], ['right', 'Bottom right']].map(([v, t]) => opt(v, t, s.pageNumber)).join('')}</select>`;
+  host.querySelectorAll('[data-cs]').forEach(el => {
+    const key = el.dataset.cs;
+    const ev = el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, () => {
+      let v = el.type === 'checkbox' ? el.checked : el.value;
+      if (['fontSize', 'lineSpacing', 'startPage'].includes(key)) v = parseFloat(v);
+      s[key] = v;
+      if (key === 'sceneSeparator') renderCompSettings();       // toggles the custom field
+      if (compPreview) renderCompPreview();
+      updateCompTotals();
+    });
+  });
+}
+
+/* ---- compiled flow (shared by preview + all exporters) ---- */
+function sepText() {
+  const s = comp.settings;
+  if (s.sceneSeparator === 'blank') return '';
+  if (s.sceneSeparator === 'custom') return s.sceneSepCustom || '* * *';
+  return '* * *';
+}
+function chapterHeadingText(chap, ci) {
+  const s = comp.settings;
+  const title = chap.title || ('Chapter ' + (ci + 1));
+  const isDefault = /^chapter\s+\d+$/i.test(title.trim());
+  const suffix = isDefault ? '' : ': ' + title;
+  switch (s.numberChapters) {
+    case 'arabic': return 'Chapter ' + (ci + 1) + suffix;
+    case 'word': return 'Chapter ' + numWord(ci + 1) + suffix;
+    case 'plain': return (ci + 1) + '. ' + title;
+    default: return title;
+  }
+}
+function buildFlow() {
+  const s = comp.settings;
+  const flow = [];
+  const seen = new Set();
+  let hc = 0;
+  comp.items.forEach(it => {
+    if (it.type === 'part') { if (s.includeParts) flow.push({ type: 'part', title: it.title || 'Part', anchor: 'h' + (hc++) }); return; }
+    if (it.type === 'break') { flow.push({ type: 'break' }); return; }
+    const f = findScene(it.sceneId);
+    if (!f) return;
+    if (s.sceneTitles !== 'no' && !seen.has(f.chapter.id)) {
+      seen.add(f.chapter.id);
+      const ci = novel.chapters.indexOf(f.chapter);
+      flow.push({ type: 'chapter', title: chapterHeadingText(f.chapter, ci), anchor: 'h' + (hc++) });
+    }
+    const showTitle = s.sceneTitles === 'yes';
+    flow.push({ type: 'scene', title: it.title || f.scene.title, html: f.scene.content || '', showTitle, anchor: showTitle ? 'h' + (hc++) : null });
+  });
+  return flow;
+}
+function normalizeSceneHTML(html, xhtml) {
+  const doc = new DOMParser().parseFromString('<div id="__c">' + (html || '') + '</div>', 'text/html');
+  const root = doc.getElementById('__c');
+  if (!root.textContent.trim() && !root.querySelector('img')) return '';
+  if (!xhtml) return root.innerHTML;
+  const ser = new XMLSerializer();
+  let out = '';
+  root.childNodes.forEach(n => { out += ser.serializeToString(n); });
+  return out.replace(/ xmlns="[^"]*"/g, '');
+}
+function flowToBodyHTML(flow, xhtml) {
+  const s = comp.settings;
+  let html = '';
+  let lastScene = false;
+  flow.forEach(f => {
+    if (f.type === 'part') { html += `<h1 class="c-part" id="${f.anchor}">${esc(f.title)}</h1>`; lastScene = false; }
+    else if (f.type === 'chapter') { html += `<h1 class="c-chapter" id="${f.anchor}">${esc(f.title)}</h1>`; lastScene = false; }
+    else if (f.type === 'break') { const t = sepText(); html += t ? `<p class="c-sep">${esc(t)}</p>` : '<p class="c-sep">&#160;</p>'; lastScene = false; }
+    else {
+      if (lastScene) { const t = sepText(); html += t ? `<p class="c-sep">${esc(t)}</p>` : '<p class="c-sep">&#160;</p>'; }
+      if (f.showTitle) html += `<h2 class="c-scene" id="${f.anchor}">${esc(f.title)}</h2>`;
+      const body = normalizeSceneHTML(f.html, xhtml);
+      html += body || (xhtml ? '<p></p>' : '<p></p>');
+      lastScene = true;
+    }
+  });
+  return html;
+}
+function titlePageHTML() {
+  const s = comp.settings;
+  if (!s.titlePage) return '';
+  return `<section class="c-titlepage"><h1 class="c-booktitle">${esc(s.titleText || novel.title)}</h1>` +
+    (s.subtitle ? `<p class="c-subtitle">${esc(s.subtitle)}</p>` : '') +
+    (s.author ? `<p class="c-author">${esc(s.author)}</p>` : '') +
+    (s.dateText ? `<p class="c-date">${esc(s.dateText)}</p>` : '') + `</section>`;
+}
+function tocHTML(flow) {
+  const s = comp.settings;
+  if (!s.toc) return '';
+  const entries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  if (!entries.length) return '';
+  return `<section class="c-toc"><h1 class="c-toc-title">Contents</h1><ul>` +
+    entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') +
+    `</ul></section>`;
+}
+function docBodyHTML(xhtml) {
+  const s = comp.settings;
+  const flow = buildFlow();
+  let body = titlePageHTML();
+  if (s.toc && s.tocPosition === 'afterTitle') body += tocHTML(flow);
+  body += flowToBodyHTML(flow, xhtml);
+  if (s.toc && s.tocPosition === 'end') body += tocHTML(flow);
+  return body;
+}
+function compDocClasses() {
+  const s = comp.settings;
+  return 'comp-doc' + (s.indent === 'indent' ? ' comp-indent' : '') + (s.paraSpacing === 'space' ? ' comp-paraspace' : '') + (s.align === 'justify' ? ' comp-justify' : '');
+}
+function compDocStyle() {
+  const s = comp.settings;
+  return `font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};`;
+}
+/* Screen/HTML/EPUB stylesheet for the compiled document (no print rules). */
+function compileCSS() {
+  return `.comp-doc{color:#111;max-width:46em;margin:0 auto;text-align:left;}
+     .comp-doc.comp-justify p{text-align:justify;}
+     .comp-doc.comp-indent p{text-indent:1.27cm;margin:0;}
+     .comp-doc.comp-indent p.c-sep{text-indent:0;}
+     .comp-doc.comp-paraspace p{margin-bottom:6pt;}
+     .comp-doc p{margin:0 0 .2em;}
+     .comp-doc h1,.comp-doc h2{font-family:inherit;text-align:center;font-weight:700;}
+     .comp-doc h1.c-part{font-size:2em;margin:2em 0 1em;letter-spacing:.05em;}
+     .comp-doc h1.c-chapter{font-size:1.7em;margin:1.6em 0 1em;}
+     .comp-doc h2.c-scene{font-size:1.2em;margin:1.2em 0 .6em;color:#333;}
+     .comp-doc .c-sep{text-align:center;margin:1.2em 0;color:#555;}
+     .comp-doc .c-titlepage{text-align:center;padding:32% 0 0;}
+     .comp-doc .c-booktitle{font-size:2.6em;margin:0 0 .3em;}
+     .comp-doc .c-subtitle{font-size:1.3em;color:#444;font-style:italic;}
+     .comp-doc .c-author{margin-top:2em;font-size:1.15em;}
+     .comp-doc .c-toc ul{list-style:none;padding:0;} .comp-doc .c-toc a{color:#111;text-decoration:none;}
+     .comp-doc .c-toc-scene{padding-left:1.5em;color:#444;font-size:.95em;}
+     .comp-doc .c-toc-title{font-size:1.7em;}`;
+}
+
+function renderCompPreview() {
+  const s = comp.settings;
+  const host = $('#compPreview');
+  host.innerHTML = `<style>${compileCSS()}</style>` +
+    `<div class="${compDocClasses()}" style="${compDocStyle()}">${docBodyHTML(false)}</div>`;
+}
+
+/* ---- exporters ---- */
+function compFileName(ext) { return (comp.settings.titleText || novel.title || 'novel').replace(/[\\/:*?"<>|]+/g, '_') + '.' + ext; }
+async function saveTextFile(name, content) {
+  if (hasTauri) {
+    const path = await invoke('pick_save', { defaultName: name });
+    if (!path) return;
+    await invoke('write_text', { path, content });
+    toast('Saved ' + baseName(path));
+  } else { downloadFile(name, content); toast('Exported ' + name); }
+}
+function compileTXT() {
+  const s = comp.settings;
+  const flow = buildFlow();
+  const L = [];
+  if (s.titlePage) {
+    L.push((s.titleText || novel.title).toUpperCase());
+    if (s.subtitle) L.push(s.subtitle);
+    if (s.author) L.push('by ' + s.author);
+    if (s.dateText) L.push(s.dateText);
+    L.push('', '');
+  }
+  if (s.toc) {
+    L.push('CONTENTS', '');
+    flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle))
+      .forEach(f => L.push((f.type === 'scene' ? '    ' : '') + f.title));
+    L.push('', '');
+  }
+  let lastScene = false;
+  flow.forEach(f => {
+    if (f.type === 'part') { L.push('', '', f.title.toUpperCase(), ''); lastScene = false; }
+    else if (f.type === 'chapter') { L.push('', '', f.title.toUpperCase(), ''); lastScene = false; }
+    else if (f.type === 'break') { L.push('', sepText() || '* * *', ''); lastScene = false; }
+    else {
+      if (lastScene) L.push('', sepText() || '', '');
+      if (f.showTitle) L.push(f.title, '');
+      L.push(stripHtml(f.html).trim(), '');
+      lastScene = true;
+    }
+  });
+  return L.join('\n').replace(/\n{4,}/g, '\n\n\n');
+}
+function compileHTML() {
+  const s = comp.settings;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${esc(s.titleText || novel.title)}</title>
+<style>body{background:#fff;margin:0;padding:40px 20px;}${compileCSS()}</style></head>
+<body><div class="${compDocClasses()}" style="${compDocStyle()}">${docBodyHTML(false)}</div></body></html>`;
+}
+async function doCompExport(kind) {
+  if (!comp || !comp.items.length) { toast('Nothing to compile'); return; }
+  saveCurrentScene();
+  if (kind === 'txt') return saveTextFile(compFileName('txt'), compileTXT());
+  if (kind === 'html') return saveTextFile(compFileName('html'), compileHTML());
+  if (kind === 'pdf') return exportCompPDF();
+  if (kind === 'epub') return exportCompEPUB();
+  if (kind === 'docx') return exportCompDOCX();
+}
+/* ---- binary output helpers (ZIP / base64) ---- */
+function bytesToBase64(bytes) {
+  let bin = ''; const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  return btoa(bin);
+}
+async function saveBinary(name, bytes, mime) {
+  if (hasTauri) {
+    const path = await invoke('pick_save', { defaultName: name });
+    if (!path) return;
+    await invoke('write_binary', { path, base64: bytesToBase64(bytes) });
+    toast('Saved ' + baseName(path));
+  } else {
+    const blob = new Blob([bytes], { type: mime });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('Exported ' + name);
+  }
+}
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+/* Minimal ZIP writer (store / no compression) — enough for EPUB and DOCX. */
+function makeZip(files) {
+  const u16 = n => [n & 255, (n >> 8) & 255];
+  const u32 = n => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+  const parts = [], central = [];
+  let offset = 0;
+  files.forEach(f => {
+    const nameB = new TextEncoder().encode(f.name);
+    const data = f.bytes;
+    const crc = crc32(data);
+    const local = [0x50, 0x4b, 0x03, 0x04, ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nameB.length), ...u16(0)];
+    parts.push(new Uint8Array(local), nameB, data);
+    const cen = [0x50, 0x4b, 0x01, 0x02, ...u16(20), ...u16(20), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nameB.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset)];
+    central.push(new Uint8Array(cen), nameB);
+    offset += local.length + nameB.length + data.length;
+  });
+  let cdSize = 0; central.forEach(a => (cdSize += a.length));
+  const end = new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(cdSize), ...u32(offset), ...u16(0)]);
+  const all = [...parts, ...central, end];
+  const total = all.reduce((s, a) => s + a.length, 0);
+  const out = new Uint8Array(total);
+  let p = 0; all.forEach(a => { out.set(a, p); p += a.length; });
+  return out;
+}
+
+/* ---- PDF (generate a real .pdf file, saved via the native dialog — no print) ----
+   Dependency-free: lays the compiled text out with the standard Courier family
+   (monospaced -> exact wrapping, no metrics tables) into paginated PDF pages.
+   Latin-1 text renders directly; other scripts are best-effort (use EPUB/DOCX/
+   HTML for full Unicode fidelity). */
+function normalizeForPdf(str) {
+  let o = '';
+  for (const ch of (str || '')) {
+    const code = ch.codePointAt(0);
+    if (code === 0x2018 || code === 0x2019 || code === 0x2032) { o += "'"; continue; }
+    if (code === 0x201C || code === 0x201D) { o += '"'; continue; }
+    if (code === 0x2013 || code === 0x2014) { o += '-'; continue; }
+    if (code === 0x2026) { o += '...'; continue; }
+    if (code === 0x00A0) { o += ' '; continue; }
+    if (code === 9) { o += '    '; continue; }
+    if (code < 32) continue;
+    if (code > 255) { o += '?'; continue; }
+    o += String.fromCharCode(code);
+  }
+  return o;
+}
+function pdfEsc(s) { return s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)'); }
+function exportCompPDF() {
+  const s = comp.settings;
+  const flow = buildFlow();
+  const pageW = s.pageSize === 'Letter' ? 612 : 595;
+  const pageH = s.pageSize === 'Letter' ? 792 : 842;
+  const marg = ({ narrow: 42, normal: 64, wide: 90 })[s.margins] || 64;
+  const size = s.fontSize || 12;
+  const lh = size * (s.lineSpacing || 1.5);
+  const usableW = pageW - marg * 2;
+  const charW = size * 0.6;                       // Courier advance = 0.6em
+  const maxChars = Math.max(8, Math.floor(usableW / charW));
+  const F = { normal: 'F1', bold: 'F2', italic: 'F3' };
+
+  const pages = []; let cur = []; let y = pageH - marg;
+  const newPage = () => { pages.push(cur); cur = []; y = pageH - marg; };
+  const ensure = () => { if (y - lh < marg) newPage(); };
+  const line = (text, opts = {}) => {
+    ensure();
+    const font = opts.font || F.normal;
+    const fs = opts.fsize || size;
+    const cw = fs * 0.6;
+    let x = marg + (opts.indent || 0) * charW;
+    if (opts.align === 'center') x = marg + (usableW - text.length * cw) / 2;
+    cur.push({ x: Math.max(marg, x), y, text, font, fs });
+    y -= (opts.lh || lh);
+  };
+  const blank = (n = 1) => { y -= lh * n; if (y < marg) newPage(); };
+  const wrap = (text, opts = {}) => {
+    const words = normalizeForPdf(text).split(/\s+/).filter(Boolean);
+    if (!words.length) return;
+    const limit = opts.maxChars || maxChars;
+    let ln = '', indent = opts.firstIndent || 0;
+    words.forEach(w => {
+      const cand = ln ? ln + ' ' + w : w;
+      if (cand.length + indent > limit && ln) { line(ln, { font: opts.font, indent, align: opts.align }); ln = w; indent = 0; }
+      else ln = cand;
+    });
+    if (ln) line(ln, { font: opts.font, indent, align: opts.align });
+  };
+  const heading = (text, fsize, center) => {
+    ensure(); blank(0.4);
+    const cw = fsize * 0.6;
+    const lim = Math.max(6, Math.floor(usableW / cw));
+    const norm = normalizeForPdf(text);
+    const segs = norm.match(new RegExp('.{1,' + lim + '}(\\s+|$)', 'g'));
+    const parts = (segs && segs.length) ? segs : [norm];
+    parts.forEach(seg => {
+      const t = seg.trim();
+      if (t) line(t, { font: F.bold, fsize, lh: fsize * 1.3, align: center ? 'center' : 'left' });
+    });
+    blank(0.5);
+  };
+
+  // title page
+  if (s.titlePage) {
+    y = pageH * 0.62;
+    line(normalizeForPdf((s.titleText || novel.title || 'Untitled')), { font: F.bold, fsize: size + 10, lh: (size + 10) * 1.3, align: 'center' });
+    if (s.subtitle) { blank(0.4); line(normalizeForPdf(s.subtitle), { font: F.italic, align: 'center' }); }
+    if (s.author) { blank(2); line(normalizeForPdf(s.author), { align: 'center' }); }
+    if (s.dateText) { blank(0.5); line(normalizeForPdf(s.dateText), { align: 'center' }); }
+    newPage();
+  }
+  // toc (after title)
+  const tocEntries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  const emitTOC = () => {
+    if (!s.toc || !tocEntries.length) return;
+    line('Contents', { font: F.bold, fsize: size + 4, lh: (size + 4) * 1.4, align: 'center' });
+    blank(0.6);
+    tocEntries.forEach(f => line(normalizeForPdf(f.title), { indent: f.type === 'scene' ? 3 : 0 }));
+    newPage();
+  };
+  if (s.toc && s.tocPosition === 'afterTitle') emitTOC();
+
+  let lastScene = false;
+  flow.forEach(f => {
+    if (f.type === 'part') { if (cur.length) newPage(); y = pageH * 0.5; heading(f.title, size + 8, true); lastScene = false; }
+    else if (f.type === 'chapter') { if (cur.length) newPage(); heading(f.title, size + 5, true); lastScene = false; }
+    else if (f.type === 'break') { blank(0.5); line(normalizeForPdf(sepText() || '* * *'), { align: 'center' }); blank(0.5); lastScene = false; }
+    else {
+      if (lastScene) { blank(0.4); line(normalizeForPdf(sepText() || ''), { align: 'center' }); blank(0.4); }
+      if (f.showTitle) heading(f.title, size + 2, false);
+      htmlToBlocks(f.html).forEach(bl => {
+        const txt = bl.runs.map(r => r.text).join('');
+        if (!txt.trim()) { blank(0.5); return; }
+        if (bl.tag[0] === 'h') heading(txt, size + (bl.tag === 'h1' ? 4 : bl.tag === 'h2' ? 2 : 1), false);
+        else wrap(txt, { firstIndent: s.indent === 'indent' ? 5 : 0 });
+      });
+      lastScene = true;
+    }
+  });
+  if (s.toc && s.tocPosition === 'end') { if (cur.length) newPage(); emitTOC(); }
+  if (cur.length || !pages.length) newPage();
+
+  // serialize
+  const objs = [];
+  const add = body => { objs.push(body); return objs.length; };   // returns 1-based obj number
+  const catalog = add('');            // 1 (filled later)
+  const pagesObj = add('');           // 2
+  const fontObjs = {
+    F1: add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>'),
+    F2: add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>'),
+    F3: add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Oblique /Encoding /WinAnsiEncoding >>')
+  };
+  const pageRefs = [];
+  pages.forEach((pg, pi) => {
+    let stream = 'BT\n';
+    pg.forEach(l => {
+      stream += `/${l.font} ${l.fs} Tf 1 0 0 1 ${l.x.toFixed(2)} ${l.y.toFixed(2)} Tm (${pdfEsc(l.text)}) Tj\n`;
+    });
+    if (s.pageNumber && s.pageNumber !== 'none') {
+      const label = String((s.startPage || 1) + pi);
+      const pnx = s.pageNumber === 'right' ? (pageW - marg - label.length * (size * 0.6)) : (pageW / 2 - label.length * (size * 0.6) / 2);
+      stream += `/F1 ${Math.max(9, size - 1)} Tf 1 0 0 1 ${pnx.toFixed(2)} ${(marg * 0.6).toFixed(2)} Tm (${label}) Tj\n`;
+    }
+    stream += 'ET';
+    const contentNum = add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+    const fontDict = `<< /Font << /F1 ${fontObjs.F1} 0 R /F2 ${fontObjs.F2} 0 R /F3 ${fontObjs.F3} 0 R >> >>`;
+    const pageNum = add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources ${fontDict} /Contents ${contentNum} 0 R >>`);
+    pageRefs.push(pageNum);
+  });
+  objs[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
+  objs[pagesObj - 1] = `<< /Type /Pages /Kids [${pageRefs.map(n => n + ' 0 R').join(' ')}] /Count ${pageRefs.length} >>`;
+
+  let pdf = '%PDF-1.4\n';
+  const offsets = [];
+  objs.forEach((body, i) => { offsets[i] = pdf.length; pdf += `${i + 1} 0 obj\n${body}\nendobj\n`; });
+  const xrefStart = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  offsets.forEach(off => { pdf += String(off).padStart(10, '0') + ' 00000 n \n'; });
+  pdf += `trailer\n<< /Size ${objs.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+
+  const bytes = Uint8Array.from(pdf, c => c.charCodeAt(0) & 0xff);
+  saveBinary(compFileName('pdf'), bytes, 'application/pdf');
+}
+
+/* ---- EPUB (valid EPUB3 package) ---- */
+function exportCompEPUB() {
+  const s = comp.settings;
+  const title = s.titleText || novel.title || 'Untitled';
+  const author = s.author || 'Unknown';
+  const uid = 'urn:uuid:' + uuid();
+  const flow = buildFlow();
+  const body = flowToBodyHTML(flow, true);
+  const inner = titlePageHTMLx() + (s.toc && s.tocPosition === 'afterTitle' ? tocHTMLx(flow) : '') + body + (s.toc && s.tocPosition === 'end' ? tocHTMLx(flow) : '');
+  const bookXhtml = `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en"><head><meta charset="utf-8"/><title>${esc(title)}</title><link rel="stylesheet" type="text/css" href="style.css"/></head><body><div class="${compDocClasses()}">${inner}</div></body></html>`;
+  const navEntries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  const navItems = navEntries.length ? navEntries : [{ anchor: null, title }];
+  const navOl = navItems.map(f => `<li><a href="book.xhtml${f.anchor ? '#' + f.anchor : ''}">${esc(f.title)}</a></li>`).join('');
+  const navXhtml = `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en"><head><meta charset="utf-8"/><title>Contents</title></head><body><nav epub:type="toc" id="toc"><h1>Contents</h1><ol>${navOl}</ol></nav></body></html>`;
+  const ncxPts = navItems.map((f, i) => `<navPoint id="n${i}" playOrder="${i + 1}"><navLabel><text>${esc(f.title)}</text></navLabel><content src="book.xhtml${f.anchor ? '#' + f.anchor : ''}"/></navPoint>`).join('');
+  const ncx = `<?xml version="1.0" encoding="utf-8"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="${uid}"/></head><docTitle><text>${esc(title)}</text></docTitle><navMap>${ncxPts}</navMap></ncx>`;
+  const opf = `<?xml version="1.0" encoding="utf-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">${uid}</dc:identifier><dc:title>${esc(title)}</dc:title><dc:creator>${esc(author)}</dc:creator><dc:language>en</dc:language><meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="book" href="book.xhtml" media-type="application/xhtml+xml"/><item id="css" href="style.css" media-type="text/css"/></manifest><spine toc="ncx"><itemref idref="book"/></spine></package>`;
+  const container = `<?xml version="1.0" encoding="utf-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`;
+  const css = `html,body{margin:0;padding:1em;font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};}\n` + compileCSS();
+  const enc = new TextEncoder();
+  const files = [
+    { name: 'mimetype', bytes: enc.encode('application/epub+zip') },
+    { name: 'META-INF/container.xml', bytes: enc.encode(container) },
+    { name: 'OEBPS/content.opf', bytes: enc.encode(opf) },
+    { name: 'OEBPS/nav.xhtml', bytes: enc.encode(navXhtml) },
+    { name: 'OEBPS/toc.ncx', bytes: enc.encode(ncx) },
+    { name: 'OEBPS/book.xhtml', bytes: enc.encode(bookXhtml) },
+    { name: 'OEBPS/style.css', bytes: enc.encode(css) }
+  ];
+  saveBinary(compFileName('epub'), makeZip(files), 'application/epub+zip');
+}
+/* XHTML-safe title page / TOC (avoid unescaped entities) */
+function titlePageHTMLx() {
+  const s = comp.settings;
+  if (!s.titlePage) return '';
+  return `<section class="c-titlepage"><h1 class="c-booktitle">${esc(s.titleText || novel.title)}</h1>` +
+    (s.subtitle ? `<p class="c-subtitle">${esc(s.subtitle)}</p>` : '') +
+    (s.author ? `<p class="c-author">${esc(s.author)}</p>` : '') +
+    (s.dateText ? `<p class="c-date">${esc(s.dateText)}</p>` : '') + `</section>`;
+}
+function tocHTMLx(flow) {
+  const s = comp.settings;
+  if (!s.toc) return '';
+  const entries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  if (!entries.length) return '';
+  return `<section class="c-toc"><h1 class="c-toc-title">Contents</h1><ul>` +
+    entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') + `</ul></section>`;
+}
+
+/* ---- DOCX (minimal OOXML) ---- */
+function xmlEsc(s) { return esc(String(s == null ? '' : s)); }
+function htmlToBlocks(html) {
+  const d = document.createElement('div');
+  d.innerHTML = html || '';
+  const blocks = [];
+  const runsOf = (node, b, i) => {
+    let out = [];
+    node.childNodes.forEach(ch => {
+      if (ch.nodeType === 3) { if (ch.textContent) out.push({ text: ch.textContent, b, i }); return; }
+      const t = ch.tagName;
+      if (t === 'BR') { out.push({ text: '\n', b, i }); return; }
+      out = out.concat(runsOf(ch, b || /^(B|STRONG)$/.test(t), i || /^(I|EM)$/.test(t)));
+    });
+    return out;
+  };
+  Array.from(d.childNodes).forEach(ch => {
+    if (ch.nodeType === 3) { if (ch.textContent.trim()) blocks.push({ tag: 'p', runs: [{ text: ch.textContent }] }); return; }
+    const t = ch.tagName;
+    const tag = (t === 'H1' || t === 'H2' || t === 'H3') ? t.toLowerCase() : 'p';
+    blocks.push({ tag, runs: runsOf(ch, false, false) });
+  });
+  if (!blocks.length && stripHtml(html).trim()) blocks.push({ tag: 'p', runs: [{ text: stripHtml(html) }] });
+  return blocks;
+}
+function docxP(runs, opts) {
+  opts = opts || {};
+  const s = comp.settings;
+  let ppr = '';
+  const jc = opts.align === 'center' ? 'center' : (s.align === 'justify' ? 'both' : 'left');
+  ppr += `<w:jc w:val="${jc}"/>`;
+  const sp = [];
+  if (s.lineSpacing && s.lineSpacing !== 1) sp.push(`w:line="${Math.round(s.lineSpacing * 240)}" w:lineRule="auto"`);
+  if (s.paraSpacing === 'space') sp.push('w:after="120"');
+  if (sp.length) ppr += `<w:spacing ${sp.join(' ')}/>`;
+  if (s.indent === 'indent' && !opts.noIndent) ppr += '<w:ind w:firstLine="720"/>';
+  let rs = '';
+  (runs || []).forEach(r => {
+    const segs = String(r.text == null ? '' : r.text).split('\n');
+    segs.forEach((seg, i) => {
+      let rpr = '';
+      if (r.b || opts.b) rpr += '<w:b/>';
+      if (r.i || opts.i) rpr += '<w:i/>';
+      if (opts.sz) rpr += `<w:sz w:val="${opts.sz}"/>`;
+      rs += `<w:r>${rpr ? `<w:rPr>${rpr}</w:rPr>` : ''}<w:t xml:space="preserve">${xmlEsc(seg)}</w:t></w:r>`;
+      if (i < segs.length - 1) rs += '<w:r><w:br/></w:r>';
+    });
+  });
+  if (!rs) rs = '<w:r><w:t xml:space="preserve"></w:t></w:r>';
+  return `<w:p>${ppr ? `<w:pPr>${ppr}</w:pPr>` : ''}${rs}</w:p>`;
+}
+function docxPageBreak() { return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'; }
+function docxTOC(flow) {
+  const s = comp.settings;
+  const entries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  let x = docxP([{ text: 'Contents', b: true }], { sz: 32, align: 'center', noIndent: true });
+  entries.forEach(f => { x += docxP([{ text: f.title }], { noIndent: true }); });
+  return x;
+}
+function exportCompDOCX() {
+  const s = comp.settings;
+  const flow = buildFlow();
+  let bodyXml = '';
+  if (s.titlePage) {
+    bodyXml += docxP([{ text: s.titleText || novel.title, b: true }], { sz: 56, align: 'center', noIndent: true });
+    if (s.subtitle) bodyXml += docxP([{ text: s.subtitle, i: true }], { align: 'center', noIndent: true });
+    if (s.author) bodyXml += docxP([{ text: s.author }], { align: 'center', noIndent: true });
+    if (s.dateText) bodyXml += docxP([{ text: s.dateText }], { align: 'center', noIndent: true });
+    bodyXml += docxPageBreak();
+  }
+  if (s.toc && s.tocPosition === 'afterTitle') { bodyXml += docxTOC(flow); bodyXml += docxPageBreak(); }
+  let lastScene = false;
+  flow.forEach(f => {
+    if (f.type === 'part') { bodyXml += docxP([{ text: f.title, b: true }], { sz: 44, align: 'center', noIndent: true }); lastScene = false; }
+    else if (f.type === 'chapter') { bodyXml += docxP([{ text: f.title, b: true }], { sz: 34, align: 'center', noIndent: true }); lastScene = false; }
+    else if (f.type === 'break') { bodyXml += docxP([{ text: sepText() || '* * *' }], { align: 'center', noIndent: true }); lastScene = false; }
+    else {
+      if (lastScene) bodyXml += docxP([{ text: sepText() || '' }], { align: 'center', noIndent: true });
+      if (f.showTitle) bodyXml += docxP([{ text: f.title, b: true }], { sz: 26, noIndent: true });
+      htmlToBlocks(f.html).forEach(bl => {
+        const heading = bl.tag[0] === 'h';
+        const sz = bl.tag === 'h1' ? 32 : bl.tag === 'h2' ? 28 : bl.tag === 'h3' ? 24 : null;
+        bodyXml += docxP(bl.runs, { sz, b: heading || undefined, noIndent: heading });
+      });
+      lastScene = true;
+    }
+  });
+  if (s.toc && s.tocPosition === 'end') { bodyXml += docxPageBreak(); bodyXml += docxTOC(flow); }
+  const letter = s.pageSize === 'Letter';
+  const sect = `<w:sectPr><w:pgSz w:w="${letter ? 12240 : 11906}" w:h="${letter ? 15840 : 16838}"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${bodyXml}${sect}</w:body></w:document>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`;
+  const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
+  const enc = new TextEncoder();
+  const files = [
+    { name: '[Content_Types].xml', bytes: enc.encode(contentTypes) },
+    { name: '_rels/.rels', bytes: enc.encode(rels) },
+    { name: 'word/document.xml', bytes: enc.encode(documentXml) }
+  ];
+  saveBinary(compFileName('docx'), makeZip(files), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+}
+
+/* ---- presets ---- */
+function renderPresetSelect() {
+  const sel = $('#compPreset');
+  const presets = novel.settings.compilationPresets || [];
+  sel.innerHTML = '<option value="__standard">Standard Manuscript</option>' +
+    presets.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+}
+function loadPreset(id) {
+  if (id === '__standard') { comp.settings = { ...defaultCompSettings(), titleText: comp.settings.titleText, author: comp.settings.author, subtitle: comp.settings.subtitle }; renderComp(); toast('Loaded Standard Manuscript'); return; }
+  const p = (novel.settings.compilationPresets || []).find(x => x.id === id);
+  if (p) { comp.settings = { ...defaultCompSettings(), ...p.settings }; renderComp(); toast('Loaded “' + p.name + '”'); }
+}
+function saveCompPreset() {
+  promptModal('Save preset', 'Preset name:', '', name => {
+    if (!name) return;
+    novel.settings.compilationPresets = novel.settings.compilationPresets || [];
+    const existing = novel.settings.compilationPresets.find(p => p.name === name);
+    if (existing) existing.settings = { ...comp.settings };
+    else novel.settings.compilationPresets.push({ id: uuid(), name, settings: { ...comp.settings } });
+    markDirty(); renderPresetSelect();
+    toast('Preset saved');
+  });
+}
+
+/* ---- compile wiring ---- */
+$('#btnCompile').addEventListener('click', openCompile);
+$('#compClose').addEventListener('click', closeCompile);
+$('#compileOverlay').addEventListener('mousedown', e => { if (e.target === $('#compileOverlay')) closeCompile(); });
+$('#compSearch').addEventListener('input', renderCompAvailable);
+$('#compAddPart').addEventListener('click', () => promptModal('Add part divider', 'Part title:', 'Part ' + (comp.items.filter(i => i.type === 'part').length + 1), v => { comp.items.push({ id: uuid(), type: 'part', title: v || 'Part' }); renderComp(); }));
+$('#compAddBreak').addEventListener('click', () => { comp.items.push({ id: uuid(), type: 'break' }); renderComp(); });
+$('#compRestore').addEventListener('click', () => { comp.items = buildDefaultOrder(); renderComp(); toast('Restored default order'); });
+$('#compClear').addEventListener('click', () => confirmModal('Clear all', 'Remove every item from the compilation order?', () => { comp.items = []; renderComp(); }));
+$('#compPreviewBtn').addEventListener('click', () => { compPreview = !compPreview; renderComp(); });
+$('#compPreset').addEventListener('change', e => loadPreset(e.target.value));
+$('#compSavePreset').addEventListener('click', saveCompPreset);
+$('#compExportBtn').addEventListener('click', e => { e.stopPropagation(); $('#compExportMenu').classList.toggle('open'); });
+document.addEventListener('click', () => $('#compExportMenu').classList.remove('open'));
+$('#compExportMenu').addEventListener('click', e => { const k = e.target.dataset.compExport; if (k) { $('#compExportMenu').classList.remove('open'); doCompExport(k); } });
+
 /* ================= KEYBOARD SHORTCUTS ================= */
 function navigateNotes(dir) {
   const notes = filteredNotes();
@@ -2790,6 +4393,13 @@ document.addEventListener('keydown', e => {
   if (mod && !e.shiftKey && (e.key === 'g' || e.key === 'G')) { e.preventDefault(); if (graphOpen) closeGraph(); else openGraph(); return; }
   if (e.key === 'Escape' && graphOpen) { if (!$('#graphPanel').classList.contains('hidden')) { $('#graphPanel').classList.add('hidden'); } else closeGraph(); return; }
   if (e.key === 'Escape' && corkboardOpen) { closeCorkboard(); return; }
+  if (e.key === 'Escape' && mapOpen) {
+    if (!$('#routeOverlay').classList.contains('hidden')) { closeRouteEditor(); return; }
+    if (mRouteMode) { cancelRouteMode(); mapDraw(); updateMapHint(); return; }
+    closeMap(); return;
+  }
+  if (e.key === 'Escape' && compOpen && !$('#routeOverlay').classList.contains('hidden')) { return; }
+  if (e.key === 'Escape' && compOpen) { closeCompile(); return; }
   if (mod && e.shiftKey && (e.key === 'M' || e.key === 'm' || e.key === 'ь')) { e.preventDefault(); openAddNote(); return; }
   if (e.key === 'Escape' && openNoteId) { closeNoteCard(); return; }
   if (e.key === 'Escape' && notePopup && !notePopup.classList.contains('hidden')) { closeAddNote(); return; }
@@ -2819,6 +4429,7 @@ if (hasTauri) {
       case 'open': doOpen(); break;
       case 'save': doSave(false); break;
       case 'save_as': doSave(true); break;
+      case 'compile': openCompile(); break;
       case 'export_txt': doExport('txt'); break;
       case 'export_html': doExport('html'); break;
       case 'export_md': doExport('md'); break;
