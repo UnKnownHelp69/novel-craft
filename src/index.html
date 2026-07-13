@@ -43,6 +43,7 @@
           <button data-export-notes="md">Export Notes (.md)</button>
         </div>
       </div>
+      <button class="tbtn" id="btnCompile" title="Compile Novel to a single document">📘 Compile</button>
       <button class="tbtn accent" id="btnFocus" title="Focus Mode (Ctrl+Shift+F)">Focus</button>
       <button class="icon-btn panel-toggle" id="toggleRight" title="Toggle tools (Ctrl+/)">▶</button>
 
@@ -428,6 +429,57 @@
     <div class="modal route-modal">
       <h3 id="routeTitle">Route</h3>
       <div id="routeForm"></div>
+    </div>
+  </div>
+
+  <!-- ============ COMPILE NOVEL ============ -->
+  <div id="compileOverlay" class="compile-overlay hidden">
+    <div class="compile-modal">
+      <div class="compile-toolbar">
+        <span class="compile-title">📘 Compile Novel</span>
+        <button class="tbtn" id="compPreviewBtn" title="Toggle preview">👁 Preview</button>
+        <span class="compile-spacer"></span>
+        <label class="compile-ctl">Preset
+          <select id="compPreset" class="control"></select>
+        </label>
+        <button class="tbtn" id="compSavePreset" title="Save current settings as a preset">Save Preset</button>
+        <div class="dropdown">
+          <button class="tbtn accent" id="compExportBtn">Export ▾</button>
+          <div class="dropdown-menu" id="compExportMenu">
+            <button data-comp-export="pdf">Export as PDF</button>
+            <button data-comp-export="epub">Export as EPUB</button>
+            <button data-comp-export="html">Export as HTML</button>
+            <button data-comp-export="txt">Export as TXT</button>
+            <button data-comp-export="docx">Export as DOCX</button>
+          </div>
+        </div>
+        <button class="tbtn subtle compile-close" id="compClose" title="Close (Esc)">✕</button>
+      </div>
+      <div class="compile-body">
+        <!-- available scenes -->
+        <aside class="compile-src">
+          <div class="compile-head">Available Scenes</div>
+          <input type="text" id="compSearch" class="control" placeholder="Search scenes…" />
+          <div id="compAvailable" class="compile-avail"></div>
+        </aside>
+        <!-- compilation order -->
+        <section class="compile-order-wrap">
+          <div class="compile-order-tools">
+            <button class="tbtn" id="compAddPart">＋ Part Divider</button>
+            <button class="tbtn" id="compAddBreak">＋ Section Break</button>
+            <button class="tbtn subtle" id="compRestore">Restore Default Order</button>
+            <button class="tbtn subtle" id="compClear">Clear All</button>
+          </div>
+          <div id="compOrder" class="compile-order"></div>
+          <div id="compPreview" class="compile-preview hidden"></div>
+          <div class="compile-foot"><span id="compTotal">0 words</span><span id="compPages"></span></div>
+        </section>
+        <!-- settings -->
+        <aside class="compile-settings">
+          <div class="compile-head">Settings</div>
+          <div id="compSettingsBody" class="compile-settings-body"></div>
+        </aside>
+      </div>
     </div>
   </div>
 

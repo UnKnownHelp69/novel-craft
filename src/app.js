@@ -3544,6 +3544,495 @@ $$('#mapDrawTools .map-tool').forEach(btn => btn.addEventListener('click', () =>
 $('#mapOverlay').addEventListener('mousedown', e => { if (e.target === $('#mapOverlay')) closeMap(); });
 addEventListener('resize', () => { if (mapOpen) mapResize(); });
 
+/* ================= COMPILE NOVEL ================= */
+let compOpen = false, compEventsInit = false;
+let comp = null;                 // { items:[...], settings:{...} }
+let compPreview = false;
+let compDrag = null;
+
+const ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+const TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+function numWord(n) { if (n < 20) return ONES[n] || String(n); if (n < 100) return TENS[Math.floor(n / 10)] + (n % 10 ? '-' + ONES[n % 10] : ''); return String(n); }
+
+function defaultCompSettings() {
+  return {
+    font: 'Georgia, serif', fontSize: 12, lineSpacing: 1.5, align: 'left',
+    indent: 'indent', paraSpacing: 'none',
+    sceneTitles: 'no', includeParts: true, sceneSeparator: '***', sceneSepCustom: '',
+    numberChapters: 'arabic', pageNumber: 'none', startPage: 1,
+    titlePage: true, titleText: '', author: '', subtitle: '', dateText: '',
+    toc: false, tocDepth: 'chapters', tocPosition: 'afterTitle',
+    pageSize: 'A4', margins: 'normal'
+  };
+}
+const STANDARD_PRESET = defaultCompSettings();
+
+function buildDefaultOrder() {
+  const items = [];
+  novel.chapters.forEach(c => (c.scenes || []).forEach(s => {
+    items.push({ id: uuid(), type: 'scene', sceneId: s.id, chapterId: c.id, title: s.title });
+  }));
+  return items;
+}
+function syncCompItems() {
+  comp.items = comp.items.filter(it => it.type !== 'scene' || findScene(it.sceneId));
+}
+
+function openCompile() {
+  if (!novel) { toast('No novel open'); return; }
+  saveCurrentScene();
+  if (!comp) comp = { items: buildDefaultOrder(), settings: defaultCompSettings() };
+  else syncCompItems();
+  if (!comp.settings.titleText) comp.settings.titleText = novel.title || '';
+  compPreview = false;
+  $('#compileOverlay').classList.remove('hidden');
+  if (!compEventsInit) { initCompEvents(); compEventsInit = true; }
+  renderPresetSelect();
+  renderComp();
+}
+function closeCompile() { compOpen = false; $('#compileOverlay').classList.add('hidden'); }
+
+function renderComp() {
+  compOpen = true;
+  renderCompAvailable();
+  renderCompOrder();
+  renderCompSettings();
+  updateCompTotals();
+  $('#compPreviewBtn').classList.toggle('active', compPreview);
+  $('#compOrder').classList.toggle('hidden', compPreview);
+  $('.compile-order-tools').style.display = compPreview ? 'none' : '';
+  $('#compPreview').classList.toggle('hidden', !compPreview);
+  if (compPreview) renderCompPreview();
+}
+
+/* ---- available scenes ---- */
+function renderCompAvailable() {
+  const host = $('#compAvailable');
+  const q = ($('#compSearch').value || '').trim().toLowerCase();
+  host.innerHTML = '';
+  novel.chapters.forEach(c => {
+    const scenes = (c.scenes || []).filter(s => !q || (s.title || '').toLowerCase().includes(q) || (c.title || '').toLowerCase().includes(q));
+    if (!scenes.length) return;
+    const grp = document.createElement('div');
+    grp.className = 'ca-group';
+    grp.innerHTML = `<div class="ca-chap">📁 ${esc(c.title)}</div>`;
+    scenes.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'ca-scene';
+      row.dataset.sceneId = s.id;
+      row.dataset.chapterId = c.id;
+      row.innerHTML = `<span class="ca-t">🎬 ${esc(s.title)}</span><span class="ca-w">${s.wordCount || 0}</span><button class="ca-add" title="Add to compilation">＋</button>`;
+      row.querySelector('.ca-add').onclick = e => { e.stopPropagation(); comp.items.push({ id: uuid(), type: 'scene', sceneId: s.id, chapterId: c.id, title: s.title }); renderComp(); };
+      grp.appendChild(row);
+    });
+    host.appendChild(grp);
+  });
+  if (!host.children.length) host.innerHTML = '<div class="map-empty">No scenes match.</div>';
+}
+
+/* ---- compilation order ---- */
+function renderCompOrder() {
+  const host = $('#compOrder');
+  host.innerHTML = '';
+  if (!comp.items.length) { host.innerHTML = '<div class="co-empty">Empty. Drag or add scenes from the left, or “Restore Default Order”.</div>'; return; }
+  comp.items.forEach((it, idx) => {
+    const row = document.createElement('div');
+    row.dataset.idx = idx;
+    if (it.type === 'part') {
+      row.className = 'co-item co-part';
+      row.innerHTML = `<span class="co-handle">⠿</span><span class="co-part-t">${esc(it.title || 'Part')}</span><button class="co-x" title="Remove">✕</button>`;
+      row.querySelector('.co-part-t').ondblclick = () => promptModal('Part title', 'Text:', it.title, v => { it.title = v || it.title; renderComp(); });
+    } else if (it.type === 'break') {
+      row.className = 'co-item co-break';
+      row.innerHTML = `<span class="co-handle">⠿</span><span class="co-break-t">— section break —</span><button class="co-x" title="Remove">✕</button>`;
+    } else {
+      const f = findScene(it.sceneId);
+      const words = f ? (f.scene.wordCount || 0) : 0;
+      const ci = f ? novel.chapters.indexOf(f.chapter) + 1 : '?';
+      row.className = 'co-item co-scene';
+      row.innerHTML =
+        `<span class="co-handle">⠿</span>
+         <span class="co-title" title="Double-click to rename for the compilation">${esc(it.title || (f ? f.scene.title : '(missing)'))}</span>
+         <span class="co-src">from Ch. ${ci}</span>
+         <span class="co-w">${words}</span>
+         <button class="co-x" title="Remove from compilation">✕</button>`;
+      row.querySelector('.co-title').ondblclick = () => promptModal('Rename in compilation', 'Title (does not change the original scene):', it.title, v => { it.title = v || it.title; renderComp(); });
+    }
+    row.querySelector('.co-x').onclick = () => { comp.items.splice(idx, 1); renderComp(); };
+    host.appendChild(row);
+  });
+}
+function updateCompTotals() {
+  let words = 0;
+  comp.items.forEach(it => { if (it.type === 'scene') { const f = findScene(it.sceneId); if (f) words += f.scene.wordCount || 0; } });
+  $('#compTotal').textContent = 'Compiled document: ' + words.toLocaleString() + ' words';
+  $('#compPages').textContent = '~' + Math.max(1, Math.round(words / 300)) + ' pages';
+}
+
+/* ---- order drag & drop (pointer based) ---- */
+function initCompEvents() {
+  const order = $('#compOrder');
+  const avail = $('#compAvailable');
+  const start = (e, data) => { compDrag = { ...data, startX: e.clientX, startY: e.clientY, started: false, targetIdx: null }; };
+  order.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const row = e.target.closest('.co-item');
+    if (!row || e.target.closest('.co-x')) return;
+    start(e, { mode: 'move', idx: +row.dataset.idx, el: row });
+  });
+  avail.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const row = e.target.closest('.ca-scene');
+    if (!row || e.target.closest('.ca-add')) return;
+    start(e, { mode: 'new', sceneId: row.dataset.sceneId, chapterId: row.dataset.chapterId, el: row });
+  });
+  document.addEventListener('mousemove', e => {
+    if (!compDrag) return;
+    if (!compDrag.started) {
+      if (Math.abs(e.clientX - compDrag.startX) < 5 && Math.abs(e.clientY - compDrag.startY) < 5) return;
+      compDrag.started = true;
+      compDrag.el.classList.add('co-dragging');
+    }
+    e.preventDefault();
+    $$('#compOrder .co-item').forEach(x => x.classList.remove('co-drop-before', 'co-drop-after'));
+    const rows = $$('#compOrder .co-item');
+    let ti = comp.items.length;
+    for (const r of rows) {
+      const rect = r.getBoundingClientRect();
+      if (e.clientY < rect.top + rect.height / 2) { r.classList.add('co-drop-before'); ti = +r.dataset.idx; break; }
+    }
+    if (ti === comp.items.length && rows.length) rows[rows.length - 1].classList.add('co-drop-after');
+    compDrag.targetIdx = ti;
+  });
+  document.addEventListener('mouseup', () => {
+    if (!compDrag) return;
+    const d = compDrag; compDrag = null;
+    $$('#compOrder .co-item').forEach(x => x.classList.remove('co-drop-before', 'co-drop-after', 'co-dragging'));
+    if (d.el) d.el.classList.remove('co-dragging');
+    if (!d.started || d.targetIdx === null) return;
+    if (d.mode === 'new') {
+      const f = findScene(d.sceneId);
+      const item = { id: uuid(), type: 'scene', sceneId: d.sceneId, chapterId: d.chapterId, title: f ? f.scene.title : 'Scene' };
+      comp.items.splice(d.targetIdx, 0, item);
+    } else {
+      let ti = d.targetIdx;
+      const [moved] = comp.items.splice(d.idx, 1);
+      if (ti > d.idx) ti -= 1;
+      comp.items.splice(ti, 0, moved);
+    }
+    renderComp();
+  });
+}
+
+/* ---- settings panel ---- */
+function renderCompSettings() {
+  const s = comp.settings;
+  const host = $('#compSettingsBody');
+  const opt = (v, t, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${t}</option>`;
+  host.innerHTML =
+    `<div class="cs-group">Formatting</div>
+     <label class="field-label">Font</label>
+     <select class="control" data-cs="font">
+       ${['Georgia, serif|Georgia', "'Lora', serif|Lora", "'Merriweather', serif|Merriweather", "'Inter', sans-serif|Inter", 'Roboto, sans-serif|Roboto', 'Arial, sans-serif|Arial'].map(o => { const [v, t] = o.split('|'); return opt(v, t, s.font); }).join('')}
+     </select>
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">Font size</label><select class="control" data-cs="fontSize">${[10, 11, 12, 14].map(v => opt(v, v + 'pt', s.fontSize)).join('')}</select></div>
+       <div class="rf-col"><label class="field-label">Line spacing</label><select class="control" data-cs="lineSpacing">${[[1, 'Single'], [1.5, '1.5'], [2, 'Double']].map(([v, t]) => opt(v, t, s.lineSpacing)).join('')}</select></div>
+     </div>
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">Alignment</label><select class="control" data-cs="align">${[['left', 'Left'], ['justify', 'Justified']].map(([v, t]) => opt(v, t, s.align)).join('')}</select></div>
+       <div class="rf-col"><label class="field-label">First-line indent</label><select class="control" data-cs="indent">${[['none', 'None'], ['indent', '1.27 cm']].map(([v, t]) => opt(v, t, s.indent)).join('')}</select></div>
+     </div>
+     <label class="field-label">Paragraph spacing</label>
+     <select class="control" data-cs="paraSpacing">${[['none', 'None'], ['space', '6pt after']].map(([v, t]) => opt(v, t, s.paraSpacing)).join('')}</select>
+
+     <div class="cs-group">Content</div>
+     <label class="field-label">Scene / chapter titles</label>
+     <select class="control" data-cs="sceneTitles">${[['yes', 'Chapter + scene titles'], ['chapters', 'Only chapter titles'], ['no', 'No titles']].map(([v, t]) => opt(v, t, s.sceneTitles)).join('')}</select>
+     <label class="toggle-row"><input type="checkbox" data-cs="includeParts"${s.includeParts ? ' checked' : ''}> <span>Include part dividers</span></label>
+     <label class="field-label">Scene separator</label>
+     <select class="control" data-cs="sceneSeparator">${[['***', '* * *'], ['blank', 'Blank line'], ['custom', 'Custom…']].map(([v, t]) => opt(v, t, s.sceneSeparator)).join('')}</select>
+     ${s.sceneSeparator === 'custom' ? `<input type="text" class="control" data-cs="sceneSepCustom" value="${esc(s.sceneSepCustom || '')}" placeholder="Separator text">` : ''}
+     <label class="field-label">Number chapters</label>
+     <select class="control" data-cs="numberChapters">${[['arabic', 'Chapter 1'], ['word', 'Chapter One'], ['plain', '1.'], ['none', 'None']].map(([v, t]) => opt(v, t, s.numberChapters)).join('')}</select>
+
+     <div class="cs-group">Title page</div>
+     <label class="toggle-row"><input type="checkbox" data-cs="titlePage"${s.titlePage ? ' checked' : ''}> <span>Include title page</span></label>
+     <label class="field-label">Title</label><input type="text" class="control" data-cs="titleText" value="${esc(s.titleText || '')}">
+     <label class="field-label">Subtitle</label><input type="text" class="control" data-cs="subtitle" value="${esc(s.subtitle || '')}">
+     <label class="field-label">Author</label><input type="text" class="control" data-cs="author" value="${esc(s.author || '')}">
+     <label class="field-label">Date</label><input type="text" class="control" data-cs="dateText" value="${esc(s.dateText || '')}" placeholder="e.g. 2026">
+
+     <div class="cs-group">Table of contents</div>
+     <label class="toggle-row"><input type="checkbox" data-cs="toc"${s.toc ? ' checked' : ''}> <span>Include table of contents</span></label>
+     <label class="field-label">TOC depth</label>
+     <select class="control" data-cs="tocDepth">${[['chapters', 'Chapters only'], ['scenes', 'Chapters + scenes']].map(([v, t]) => opt(v, t, s.tocDepth)).join('')}</select>
+     <label class="field-label">TOC position</label>
+     <select class="control" data-cs="tocPosition">${[['afterTitle', 'After title page'], ['end', 'End of document']].map(([v, t]) => opt(v, t, s.tocPosition)).join('')}</select>
+
+     <div class="cs-group">Page (PDF)</div>
+     <div class="rf-row">
+       <div class="rf-col"><label class="field-label">Page size</label><select class="control" data-cs="pageSize">${[['A4', 'A4'], ['Letter', 'US Letter']].map(([v, t]) => opt(v, t, s.pageSize)).join('')}</select></div>
+       <div class="rf-col"><label class="field-label">Margins</label><select class="control" data-cs="margins">${[['narrow', 'Narrow'], ['normal', 'Normal'], ['wide', 'Wide']].map(([v, t]) => opt(v, t, s.margins)).join('')}</select></div>
+     </div>
+     <label class="field-label">Page numbering</label>
+     <select class="control" data-cs="pageNumber">${[['none', 'None'], ['center', 'Bottom center'], ['right', 'Bottom right']].map(([v, t]) => opt(v, t, s.pageNumber)).join('')}</select>`;
+  host.querySelectorAll('[data-cs]').forEach(el => {
+    const key = el.dataset.cs;
+    const ev = el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input';
+    el.addEventListener(ev, () => {
+      let v = el.type === 'checkbox' ? el.checked : el.value;
+      if (['fontSize', 'lineSpacing', 'startPage'].includes(key)) v = parseFloat(v);
+      s[key] = v;
+      if (key === 'sceneSeparator') renderCompSettings();       // toggles the custom field
+      if (compPreview) renderCompPreview();
+      updateCompTotals();
+    });
+  });
+}
+
+/* ---- compiled flow (shared by preview + all exporters) ---- */
+function sepText() {
+  const s = comp.settings;
+  if (s.sceneSeparator === 'blank') return '';
+  if (s.sceneSeparator === 'custom') return s.sceneSepCustom || '* * *';
+  return '* * *';
+}
+function chapterHeadingText(chap, ci) {
+  const s = comp.settings;
+  const title = chap.title || ('Chapter ' + (ci + 1));
+  const isDefault = /^chapter\s+\d+$/i.test(title.trim());
+  const suffix = isDefault ? '' : ': ' + title;
+  switch (s.numberChapters) {
+    case 'arabic': return 'Chapter ' + (ci + 1) + suffix;
+    case 'word': return 'Chapter ' + numWord(ci + 1) + suffix;
+    case 'plain': return (ci + 1) + '. ' + title;
+    default: return title;
+  }
+}
+function buildFlow() {
+  const s = comp.settings;
+  const flow = [];
+  const seen = new Set();
+  let hc = 0;
+  comp.items.forEach(it => {
+    if (it.type === 'part') { if (s.includeParts) flow.push({ type: 'part', title: it.title || 'Part', anchor: 'h' + (hc++) }); return; }
+    if (it.type === 'break') { flow.push({ type: 'break' }); return; }
+    const f = findScene(it.sceneId);
+    if (!f) return;
+    if (s.sceneTitles !== 'no' && !seen.has(f.chapter.id)) {
+      seen.add(f.chapter.id);
+      const ci = novel.chapters.indexOf(f.chapter);
+      flow.push({ type: 'chapter', title: chapterHeadingText(f.chapter, ci), anchor: 'h' + (hc++) });
+    }
+    const showTitle = s.sceneTitles === 'yes';
+    flow.push({ type: 'scene', title: it.title || f.scene.title, html: f.scene.content || '', showTitle, anchor: showTitle ? 'h' + (hc++) : null });
+  });
+  return flow;
+}
+function normalizeSceneHTML(html, xhtml) {
+  const doc = new DOMParser().parseFromString('<div id="__c">' + (html || '') + '</div>', 'text/html');
+  const root = doc.getElementById('__c');
+  if (!root.textContent.trim() && !root.querySelector('img')) return '';
+  if (!xhtml) return root.innerHTML;
+  const ser = new XMLSerializer();
+  let out = '';
+  root.childNodes.forEach(n => { out += ser.serializeToString(n); });
+  return out.replace(/ xmlns="[^"]*"/g, '');
+}
+function flowToBodyHTML(flow, xhtml) {
+  const s = comp.settings;
+  let html = '';
+  let lastScene = false;
+  flow.forEach(f => {
+    if (f.type === 'part') { html += `<h1 class="c-part" id="${f.anchor}">${esc(f.title)}</h1>`; lastScene = false; }
+    else if (f.type === 'chapter') { html += `<h1 class="c-chapter" id="${f.anchor}">${esc(f.title)}</h1>`; lastScene = false; }
+    else if (f.type === 'break') { const t = sepText(); html += t ? `<p class="c-sep">${esc(t)}</p>` : '<p class="c-sep">&#160;</p>'; lastScene = false; }
+    else {
+      if (lastScene) { const t = sepText(); html += t ? `<p class="c-sep">${esc(t)}</p>` : '<p class="c-sep">&#160;</p>'; }
+      if (f.showTitle) html += `<h2 class="c-scene" id="${f.anchor}">${esc(f.title)}</h2>`;
+      const body = normalizeSceneHTML(f.html, xhtml);
+      html += body || (xhtml ? '<p></p>' : '<p></p>');
+      lastScene = true;
+    }
+  });
+  return html;
+}
+function titlePageHTML() {
+  const s = comp.settings;
+  if (!s.titlePage) return '';
+  return `<section class="c-titlepage"><h1 class="c-booktitle">${esc(s.titleText || novel.title)}</h1>` +
+    (s.subtitle ? `<p class="c-subtitle">${esc(s.subtitle)}</p>` : '') +
+    (s.author ? `<p class="c-author">${esc(s.author)}</p>` : '') +
+    (s.dateText ? `<p class="c-date">${esc(s.dateText)}</p>` : '') + `</section>`;
+}
+function tocHTML(flow) {
+  const s = comp.settings;
+  if (!s.toc) return '';
+  const entries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  if (!entries.length) return '';
+  return `<section class="c-toc"><h1 class="c-toc-title">Contents</h1><ul>` +
+    entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') +
+    `</ul></section>`;
+}
+function docBodyHTML(xhtml) {
+  const s = comp.settings;
+  const flow = buildFlow();
+  let body = titlePageHTML();
+  if (s.toc && s.tocPosition === 'afterTitle') body += tocHTML(flow);
+  body += flowToBodyHTML(flow, xhtml);
+  if (s.toc && s.tocPosition === 'end') body += tocHTML(flow);
+  return body;
+}
+function compDocClasses() {
+  const s = comp.settings;
+  return 'comp-doc' + (s.indent === 'indent' ? ' comp-indent' : '') + (s.paraSpacing === 'space' ? ' comp-paraspace' : '') + (s.align === 'justify' ? ' comp-justify' : '');
+}
+function compDocStyle() {
+  const s = comp.settings;
+  return `font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};`;
+}
+function compileCSS(forPrint) {
+  const s = comp.settings;
+  const marg = { narrow: '1.5cm', normal: '2.2cm', wide: '3.2cm' }[s.margins] || '2.2cm';
+  let css =
+    `.comp-doc{color:#111;max-width:${forPrint ? 'none' : '46em'};margin:0 auto;text-align:left;}
+     .comp-doc.comp-justify p{text-align:justify;}
+     .comp-doc.comp-indent p{text-indent:1.27cm;margin:0;}
+     .comp-doc.comp-indent p.c-sep{text-indent:0;}
+     .comp-doc.comp-paraspace p{margin-bottom:6pt;}
+     .comp-doc p{margin:0 0 .2em;}
+     .comp-doc h1,.comp-doc h2{font-family:inherit;text-align:center;font-weight:700;}
+     .comp-doc h1.c-part{font-size:2em;margin:2em 0 1em;letter-spacing:.05em;}
+     .comp-doc h1.c-chapter{font-size:1.7em;margin:1.6em 0 1em;}
+     .comp-doc h2.c-scene{font-size:1.2em;margin:1.2em 0 .6em;color:#333;}
+     .comp-doc .c-sep{text-align:center;margin:1.2em 0;color:#555;}
+     .comp-doc .c-titlepage{text-align:center;padding:32% 0 0;}
+     .comp-doc .c-booktitle{font-size:2.6em;margin:0 0 .3em;}
+     .comp-doc .c-subtitle{font-size:1.3em;color:#444;font-style:italic;}
+     .comp-doc .c-author{margin-top:2em;font-size:1.15em;}
+     .comp-doc .c-toc ul{list-style:none;padding:0;} .comp-doc .c-toc a{color:#111;text-decoration:none;}
+     .comp-doc .c-toc-scene{padding-left:1.5em;color:#444;font-size:.95em;}
+     .comp-doc .c-toc-title{font-size:1.7em;}`;
+  if (forPrint) {
+    const pn = s.pageNumber;
+    css += `@page{size:${s.pageSize};margin:${marg};` +
+      (pn !== 'none' ? `@bottom-${pn === 'right' ? 'right' : 'center'}{content:counter(page);}` : '') + `}
+     .c-titlepage,.c-toc{page-break-after:always;}
+     h1.c-chapter,h1.c-part{page-break-before:always;}
+     body{margin:0;}`;
+  }
+  return css;
+}
+
+function renderCompPreview() {
+  const s = comp.settings;
+  const host = $('#compPreview');
+  host.innerHTML = `<style>${compileCSS(false)}</style>` +
+    `<div class="${compDocClasses()}" style="${compDocStyle()}">${docBodyHTML(false)}</div>`;
+}
+
+/* ---- exporters ---- */
+function compFileName(ext) { return (comp.settings.titleText || novel.title || 'novel').replace(/[\\/:*?"<>|]+/g, '_') + '.' + ext; }
+async function saveTextFile(name, content) {
+  if (hasTauri) {
+    const path = await invoke('pick_save', { defaultName: name });
+    if (!path) return;
+    await invoke('write_text', { path, content });
+    toast('Saved ' + baseName(path));
+  } else { downloadFile(name, content); toast('Exported ' + name); }
+}
+function compileTXT() {
+  const s = comp.settings;
+  const flow = buildFlow();
+  const L = [];
+  if (s.titlePage) {
+    L.push((s.titleText || novel.title).toUpperCase());
+    if (s.subtitle) L.push(s.subtitle);
+    if (s.author) L.push('by ' + s.author);
+    if (s.dateText) L.push(s.dateText);
+    L.push('', '');
+  }
+  if (s.toc) {
+    L.push('CONTENTS', '');
+    flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle))
+      .forEach(f => L.push((f.type === 'scene' ? '    ' : '') + f.title));
+    L.push('', '');
+  }
+  let lastScene = false;
+  flow.forEach(f => {
+    if (f.type === 'part') { L.push('', '', f.title.toUpperCase(), ''); lastScene = false; }
+    else if (f.type === 'chapter') { L.push('', '', f.title.toUpperCase(), ''); lastScene = false; }
+    else if (f.type === 'break') { L.push('', sepText() || '* * *', ''); lastScene = false; }
+    else {
+      if (lastScene) L.push('', sepText() || '', '');
+      if (f.showTitle) L.push(f.title, '');
+      L.push(stripHtml(f.html).trim(), '');
+      lastScene = true;
+    }
+  });
+  return L.join('\n').replace(/\n{4,}/g, '\n\n\n');
+}
+function compileHTML() {
+  const s = comp.settings;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${esc(s.titleText || novel.title)}</title>
+<style>body{background:#fff;margin:0;padding:40px 20px;}${compileCSS(false)}</style></head>
+<body><div class="${compDocClasses()}" style="${compDocStyle()}">${docBodyHTML(false)}</div></body></html>`;
+}
+async function doCompExport(kind) {
+  if (!comp || !comp.items.length) { toast('Nothing to compile'); return; }
+  saveCurrentScene();
+  if (kind === 'txt') return saveTextFile(compFileName('txt'), compileTXT());
+  if (kind === 'html') return saveTextFile(compFileName('html'), compileHTML());
+  if (kind === 'pdf') return exportCompPDF();
+  if (kind === 'epub') return exportCompEPUB();
+  if (kind === 'docx') return exportCompDOCX();
+}
+/* PDF / EPUB / DOCX are implemented in the export section */
+function exportCompPDF() { toast('PDF export loading…'); }
+function exportCompEPUB() { toast('EPUB export loading…'); }
+function exportCompDOCX() { toast('DOCX export loading…'); }
+
+/* ---- presets ---- */
+function renderPresetSelect() {
+  const sel = $('#compPreset');
+  const presets = novel.settings.compilationPresets || [];
+  sel.innerHTML = '<option value="__standard">Standard Manuscript</option>' +
+    presets.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+}
+function loadPreset(id) {
+  if (id === '__standard') { comp.settings = { ...defaultCompSettings(), titleText: comp.settings.titleText, author: comp.settings.author, subtitle: comp.settings.subtitle }; renderComp(); toast('Loaded Standard Manuscript'); return; }
+  const p = (novel.settings.compilationPresets || []).find(x => x.id === id);
+  if (p) { comp.settings = { ...defaultCompSettings(), ...p.settings }; renderComp(); toast('Loaded “' + p.name + '”'); }
+}
+function saveCompPreset() {
+  promptModal('Save preset', 'Preset name:', '', name => {
+    if (!name) return;
+    novel.settings.compilationPresets = novel.settings.compilationPresets || [];
+    const existing = novel.settings.compilationPresets.find(p => p.name === name);
+    if (existing) existing.settings = { ...comp.settings };
+    else novel.settings.compilationPresets.push({ id: uuid(), name, settings: { ...comp.settings } });
+    markDirty(); renderPresetSelect();
+    toast('Preset saved');
+  });
+}
+
+/* ---- compile wiring ---- */
+$('#btnCompile').addEventListener('click', openCompile);
+$('#compClose').addEventListener('click', closeCompile);
+$('#compileOverlay').addEventListener('mousedown', e => { if (e.target === $('#compileOverlay')) closeCompile(); });
+$('#compSearch').addEventListener('input', renderCompAvailable);
+$('#compAddPart').addEventListener('click', () => promptModal('Add part divider', 'Part title:', 'Part ' + (comp.items.filter(i => i.type === 'part').length + 1), v => { comp.items.push({ id: uuid(), type: 'part', title: v || 'Part' }); renderComp(); }));
+$('#compAddBreak').addEventListener('click', () => { comp.items.push({ id: uuid(), type: 'break' }); renderComp(); });
+$('#compRestore').addEventListener('click', () => { comp.items = buildDefaultOrder(); renderComp(); toast('Restored default order'); });
+$('#compClear').addEventListener('click', () => confirmModal('Clear all', 'Remove every item from the compilation order?', () => { comp.items = []; renderComp(); }));
+$('#compPreviewBtn').addEventListener('click', () => { compPreview = !compPreview; renderComp(); });
+$('#compPreset').addEventListener('change', e => loadPreset(e.target.value));
+$('#compSavePreset').addEventListener('click', saveCompPreset);
+$('#compExportBtn').addEventListener('click', e => { e.stopPropagation(); $('#compExportMenu').classList.toggle('open'); });
+document.addEventListener('click', () => $('#compExportMenu').classList.remove('open'));
+$('#compExportMenu').addEventListener('click', e => { const k = e.target.dataset.compExport; if (k) { $('#compExportMenu').classList.remove('open'); doCompExport(k); } });
+
 /* ================= KEYBOARD SHORTCUTS ================= */
 function navigateNotes(dir) {
   const notes = filteredNotes();
@@ -3558,6 +4047,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && graphOpen) { if (!$('#graphPanel').classList.contains('hidden')) { $('#graphPanel').classList.add('hidden'); } else closeGraph(); return; }
   if (e.key === 'Escape' && corkboardOpen) { closeCorkboard(); return; }
   if (e.key === 'Escape' && mapOpen) { if (mRouteMode) { cancelRouteMode(); mapDraw(); updateMapHint(); } else closeMap(); return; }
+  if (e.key === 'Escape' && compOpen && !$('#routeOverlay').classList.contains('hidden')) { return; }
+  if (e.key === 'Escape' && compOpen) { closeCompile(); return; }
   if (mod && e.shiftKey && (e.key === 'M' || e.key === 'm' || e.key === 'ь')) { e.preventDefault(); openAddNote(); return; }
   if (e.key === 'Escape' && openNoteId) { closeNoteCard(); return; }
   if (e.key === 'Escape' && notePopup && !notePopup.classList.contains('hidden')) { closeAddNote(); return; }
@@ -3587,6 +4078,7 @@ if (hasTauri) {
       case 'open': doOpen(); break;
       case 'save': doSave(false); break;
       case 'save_as': doSave(true); break;
+      case 'compile': openCompile(); break;
       case 'export_txt': doExport('txt'); break;
       case 'export_html': doExport('html'); break;
       case 'export_md': doExport('md'); break;

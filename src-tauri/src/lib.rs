@@ -102,6 +102,43 @@ fn autosave(app: tauri::AppHandle, content: String) -> Result<(), String> {
     fs::write(working_file(&app), content).map_err(|e| e.to_string())
 }
 
+/// Write a binary file (EPUB / DOCX / images) from a base64-encoded payload.
+#[tauri::command]
+fn write_binary(path: String, base64: String) -> Result<(), String> {
+    let bytes = b64_decode(&base64).ok_or_else(|| "invalid base64".to_string())?;
+    fs::write(&path, bytes).map_err(|e| e.to_string())
+}
+
+/// Minimal standard-base64 decoder (avoids pulling in an extra crate).
+fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::new();
+    let mut buf: u32 = 0;
+    let mut bits = 0u32;
+    for &c in s.as_bytes() {
+        if c == b'=' || c == b'\n' || c == b'\r' || c == b' ' {
+            continue;
+        }
+        let v = val(c)?;
+        buf = (buf << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
 /* ---------------- window controls ---------------- */
 
 #[tauri::command]
@@ -197,6 +234,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &MenuItem::with_id(app, "save", "Save", true, Some("CmdOrCtrl+S"))?,
             &MenuItem::with_id(app, "save_as", "Save As…", true, Some("CmdOrCtrl+Shift+S"))?,
             &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "compile", "Compile Novel…", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "export_txt", "Export as TXT", true, None::<&str>)?,
             &MenuItem::with_id(app, "export_html", "Export as HTML", true, None::<&str>)?,
             &MenuItem::with_id(app, "export_md", "Export as Markdown", true, None::<&str>)?,
@@ -261,6 +300,7 @@ pub fn run() {
             pick_save,
             read_text,
             write_text,
+            write_binary,
             get_last_file,
             set_last_file,
             autosave,
