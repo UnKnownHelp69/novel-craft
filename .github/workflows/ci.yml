@@ -48,6 +48,9 @@ jobs:
       - name: Check frontend syntax
         run: node --check src/app.js
 
+      - name: Run tests
+        run: npm test
+
       - name: Check Rust backend
         working-directory: src-tauri
         run: cargo check

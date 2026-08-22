@@ -4,6 +4,7 @@
   "description": "NovelCraft — a distraction-free desktop novel writing studio (Tauri + vanilla JS)",
   "type": "module",
   "scripts": {
+    "test": "node --test",
     "dev": "tauri dev",
     "build": "tauri build",
     "tauri": "tauri",

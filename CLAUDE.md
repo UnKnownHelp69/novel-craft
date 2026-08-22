@@ -14,6 +14,7 @@ for Windows, macOS, and Linux.
 
 ```bash
 npm install        # install the Tauri CLI (@tauri-apps/cli)
+npm test           # node --test — the test/ suite (no test framework, node:test only)
 npm run dev        # tauri dev — run the app with a live-reloaded static frontend
 npm run build      # tauri build — produce native binary + installers
 npm run icons      # regenerate src-tauri/icons from assets/app-icon.png
@@ -38,6 +39,8 @@ src/                     Frontend (served directly, no bundler)
   styles.css             Theme + layout (CSS custom properties in :root)
   app.js                 ALL app logic (one file, plain JS, no modules)
   fonts/fonts.css        @font-face with system fallbacks
+  fonts/pdf/*.ttf        IBM Plex Mono (OFL) — raw TrueType, embedded into PDF exports
+test/                    node:test suites (no framework)
 src-tauri/               Rust backend
   src/lib.rs             Commands, native menu, file I/O, window controls, recent files
   src/main.rs            Thin entry point -> novelcraft_lib::run()
@@ -112,6 +115,9 @@ API — the latter is unreliable in the WebView2/Chromium webview with the globa
 
 ## Verifying changes
 
-Prefer `node --check` + `cargo check` for fast feedback; run `npm run build` to confirm
-the full bundle. There is no automated test suite — validate UI behavior by running
-`npm run dev`.
+Prefer `node --check` + `npm test` + `cargo check` for fast feedback; run `npm run build`
+to confirm the full bundle. The `test/` suite uses Node's built-in `node:test` (no
+framework, no dependency) and covers pure logic only — `src/app.js` is a single browser
+script with no module system, so tests lift the helpers they need out of the source
+between marker comments. UI behavior still has to be validated by running `npm run dev`.
+CI runs `npm test` in the `quick-check` job on every PR.

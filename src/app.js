@@ -4033,10 +4033,24 @@ function makeZip(files) {
 }
 
 /* ---- PDF (generate a real .pdf file, saved via the native dialog — no print) ----
-   Dependency-free: lays the compiled text out with the standard Courier family
-   (monospaced -> exact wrapping, no metrics tables) into paginated PDF pages.
-   Latin-1 text renders directly; other scripts are best-effort (use EPUB/DOCX/
-   HTML for full Unicode fidelity). */
+   Dependency-free: lays the compiled text out into paginated PDF pages using IBM Plex
+   Mono (SIL OFL 1.1, bundled as raw .ttf in src/fonts/pdf/), embedded in the file as a
+   Type0 / Identity-H composite font.
+
+   Why an embedded font: the PDF standard-14 fonts (Courier & co.) contain no Cyrillic
+   glyphs at all, so they cannot render Russian text under any encoding — the old code
+   papered over that by rewriting every codepoint above 255 as '?'. IBM Plex Mono covers
+   Latin + Cyrillic + Greek and is monospaced at exactly 600/1000 em, which is the
+   advance the layout code below assumes (`size * 0.6` per glyph). Identity-H means the
+   content stream carries glyph ids as hex strings instead of Latin-1 literals. */
+
+/* --- pdf-text-core:start --- pure, DOM-free helpers. test/pdf-cyrillic.test.js
+   extracts everything between these two markers and exercises it in isolation, so keep
+   this block free of DOM, fetch and app state. --- */
+
+/* Typographic cleanup only: smart quotes, dashes and ellipses are folded to their ASCII
+   equivalents. Everything else is passed through untouched — the embedded font is
+   responsible for the glyphs, so there is no codepoint ceiling here. */
 function normalizeForPdf(str) {
   let o = '';
   for (const ch of (str || '')) {
@@ -4048,13 +4062,189 @@ function normalizeForPdf(str) {
     if (code === 0x00A0) { o += ' '; continue; }
     if (code === 9) { o += '    '; continue; }
     if (code < 32) continue;
-    if (code > 255) { o += '?'; continue; }
-    o += String.fromCharCode(code);
+    o += ch;
   }
   return o;
 }
-function pdfEsc(s) { return s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)'); }
-function exportCompPDF() {
+/* Glyph count, not UTF-16 code units — all the layout maths is per-glyph. */
+function pdfLen(str) { return [...(str || '')].length; }
+
+/* cmap subtable reader: formats 4 (BMP) and 12 (full Unicode) cover every font we
+   bundle and virtually every TrueType font in the wild. */
+function readTtfCmap(dv, bytes, cmapOff) {
+  const n = dv.getUint16(cmapOff + 2);
+  let best = null, bestScore = -1;
+  for (let i = 0; i < n; i++) {
+    const p = cmapOff + 4 + i * 8;
+    const pid = dv.getUint16(p), eid = dv.getUint16(p + 2);
+    const off = cmapOff + dv.getUint32(p + 4);
+    const fmt = dv.getUint16(off);
+    let score = -1;
+    if (pid === 3 && eid === 10 && fmt === 12) score = 4;
+    else if (pid === 0 && fmt === 12) score = 3;
+    else if (pid === 3 && eid === 1 && fmt === 4) score = 2;
+    else if (pid === 0 && fmt === 4) score = 1;
+    if (score > bestScore) { bestScore = score; best = { off, fmt }; }
+  }
+  if (!best) throw new Error('font has no usable cmap subtable');
+  const map = new Map();
+  if (best.fmt === 4) {
+    const o = best.off, segX2 = dv.getUint16(o + 6);
+    const endO = o + 14, startO = endO + segX2 + 2, deltaO = startO + segX2, rangeO = deltaO + segX2;
+    for (let i = 0; i < segX2 / 2; i++) {
+      const end = dv.getUint16(endO + i * 2), start = dv.getUint16(startO + i * 2);
+      const delta = dv.getInt16(deltaO + i * 2), ro = dv.getUint16(rangeO + i * 2);
+      if (start > end) continue;
+      for (let c = start; c <= end && c < 0xFFFF; c++) {
+        let g;
+        if (ro === 0) g = (c + delta) & 0xFFFF;
+        else {
+          const gi = rangeO + i * 2 + ro + (c - start) * 2;
+          if (gi + 1 >= bytes.byteLength) continue;
+          g = dv.getUint16(gi);
+          if (g) g = (g + delta) & 0xFFFF;
+        }
+        if (g) map.set(c, g);
+      }
+    }
+  } else {
+    const o = best.off, groups = dv.getUint32(o + 12);
+    for (let i = 0; i < groups; i++) {
+      const p = o + 16 + i * 12;
+      const sc = dv.getUint32(p), ec = dv.getUint32(p + 4), sg = dv.getUint32(p + 8);
+      for (let c = sc; c <= ec; c++) map.set(c, sg + (c - sc));
+    }
+  }
+  return map;
+}
+/* PostScript name (name id 6), sanitised for use as a PDF name object. */
+function readTtfPsName(dv, nameTbl) {
+  if (!nameTbl) return '';
+  const off = nameTbl.off, count = dv.getUint16(off + 2), strOff = off + dv.getUint16(off + 4);
+  const clean = s => (s || '').replace(/[\s()<>[\]{}/%#]|[^\x21-\x7E]/g, '');
+  let mac = '';
+  for (let i = 0; i < count; i++) {
+    const p = off + 6 + i * 12;
+    const pid = dv.getUint16(p), nid = dv.getUint16(p + 6);
+    if (nid !== 6) continue;
+    const len = dv.getUint16(p + 8), so = strOff + dv.getUint16(p + 10);
+    if (pid === 3) {
+      let s = '';
+      for (let k = 0; k + 1 < len; k += 2) s += String.fromCharCode(dv.getUint16(so + k));
+      return clean(s);
+    }
+    if (pid === 1 && !mac) for (let k = 0; k < len; k++) mac += String.fromCharCode(dv.getUint8(so + k));
+  }
+  return clean(mac);
+}
+/* Read just enough of a TrueType file to embed it and map codepoints -> glyph ids.
+   All metrics are returned in PDF glyph space (1000ths of an em). */
+function parseTrueType(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const sfnt = dv.getUint32(0);
+  if (sfnt !== 0x00010000 && sfnt !== 0x74727565) throw new Error('not a TrueType (glyf) font');
+  const tbl = {};
+  for (let i = 0, n = dv.getUint16(4); i < n; i++) {
+    const p = 12 + i * 16;
+    const tag = String.fromCharCode(bytes[p], bytes[p + 1], bytes[p + 2], bytes[p + 3]);
+    tbl[tag] = { off: dv.getUint32(p + 8), len: dv.getUint32(p + 12) };
+  }
+  ['head', 'hhea', 'hmtx', 'maxp', 'cmap'].forEach(t => {
+    if (!tbl[t]) throw new Error('font is missing its ' + t + ' table');
+  });
+  const head = tbl.head.off, hhea = tbl.hhea.off, os2 = tbl['OS/2'];
+  const unitsPerEm = dv.getUint16(head + 18) || 1000;
+  const scale = v => Math.round(v * 1000 / unitsPerEm);
+  const numHMetrics = dv.getUint16(hhea + 34) || 1;
+  const cmap = readTtfCmap(dv, bytes, tbl.cmap.off);
+  const spaceGid = cmap.get(32);
+  const f = {
+    bytes, unitsPerEm,
+    numGlyphs: dv.getUint16(tbl.maxp.off + 4),
+    cmap,
+    // monospaced font -> one advance for every glyph, which is what /DW encodes
+    advance: scale(dv.getUint16(tbl.hmtx.off + Math.min(spaceGid == null ? 1 : spaceGid, numHMetrics - 1) * 4)),
+    bbox: [scale(dv.getInt16(head + 36)), scale(dv.getInt16(head + 38)), scale(dv.getInt16(head + 40)), scale(dv.getInt16(head + 42))],
+    ascent: scale(dv.getInt16(hhea + 4)),
+    descent: scale(dv.getInt16(hhea + 6)),
+    italicAngle: tbl.post ? dv.getInt32(tbl.post.off + 4) / 65536 : 0,
+    fixedPitch: tbl.post ? dv.getUint32(tbl.post.off + 12) !== 0 : false,
+    weight: os2 ? dv.getUint16(os2.off + 4) : 400,
+    psName: readTtfPsName(dv, tbl.name) || 'EmbeddedFont'
+  };
+  const cap = (os2 && dv.getUint16(os2.off) >= 2 && os2.len >= 90) ? scale(dv.getInt16(os2.off + 88)) : 0;
+  f.capHeight = cap || Math.round(f.ascent * 0.7);
+  return f;
+}
+/* Encode text as Identity-H glyph ids (four hex digits each). Characters the font does
+   not cover become glyph 0 (.notdef) — which draws an obvious empty box rather than a
+   plausible-looking '?' — and are collected so the caller can say so out loud. */
+function pdfGlyphHex(text, font, report) {
+  let out = '';
+  for (const ch of (text || '')) {
+    const gid = font.cmap.get(ch.codePointAt(0));
+    if (gid == null) { if (report) report.missing.add(ch); out += '0000'; continue; }
+    if (report) report.used.set(gid, ch.codePointAt(0));
+    out += gid.toString(16).toUpperCase().padStart(4, '0');
+  }
+  return out;
+}
+/* /ToUnicode CMap, so the text stays selectable, searchable and copy-pasteable. */
+function pdfToUnicodeCMap(used) {
+  const hex4 = n => n.toString(16).toUpperCase().padStart(4, '0');
+  const uni = cp => {
+    if (cp <= 0xFFFF) return hex4(cp);
+    const v = cp - 0x10000;
+    return hex4(0xD800 + (v >> 10)) + hex4(0xDC00 + (v & 0x3FF));
+  };
+  const entries = [...used.entries()].sort((a, b) => a[0] - b[0]);
+  let body = '';
+  for (let i = 0; i < entries.length; i += 100) {
+    const chunk = entries.slice(i, i + 100);
+    body += chunk.length + ' beginbfchar\n' +
+      chunk.map(([g, cp]) => `<${hex4(g)}> <${uni(cp)}>`).join('\n') + '\nendbfchar\n';
+  }
+  return `/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def
+/CMapType 2 def
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+${body}endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end`;
+}
+/* --- pdf-text-core:end --- */
+
+/* Raw TrueType files bundled for PDF embedding. Deliberately separate from the
+   src/fonts/*.woff2 web fonts used by the editor UI: woff2 is compressed and cannot be
+   dropped into a PDF, embedding needs the uncompressed TrueType tables. */
+const PDF_FONT_FILES = {
+  F1: 'fonts/pdf/IBMPlexMono-Regular.ttf',
+  F2: 'fonts/pdf/IBMPlexMono-Bold.ttf',
+  F3: 'fonts/pdf/IBMPlexMono-Italic.ttf'
+};
+const pdfFontCache = {};
+async function loadPdfFont(res) {
+  if (pdfFontCache[res]) return pdfFontCache[res];
+  const url = PDF_FONT_FILES[res];
+  let r;
+  try { r = await fetch(url); }
+  catch (e) { throw new Error(`could not read the embedded font ${url} (${e.message})`); }
+  if (!r.ok) throw new Error(`could not read the embedded font ${url} (HTTP ${r.status})`);
+  return (pdfFontCache[res] = parseTrueType(new Uint8Array(await r.arrayBuffer())));
+}
+/* Byte-for-byte string so the final latin-1 cast round-trips the font file intact. */
+function bytesToBinary(bytes) {
+  let s = ''; const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  return s;
+}
+async function exportCompPDF() {
   const s = comp.settings;
   const flow = buildFlow();
   const pageW = s.pageSize === 'Letter' ? 612 : 595;
@@ -4063,7 +4253,7 @@ function exportCompPDF() {
   const size = s.fontSize || 12;
   const lh = size * (s.lineSpacing || 1.5);
   const usableW = pageW - marg * 2;
-  const charW = size * 0.6;                       // Courier advance = 0.6em
+  const charW = size * 0.6;                       // IBM Plex Mono advance = 0.6em
   const maxChars = Math.max(8, Math.floor(usableW / charW));
   const F = { normal: 'F1', bold: 'F2', italic: 'F3' };
 
@@ -4076,7 +4266,7 @@ function exportCompPDF() {
     const fs = opts.fsize || size;
     const cw = fs * 0.6;
     let x = marg + (opts.indent || 0) * charW;
-    if (opts.align === 'center') x = marg + (usableW - text.length * cw) / 2;
+    if (opts.align === 'center') x = marg + (usableW - pdfLen(text) * cw) / 2;
     cur.push({ x: Math.max(marg, x), y, text, font, fs });
     y -= (opts.lh || lh);
   };
@@ -4088,7 +4278,7 @@ function exportCompPDF() {
     let ln = '', indent = opts.firstIndent || 0;
     words.forEach(w => {
       const cand = ln ? ln + ' ' + w : w;
-      if (cand.length + indent > limit && ln) { line(ln, { font: opts.font, indent, align: opts.align }); ln = w; indent = 0; }
+      if (pdfLen(cand) + indent > limit && ln) { line(ln, { font: opts.font, indent, align: opts.align }); ln = w; indent = 0; }
       else ln = cand;
     });
     if (ln) line(ln, { font: opts.font, indent, align: opts.align });
@@ -4147,32 +4337,70 @@ function exportCompPDF() {
   if (s.toc && s.tocPosition === 'end') { if (cur.length) newPage(); emitTOC(); }
   if (cur.length || !pages.length) newPage();
 
-  // serialize
+  // serialize — embed only the styles the document actually uses
+  const usedRes = new Set();
+  pages.forEach(pg => pg.forEach(l => usedRes.add(l.font)));
+  if (s.pageNumber && s.pageNumber !== 'none') usedRes.add(F.normal);
+  if (!usedRes.size) usedRes.add(F.normal);
+
+  let fonts;
+  try {
+    const list = [...usedRes];
+    const loaded = await Promise.all(list.map(loadPdfFont));
+    fonts = {};
+    list.forEach((res, i) => (fonts[res] = loaded[i]));
+  } catch (e) {
+    toast('PDF export failed — ' + e.message);
+    return;
+  }
+
   const objs = [];
   const add = body => { objs.push(body); return objs.length; };   // returns 1-based obj number
   const catalog = add('');            // 1 (filled later)
   const pagesObj = add('');           // 2
-  const fontObjs = {
-    F1: add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>'),
-    F2: add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>'),
-    F3: add('<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Oblique /Encoding /WinAnsiEncoding >>')
-  };
+
+  const reports = {}, fontRefs = {};
+  Object.keys(fonts).forEach(res => {
+    const f = fonts[res];
+    const toUni = add('');            // reserved; filled once every page is encoded
+    reports[res] = { missing: new Set(), used: new Map(), toUni };
+    const raw = bytesToBinary(f.bytes);
+    const fileObj = add(`<< /Length ${raw.length} /Length1 ${raw.length} >>\nstream\n${raw}\nendstream`);
+    const flags = 4 | (f.fixedPitch ? 1 : 0) | (f.italicAngle ? 64 : 0);   // 4 = symbolic
+    const desc = add(`<< /Type /FontDescriptor /FontName /${f.psName} /Flags ${flags} ` +
+      `/FontBBox [${f.bbox.join(' ')}] /ItalicAngle ${f.italicAngle} /Ascent ${f.ascent} ` +
+      `/Descent ${f.descent} /CapHeight ${f.capHeight} /StemV ${f.weight >= 600 ? 140 : 80} ` +
+      `/FontFile2 ${fileObj} 0 R >>`);
+    const cidFont = add(`<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${f.psName} ` +
+      `/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> ` +
+      `/FontDescriptor ${desc} 0 R /DW ${f.advance} /CIDToGIDMap /Identity >>`);
+    fontRefs[res] = add(`<< /Type /Font /Subtype /Type0 /BaseFont /${f.psName} ` +
+      `/Encoding /Identity-H /DescendantFonts [${cidFont} 0 R] /ToUnicode ${toUni} 0 R >>`);
+  });
+  const fontDict = `<< /Font << ${Object.keys(fontRefs).map(r => `/${r} ${fontRefs[r]} 0 R`).join(' ')} >> >>`;
+
   const pageRefs = [];
   pages.forEach((pg, pi) => {
     let stream = 'BT\n';
     pg.forEach(l => {
-      stream += `/${l.font} ${l.fs} Tf 1 0 0 1 ${l.x.toFixed(2)} ${l.y.toFixed(2)} Tm (${pdfEsc(l.text)}) Tj\n`;
+      const res = fonts[l.font] ? l.font : F.normal;
+      stream += `/${res} ${l.fs} Tf 1 0 0 1 ${l.x.toFixed(2)} ${l.y.toFixed(2)} Tm ` +
+        `<${pdfGlyphHex(l.text, fonts[res], reports[res])}> Tj\n`;
     });
     if (s.pageNumber && s.pageNumber !== 'none') {
       const label = String((s.startPage || 1) + pi);
       const pnx = s.pageNumber === 'right' ? (pageW - marg - label.length * (size * 0.6)) : (pageW / 2 - label.length * (size * 0.6) / 2);
-      stream += `/F1 ${Math.max(9, size - 1)} Tf 1 0 0 1 ${pnx.toFixed(2)} ${(marg * 0.6).toFixed(2)} Tm (${label}) Tj\n`;
+      stream += `/${F.normal} ${Math.max(9, size - 1)} Tf 1 0 0 1 ${pnx.toFixed(2)} ${(marg * 0.6).toFixed(2)} Tm ` +
+        `<${pdfGlyphHex(label, fonts[F.normal], reports[F.normal])}> Tj\n`;
     }
     stream += 'ET';
     const contentNum = add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
-    const fontDict = `<< /Font << /F1 ${fontObjs.F1} 0 R /F2 ${fontObjs.F2} 0 R /F3 ${fontObjs.F3} 0 R >> >>`;
     const pageNum = add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources ${fontDict} /Contents ${contentNum} 0 R >>`);
     pageRefs.push(pageNum);
+  });
+  Object.keys(reports).forEach(res => {
+    const cm = pdfToUnicodeCMap(reports[res].used);
+    objs[reports[res].toUni - 1] = `<< /Length ${cm.length} >>\nstream\n${cm}\nendstream`;
   });
   objs[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
   objs[pagesObj - 1] = `<< /Type /Pages /Kids [${pageRefs.map(n => n + ' 0 R').join(' ')}] /Count ${pageRefs.length} >>`;
@@ -4186,7 +4414,15 @@ function exportCompPDF() {
   pdf += `trailer\n<< /Size ${objs.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
 
   const bytes = Uint8Array.from(pdf, c => c.charCodeAt(0) & 0xff);
-  saveBinary(compFileName('pdf'), bytes, 'application/pdf');
+  await saveBinary(compFileName('pdf'), bytes, 'application/pdf');
+
+  // Anything the font could not cover was drawn as .notdef — say so instead of hiding it.
+  const missing = new Set();
+  Object.keys(reports).forEach(res => reports[res].missing.forEach(ch => missing.add(ch)));
+  if (missing.size) {
+    const list = [...missing].slice(0, 12).join(' ');
+    toast(`PDF: ${missing.size} character(s) are missing from the embedded font and rendered blank: ${list}`);
+  }
 }
 
 /* ---- EPUB (valid EPUB3 package) ---- */
