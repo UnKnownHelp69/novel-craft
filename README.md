@@ -2,6 +2,7 @@
 
 A distraction‑free desktop **novel‑writing studio** built with **Tauri v2** (Rust backend) and **vanilla HTML/CSS/JS** (no frameworks). Compiles to a single native binary for Windows, macOS and Linux.
 
+[![CI](https://github.com/UnKnownHelp69/novel-craft/actions/workflows/ci.yml/badge.svg)](https://github.com/UnKnownHelp69/novel-craft/actions/workflows/ci.yml)
 ![theme](https://img.shields.io/badge/theme-dark%20amber-c9a96e)
 ![built with AI](https://img.shields.io/badge/built%20with-AI%20agent-8a7549)
 
