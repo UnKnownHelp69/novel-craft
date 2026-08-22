@@ -20,7 +20,9 @@ env:
 
 jobs:
   quick-check:
-    name: Quick check
+    # Name must stay in sync with the required status check in main's ruleset,
+    # which expects the context "Quick check (ubuntu-22.04)".
+    name: Quick check (ubuntu-22.04)
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
