@@ -1,0 +1,146 @@
+name: Release
+
+# Builds installers for all three desktop platforms and attaches them to a DRAFT
+# GitHub Release. Separate from ci.yml on purpose: ci.yml gates pull requests, this
+# ships artifacts. Nothing here is ever published automatically — a human reviews the
+# draft and presses publish.
+#
+# Phase 1: unsigned builds. No code signing, no notarization, no auto-updater.
+# Windows will show a SmartScreen warning and macOS a Gatekeeper warning until
+# signing certificates are in place; that is expected and tracked separately.
+#
+# To cut a release: bump `version` in src-tauri/tauri.conf.json (and package.json),
+# commit that, then `git tag vX.Y.Z && git push origin vX.Y.Z` — or use the
+# "Run workflow" button on the Actions tab.
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, without the leading v (e.g. 1.2.0). Defaults to the version in src-tauri/tauri.conf.json.'
+        required: false
+        type: string
+
+# Never cancel a release mid-flight: a half-uploaded draft is worse than a slow one.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-version:
+    name: Verify version
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Fail before spending ~15 minutes of build time on a mismatched version, and
+      # deliberately do NOT rewrite tauri.conf.json here — bumping the version stays a
+      # reviewable commit rather than something CI does behind your back.
+      - name: Resolve and check the release version
+        id: resolve
+        shell: bash
+        run: |
+          config_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            requested="${GITHUB_REF_NAME#v}"
+            source="git tag ${GITHUB_REF_NAME}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            requested="${{ inputs.version }}"
+            source="workflow_dispatch input"
+          else
+            requested="$config_version"
+            source="src-tauri/tauri.conf.json (no version input given)"
+          fi
+
+          echo "requested: $requested  (from $source)"
+          echo "tauri.conf.json: $config_version"
+
+          if [ "$requested" != "$config_version" ]; then
+            echo "::error::Version mismatch — $source says '$requested' but src-tauri/tauri.conf.json says '$config_version'. Bump the version in src-tauri/tauri.conf.json (and package.json) in a commit, then tag that commit."
+            exit 1
+          fi
+
+          echo "version=$requested" >> "$GITHUB_OUTPUT"
+          echo "tag=v$requested" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: Build installers (${{ matrix.platform }})
+    needs: verify-version
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04       # .deb, .rpm, .AppImage
+            args: ''
+            rust-targets: ''
+          - platform: windows-latest     # .msi, .exe (NSIS)
+            args: ''
+            rust-targets: ''
+          - platform: macos-latest       # one universal .dmg for Intel + Apple Silicon
+            args: '--target universal-apple-darwin'
+            rust-targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # All three jobs target the same tag; the action creates the draft release on
+      # first use and uploads into the existing one afterwards.
+      - name: Build and attach to draft release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ needs.verify-version.outputs.tag }}
+          releaseName: NovelCraft ${{ needs.verify-version.outputs.tag }}
+          releaseBody: |
+            Download the installer for your platform below.
+
+            - **Windows** — `.msi` or `-setup.exe`
+            - **macOS** — `.dmg` (universal: Apple Silicon and Intel)
+            - **Linux** — `.AppImage`, `.deb` or `.rpm`
+
+            These builds are **not code-signed yet**, so Windows SmartScreen and macOS
+            Gatekeeper will warn on first launch. On Windows choose "More info" then
+            "Run anyway"; on macOS right-click the app and choose "Open".
+          releaseDraft: true
+          prerelease: false
+          # No updater is configured, so don't publish an updater manifest.
+          uploadUpdaterJson: false
+          args: ${{ matrix.args }}
