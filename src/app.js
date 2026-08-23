@@ -10,12 +10,14 @@ const listen = hasTauri ? TAURI.event.listen : async () => () => {};
 /* ---------- helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+/* --- migration-core:uuid:start --- */
 const uuid = () =>
   (crypto.randomUUID && crypto.randomUUID()) ||
   'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
     const r = (Math.random() * 16) | 0;
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
+/* --- migration-core:uuid:end --- */
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const countWords = t => {
   const m = (t || '').trim().match(/[\p{L}\p{N}'’-]+/gu);
@@ -28,6 +30,7 @@ const stripHtml = html => {
 };
 
 /* ---------- state ---------- */
+/* --- migration-core:base:start --- */
 function nowISO() { return new Date().toISOString(); }
 function blankScene(n) {
   return {
@@ -65,6 +68,7 @@ function newNovel(title) {
     races: []
   };
 }
+/* --- migration-core:base:end --- */
 
 let novel = null;              // the currently-open novel (null = none open)
 let currentChapterId = null;
@@ -639,6 +643,12 @@ function toFileObject(n) {
 function serializeNovel(n) { return JSON.stringify(toFileObject(n), null, 2); }
 
 /* Normalize any loaded object into a valid in-memory novel. */
+/* --- migration-core:migrate:start ---
+   test/migrate-novel.test.js reassembles migrateNovel out of the four `migration-core:*`
+   marker pairs scattered through this file (uuid, base, note-types, migrate) and runs it
+   headlessly. The pieces are deliberately left where they belong rather than moved next
+   to each other; the test concatenates the slices itself. countWords/stripHtml/toast are
+   NOT inside any marker — the test injects Node stand-ins for those. --- */
 function migrateNovel(d) {
   d = d || {};
   const base = newNovel(d.title);
@@ -740,6 +750,7 @@ function migrateNovel(d) {
   });
   return n;
 }
+/* --- migration-core:migrate:end --- */
 
 /* Put a loaded novel object into the UI as the current file. */
 function setCurrentNovel(n, path) {
@@ -1530,10 +1541,12 @@ const DEFAULT_NOTE_TYPES = [
 ];
 const NOTE_FALLBACK_ID = 'idea';
 /* Backward-compat: files that stored a Russian default-type name as the typeId. */
+/* --- migration-core:note-types:start --- */
 const RU_NOTE_NAME_TO_ID = {
   'Исправить': 'fix', 'Проверить факт': 'factcheck', 'Развить мысль': 'expand',
   'Перенести': 'move', 'Идея': 'idea'
 };
+/* --- migration-core:note-types:end --- */
 
 /* display prefs are app-level (localStorage), colors of default types are per-novel */
 let noteDisplay = { showMargin: true, highlightAnno: true, autoResolveEdit: false };
