@@ -18,7 +18,9 @@ const uuid = () =>
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
 /* --- migration-core:uuid:end --- */
+/* --- docx-strings:esc:start --- */
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/* --- docx-strings:esc:end --- */
 const countWords = t => {
   const m = (t || '').trim().match(/[\p{L}\p{N}'’-]+/gu);
   return m ? m.length : 0;
@@ -4010,6 +4012,11 @@ async function saveBinary(name, bytes, mime) {
     toast('Exported ' + name);
   }
 }
+/* --- zip-core:start --- pure, DOM-free. The ZIP writer behind BOTH the EPUB and the
+   DOCX export, so a defect here corrupts two formats at once. test/zip-writer.test.js
+   extracts everything between these two markers and checks the archives it produces by
+   walking the offsets/lengths recorded below. Keep this block free of DOM and app
+   state. --- */
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
   for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; }
@@ -4044,6 +4051,7 @@ function makeZip(files) {
   let p = 0; all.forEach(a => { out.set(a, p); p += a.length; });
   return out;
 }
+/* --- zip-core:end --- */
 
 /* ---- PDF (generate a real .pdf file, saved via the native dialog — no print) ----
    Dependency-free: lays the compiled text out into paginated PDF pages using IBM Plex
@@ -4488,7 +4496,9 @@ function tocHTMLx(flow) {
 }
 
 /* ---- DOCX (minimal OOXML) ---- */
+/* --- docx-strings:xmlesc:start --- */
 function xmlEsc(s) { return esc(String(s == null ? '' : s)); }
+/* --- docx-strings:xmlesc:end --- */
 function htmlToBlocks(html) {
   const d = document.createElement('div');
   d.innerHTML = html || '';
@@ -4512,6 +4522,11 @@ function htmlToBlocks(html) {
   if (!blocks.length && stripHtml(html).trim()) blocks.push({ tag: 'p', runs: [{ text: stripHtml(html) }] });
   return blocks;
 }
+/* --- docx-strings:builders:start ---
+   test/docx-strings.test.js reassembles these out of the three `docx-strings:*` marker
+   pairs (esc, xmlesc, builders) — htmlToBlocks sits between them and is deliberately
+   excluded, since it needs a real DOM. These read the module-level `comp` global rather
+   than taking settings as an argument, so the test injects a stand-in `comp`. --- */
 function docxP(runs, opts) {
   opts = opts || {};
   const s = comp.settings;
@@ -4546,6 +4561,7 @@ function docxTOC(flow) {
   entries.forEach(f => { x += docxP([{ text: f.title }], { noIndent: true }); });
   return x;
 }
+/* --- docx-strings:builders:end --- */
 function exportCompDOCX() {
   const s = comp.settings;
   const flow = buildFlow();
