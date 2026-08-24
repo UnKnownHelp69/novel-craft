@@ -38,7 +38,14 @@ function slice(name) {
 }
 
 function loadDocxBuilders() {
-  const src = ['esc', 'xmlesc', 'builders'].map(slice).join('\n');
+  // compTocEntries lives outside the docx-strings markers but docxTOC calls it,
+  // so pull it in as a dependency from its own marker pair.
+  const compTocStart = APP.indexOf('/* --- comp-toc:start ---');
+  const compTocEnd = APP.indexOf('/* --- comp-toc:end --- */');
+  assert.ok(compTocStart !== -1 && compTocEnd > compTocStart,
+    'comp-toc markers missing from src/app.js — compTocEntries moved, update this test');
+  const compTocSrc = APP.slice(compTocStart, compTocEnd);
+  const src = compTocSrc + '\n' + ['esc', 'xmlesc', 'builders'].map(slice).join('\n');
   // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
   return new Function('comp', `'use strict';\n${src}\nreturn { xmlEsc, docxP, docxTOC, docxPageBreak };`)(comp);
 }
