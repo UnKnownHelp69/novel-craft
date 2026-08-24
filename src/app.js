@@ -3881,10 +3881,15 @@ function titlePageHTML() {
     (s.author ? `<p class="c-author">${esc(s.author)}</p>` : '') +
     (s.dateText ? `<p class="c-date">${esc(s.dateText)}</p>` : '') + `</section>`;
 }
+/* --- comp-toc:start --- */
+function compTocEntries(flow, settings) {
+  return flow.filter(f => f.type === 'part' || f.type === 'chapter' || (settings.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+}
+/* --- comp-toc:end --- */
 function tocHTML(flow) {
   const s = comp.settings;
   if (!s.toc) return '';
-  const entries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  const entries = compTocEntries(flow, s);
   if (!entries.length) return '';
   return `<section class="c-toc"><h1 class="c-toc-title">Contents</h1><ul>` +
     entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') +
@@ -3959,7 +3964,7 @@ function compileTXT() {
   }
   if (s.toc) {
     L.push('CONTENTS', '');
-    flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle))
+    compTocEntries(flow, s)
       .forEach(f => L.push((f.type === 'scene' ? '    ' : '') + f.title));
     L.push('', '');
   }
@@ -4328,7 +4333,7 @@ async function exportCompPDF() {
     newPage();
   }
   // toc (after title)
-  const tocEntries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  const tocEntries = compTocEntries(flow, s);
   const emitTOC = () => {
     if (!s.toc || !tocEntries.length) return;
     line('Contents', { font: F.bold, fsize: size + 4, lh: (size + 4) * 1.4, align: 'center' });
@@ -4456,7 +4461,7 @@ function exportCompEPUB() {
   const body = flowToBodyHTML(flow, true);
   const inner = titlePageHTMLx() + (s.toc && s.tocPosition === 'afterTitle' ? tocHTMLx(flow) : '') + body + (s.toc && s.tocPosition === 'end' ? tocHTMLx(flow) : '');
   const bookXhtml = `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en"><head><meta charset="utf-8"/><title>${esc(title)}</title><link rel="stylesheet" type="text/css" href="style.css"/></head><body><div class="${compDocClasses()}">${inner}</div></body></html>`;
-  const navEntries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  const navEntries = compTocEntries(flow, s);
   const navItems = navEntries.length ? navEntries : [{ anchor: null, title }];
   const navOl = navItems.map(f => `<li><a href="book.xhtml${f.anchor ? '#' + f.anchor : ''}">${esc(f.title)}</a></li>`).join('');
   const navXhtml = `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en"><head><meta charset="utf-8"/><title>Contents</title></head><body><nav epub:type="toc" id="toc"><h1>Contents</h1><ol>${navOl}</ol></nav></body></html>`;
@@ -4489,7 +4494,7 @@ function titlePageHTMLx() {
 function tocHTMLx(flow) {
   const s = comp.settings;
   if (!s.toc) return '';
-  const entries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  const entries = compTocEntries(flow, s);
   if (!entries.length) return '';
   return `<section class="c-toc"><h1 class="c-toc-title">Contents</h1><ul>` +
     entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') + `</ul></section>`;
@@ -4556,7 +4561,7 @@ function docxP(runs, opts) {
 function docxPageBreak() { return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'; }
 function docxTOC(flow) {
   const s = comp.settings;
-  const entries = flow.filter(f => f.type === 'part' || f.type === 'chapter' || (s.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
+  const entries = compTocEntries(flow, s);
   let x = docxP([{ text: 'Contents', b: true }], { sz: 32, align: 'center', noIndent: true });
   entries.forEach(f => { x += docxP([{ text: f.title }], { noIndent: true }); });
   return x;
