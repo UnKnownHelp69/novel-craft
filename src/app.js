@@ -3813,38 +3813,38 @@ function sepText() {
   if (s.sceneSeparator === 'custom') return s.sceneSepCustom || '* * *';
   return '* * *';
 }
-function chapterHeadingText(chap, ci) {
-  const s = comp.settings;
+/* --- build-flow:start --- */
+function chapterHeadingText(chap, ci, settings) {
   const title = chap.title || ('Chapter ' + (ci + 1));
   const isDefault = /^chapter\s+\d+$/i.test(title.trim());
   const suffix = isDefault ? '' : ': ' + title;
-  switch (s.numberChapters) {
+  switch (settings.numberChapters) {
     case 'arabic': return 'Chapter ' + (ci + 1) + suffix;
     case 'word': return 'Chapter ' + numWord(ci + 1) + suffix;
     case 'plain': return (ci + 1) + '. ' + title;
     default: return title;
   }
 }
-function buildFlow() {
-  const s = comp.settings;
+function buildFlow(items, settings, chapters, findSceneFn) {
   const flow = [];
   const seen = new Set();
   let hc = 0;
-  comp.items.forEach(it => {
-    if (it.type === 'part') { if (s.includeParts) flow.push({ type: 'part', title: it.title || 'Part', anchor: 'h' + (hc++) }); return; }
+  items.forEach(it => {
+    if (it.type === 'part') { if (settings.includeParts) flow.push({ type: 'part', title: it.title || 'Part', anchor: 'h' + (hc++) }); return; }
     if (it.type === 'break') { flow.push({ type: 'break' }); return; }
-    const f = findScene(it.sceneId);
+    const f = findSceneFn(it.sceneId);
     if (!f) return;
-    if (s.sceneTitles !== 'no' && !seen.has(f.chapter.id)) {
+    if (settings.sceneTitles !== 'no' && !seen.has(f.chapter.id)) {
       seen.add(f.chapter.id);
-      const ci = novel.chapters.indexOf(f.chapter);
-      flow.push({ type: 'chapter', title: chapterHeadingText(f.chapter, ci), anchor: 'h' + (hc++) });
+      const ci = chapters.indexOf(f.chapter);
+      flow.push({ type: 'chapter', title: chapterHeadingText(f.chapter, ci, settings), anchor: 'h' + (hc++) });
     }
-    const showTitle = s.sceneTitles === 'yes';
+    const showTitle = settings.sceneTitles === 'yes';
     flow.push({ type: 'scene', title: it.title || f.scene.title, html: f.scene.content || '', showTitle, anchor: showTitle ? 'h' + (hc++) : null });
   });
   return flow;
 }
+/* --- build-flow:end --- */
 function normalizeSceneHTML(html, xhtml) {
   const doc = new DOMParser().parseFromString('<div id="__c">' + (html || '') + '</div>', 'text/html');
   const root = doc.getElementById('__c');
@@ -3897,7 +3897,7 @@ function tocHTML(flow) {
 }
 function docBodyHTML(xhtml) {
   const s = comp.settings;
-  const flow = buildFlow();
+  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
   let body = titlePageHTML();
   if (s.toc && s.tocPosition === 'afterTitle') body += tocHTML(flow);
   body += flowToBodyHTML(flow, xhtml);
@@ -3953,7 +3953,7 @@ async function saveTextFile(name, content) {
 }
 function compileTXT() {
   const s = comp.settings;
-  const flow = buildFlow();
+  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
   const L = [];
   if (s.titlePage) {
     L.push((s.titleText || novel.title).toUpperCase());
@@ -4272,7 +4272,7 @@ function bytesToBinary(bytes) {
 }
 async function exportCompPDF() {
   const s = comp.settings;
-  const flow = buildFlow();
+  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
   const pageW = s.pageSize === 'Letter' ? 612 : 595;
   const pageH = s.pageSize === 'Letter' ? 792 : 842;
   const marg = ({ narrow: 42, normal: 64, wide: 90 })[s.margins] || 64;
@@ -4457,7 +4457,7 @@ function exportCompEPUB() {
   const title = s.titleText || novel.title || 'Untitled';
   const author = s.author || 'Unknown';
   const uid = 'urn:uuid:' + uuid();
-  const flow = buildFlow();
+  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
   const body = flowToBodyHTML(flow, true);
   const inner = titlePageHTMLx() + (s.toc && s.tocPosition === 'afterTitle' ? tocHTMLx(flow) : '') + body + (s.toc && s.tocPosition === 'end' ? tocHTMLx(flow) : '');
   const bookXhtml = `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en"><head><meta charset="utf-8"/><title>${esc(title)}</title><link rel="stylesheet" type="text/css" href="style.css"/></head><body><div class="${compDocClasses()}">${inner}</div></body></html>`;
@@ -4569,7 +4569,7 @@ function docxTOC(flow) {
 /* --- docx-strings:builders:end --- */
 function exportCompDOCX() {
   const s = comp.settings;
-  const flow = buildFlow();
+  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
   let bodyXml = '';
   if (s.titlePage) {
     bodyXml += docxP([{ text: s.titleText || novel.title, b: true }], { sz: 56, align: 'center', noIndent: true });
