@@ -5,11 +5,10 @@
  * a bad central-directory offset is still a file of plausible size that some readers open
  * and others reject, which is the worst way for an export bug to present.
  *
- * The reader below deliberately navigates by the offsets and lengths makeZip() *declares*
- * — end-of-central-directory -> central directory -> each entry's recorded local-header
- * offset -> that header's name/extra lengths -> the data — rather than by scanning the
- * buffer for PK signatures. Scanning would happily resynchronise past a wrong offset and
- * report a healthy archive, which is exactly the class of bug these tests exist to catch.
+ * Archives are read back with the shared reader in test/helpers/zip-reader.js, which
+ * navigates strictly by the offsets and lengths makeZip() *declares* rather than by
+ * scanning for PK signatures — see that file for why that distinction matters here.
+ * test/epub-xml.test.js uses the same reader on a whole compiled EPUB.
  *
  * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
  * writer is lifted out from between the `zip-core` markers and run in isolation, the same
@@ -20,6 +19,7 @@ import assert from 'node:assert';
 import zlib from 'node:zlib';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readZip, LOCAL_FIXED, EOCD_FIXED } from './helpers/zip-reader.js';
 
 const ROOT = join(import.meta.dirname, '..');
 const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
@@ -36,81 +36,6 @@ function loadZipCore() {
 const { crc32, makeZip } = loadZipCore();
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-
-/* ---------- a ZIP reader that trusts only the declared offsets and lengths ---------- */
-
-const LOCAL_SIG = 0x04034b50;
-const CENTRAL_SIG = 0x02014b50;
-const EOCD_SIG = 0x06054b50;
-const LOCAL_FIXED = 30;
-const CENTRAL_FIXED = 46;
-const EOCD_FIXED = 22;
-
-function readZip(buf) {
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  const u16 = o => dv.getUint16(o, true);
-  const u32 = o => dv.getUint32(o, true);
-
-  // makeZip writes no archive comment, so the EOCD is exactly the last 22 bytes. Taking
-  // it positionally rather than searching backwards for its signature means a stray
-  // 0x06054b50 inside file data cannot be mistaken for the real record.
-  const eocdAt = buf.length - EOCD_FIXED;
-  assert.ok(eocdAt >= 0, 'archive is shorter than an end-of-central-directory record');
-  assert.strictEqual(u32(eocdAt), EOCD_SIG, 'no end-of-central-directory record at the expected offset');
-
-  const eocd = {
-    offset: eocdAt,
-    diskNumber: u16(eocdAt + 4),
-    cdStartDisk: u16(eocdAt + 6),
-    entriesThisDisk: u16(eocdAt + 8),
-    entriesTotal: u16(eocdAt + 10),
-    cdSize: u32(eocdAt + 12),
-    cdOffset: u32(eocdAt + 16),
-    commentLength: u16(eocdAt + 20)
-  };
-
-  const entries = [];
-  let p = eocd.cdOffset;
-  for (let i = 0; i < eocd.entriesTotal; i++) {
-    assert.strictEqual(u32(p), CENTRAL_SIG,
-      `central-directory entry ${i} does not start with a central header at offset ${p}`);
-    const nameLen = u16(p + 28);
-    const extraLen = u16(p + 30);
-    const commentLen = u16(p + 32);
-    const central = {
-      offsetInCd: p,
-      crc: u32(p + 16),
-      compressedSize: u32(p + 20),
-      uncompressedSize: u32(p + 24),
-      method: u16(p + 10),
-      localHeaderOffset: u32(p + 42),
-      name: dec.decode(buf.subarray(p + CENTRAL_FIXED, p + CENTRAL_FIXED + nameLen))
-    };
-
-    // Follow the recorded offset to the local header. If makeZip miscounted anything at
-    // all, this lands in the middle of some other record and the signature check fires.
-    const lo = central.localHeaderOffset;
-    assert.strictEqual(u32(lo), LOCAL_SIG,
-      `entry "${central.name}": central directory points at ${lo}, which is not a local header`);
-    const localNameLen = u16(lo + 26);
-    const localExtraLen = u16(lo + 28);
-    const local = {
-      offset: lo,
-      crc: u32(lo + 14),
-      compressedSize: u32(lo + 18),
-      uncompressedSize: u32(lo + 22),
-      method: u16(lo + 8),
-      name: dec.decode(buf.subarray(lo + LOCAL_FIXED, lo + LOCAL_FIXED + localNameLen))
-    };
-    const dataStart = lo + LOCAL_FIXED + localNameLen + localExtraLen;
-    const data = buf.subarray(dataStart, dataStart + local.compressedSize);
-
-    entries.push({ central, local, data, dataStart });
-    p += CENTRAL_FIXED + nameLen + extraLen + commentLen;
-  }
-
-  return { eocd, entries, cdEnd: p };
-}
 
 /* ---------- fixtures ---------- */
 
