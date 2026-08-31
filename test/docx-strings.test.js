@@ -12,10 +12,10 @@
  * htmlToBlocks() sits between xmlEsc() and docxP() and is deliberately left out, since it
  * needs a real DOM — so there are three marker pairs and the test concatenates the slices.
  *
- * docxP/docxTOC read the module-level `comp` global rather than taking settings as an
- * argument, so a mutable stand-in is injected as a function parameter and each test
- * assigns exactly the settings fixture it needs. That is scaffolding for reaching the
- * builders, not a test of `comp` itself.
+ * The builders take the compile settings as an explicit argument, so each test assigns the
+ * fixture it needs to S (via withSettings) and hands that same object to the call. The
+ * envelope builders these paragraph builders feed — buildDocxBodyXml() and the three fixed
+ * XML parts — are covered next door in test/docx-package.test.js.
  */
 import test from 'node:test';
 import assert from 'node:assert';
@@ -24,8 +24,6 @@ import { join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..');
 const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-const comp = { settings: {} };
 
 function slice(name) {
   const startMark = `/* --- docx-strings:${name}:start ---`;
@@ -47,7 +45,7 @@ function loadDocxBuilders() {
   const compTocSrc = APP.slice(compTocStart, compTocEnd);
   const src = compTocSrc + '\n' + ['esc', 'xmlesc', 'builders'].map(slice).join('\n');
   // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function('comp', `'use strict';\n${src}\nreturn { xmlEsc, docxP, docxTOC, docxPageBreak };`)(comp);
+  return new Function(`'use strict';\n${src}\nreturn { xmlEsc, docxP, docxTOC, docxPageBreak };`)();
 }
 
 const { xmlEsc, docxP, docxTOC, docxPageBreak } = loadDocxBuilders();
@@ -58,7 +56,10 @@ const BASE_SETTINGS = {
   align: 'left', lineSpacing: 1, paraSpacing: 'none', indent: 'none',
   toc: false, tocDepth: 'chapters'
 };
-const withSettings = over => { comp.settings = { ...BASE_SETTINGS, ...over }; };
+/* The settings object handed to whichever builder the test under way is calling.
+   withSettings() rebuilds it from the defaults so a test only states its own overrides. */
+let S = { ...BASE_SETTINGS };
+const withSettings = over => { S = { ...BASE_SETTINGS, ...over }; };
 
 // Pull the text out of every <w:t> in a paragraph, still escaped, for inspection.
 const wtPayloads = xml => [...xml.matchAll(/<w:t xml:space="preserve">([\s\S]*?)<\/w:t>/g)].map(m => m[1]);
@@ -89,44 +90,44 @@ test('xmlEsc turns null and undefined into an empty string, not "null"/"undefine
 
 test('docxP alignment: left by default, opts.align wins, justify becomes Word\'s "both"', () => {
   withSettings({});
-  assert.match(docxP([{ text: 'x' }]), /<w:jc w:val="left"\/>/);
+  assert.match(docxP([{ text: 'x' }], {}, S), /<w:jc w:val="left"\/>/);
 
   withSettings({ align: 'justify' });
-  assert.match(docxP([{ text: 'x' }]), /<w:jc w:val="both"\/>/,
+  assert.match(docxP([{ text: 'x' }], {}, S), /<w:jc w:val="both"\/>/,
     'Word spells justified alignment "both"; "justify" is not a valid w:val');
-  assert.ok(!/w:val="justify"/.test(docxP([{ text: 'x' }])), 'raw "justify" leaked into the XML');
+  assert.ok(!/w:val="justify"/.test(docxP([{ text: 'x' }], {}, S)), 'raw "justify" leaked into the XML');
 
   // An explicit centre request overrides the document-wide setting.
-  assert.match(docxP([{ text: 'x' }], { align: 'center' }), /<w:jc w:val="center"\/>/);
+  assert.match(docxP([{ text: 'x' }], { align: 'center' }, S), /<w:jc w:val="center"\/>/);
   withSettings({ align: 'left' });
-  assert.match(docxP([{ text: 'x' }], { align: 'center' }), /<w:jc w:val="center"\/>/);
+  assert.match(docxP([{ text: 'x' }], { align: 'center' }, S), /<w:jc w:val="center"\/>/);
 });
 
 test('docxP line spacing is emitted only when it differs from single', () => {
   withSettings({ lineSpacing: 1 });
-  assert.ok(!/<w:spacing/.test(docxP([{ text: 'x' }])), 'single spacing should emit nothing');
+  assert.ok(!/<w:spacing/.test(docxP([{ text: 'x' }], {}, S)), 'single spacing should emit nothing');
 
   withSettings({ lineSpacing: 1.5 });
-  assert.match(docxP([{ text: 'x' }]), /<w:spacing w:line="360" w:lineRule="auto"\/>/);
+  assert.match(docxP([{ text: 'x' }], {}, S), /<w:spacing w:line="360" w:lineRule="auto"\/>/);
 
   withSettings({ lineSpacing: 2 });
-  assert.match(docxP([{ text: 'x' }]), /<w:spacing w:line="480" w:lineRule="auto"\/>/);
+  assert.match(docxP([{ text: 'x' }], {}, S), /<w:spacing w:line="480" w:lineRule="auto"\/>/);
 
   // 240 twentieths of a point = one line; the multiplier is rounded to a whole number.
   withSettings({ lineSpacing: 1.15 });
-  assert.match(docxP([{ text: 'x' }]), /w:line="276"/);
+  assert.match(docxP([{ text: 'x' }], {}, S), /w:line="276"/);
 });
 
 test('docxP paragraph spacing adds w:after only for the "space" setting', () => {
   withSettings({ paraSpacing: 'space' });
-  assert.match(docxP([{ text: 'x' }]), /<w:spacing w:after="120"\/>/);
+  assert.match(docxP([{ text: 'x' }], {}, S), /<w:spacing w:after="120"\/>/);
 
   withSettings({ paraSpacing: 'none' });
-  assert.ok(!/w:after/.test(docxP([{ text: 'x' }])));
+  assert.ok(!/w:after/.test(docxP([{ text: 'x' }], {}, S)));
 
   // Both spacing settings at once must share a single <w:spacing> element.
   withSettings({ lineSpacing: 2, paraSpacing: 'space' });
-  const both = docxP([{ text: 'x' }]);
+  const both = docxP([{ text: 'x' }], {}, S);
   assert.match(both, /<w:spacing w:line="480" w:lineRule="auto" w:after="120"\/>/);
   assert.strictEqual((both.match(/<w:spacing/g) || []).length, 1,
     'w:spacing must be one element, not two');
@@ -134,19 +135,19 @@ test('docxP paragraph spacing adds w:after only for the "space" setting', () => 
 
 test('docxP first-line indent respects the setting and the noIndent override', () => {
   withSettings({ indent: 'indent' });
-  assert.match(docxP([{ text: 'x' }]), /<w:ind w:firstLine="720"\/>/);
-  assert.ok(!/<w:ind/.test(docxP([{ text: 'x' }], { noIndent: true })),
+  assert.match(docxP([{ text: 'x' }], {}, S), /<w:ind w:firstLine="720"\/>/);
+  assert.ok(!/<w:ind/.test(docxP([{ text: 'x' }], { noIndent: true }, S)),
     'noIndent must suppress the indent — headings and TOC lines rely on it');
 
   withSettings({ indent: 'none' });
-  assert.ok(!/<w:ind/.test(docxP([{ text: 'x' }])));
+  assert.ok(!/<w:ind/.test(docxP([{ text: 'x' }], {}, S)));
 });
 
 /* ---------- docxP: runs ---------- */
 
 test('docxP bold and italic apply per run, and opts force them on every run', () => {
   withSettings({});
-  const mixed = docxP([{ text: 'plain' }, { text: 'bold', b: true }, { text: 'ital', i: true }]);
+  const mixed = docxP([{ text: 'plain' }, { text: 'bold', b: true }, { text: 'ital', i: true }], {}, S);
   const runs = mixed.split('<w:r>').slice(1);
   assert.strictEqual(runs.length, 3);
   assert.ok(!runs[0].includes('<w:rPr>'), 'a plain run should carry no run properties');
@@ -154,11 +155,11 @@ test('docxP bold and italic apply per run, and opts force them on every run', ()
   assert.ok(runs[2].includes('<w:i/>') && !runs[2].includes('<w:b/>'));
 
   // opts.b / opts.i are how headings and the title page force styling.
-  const forced = docxP([{ text: 'a' }, { text: 'b', b: true }], { b: true, i: true });
+  const forced = docxP([{ text: 'a' }, { text: 'b', b: true }], { b: true, i: true }, S);
   assert.strictEqual((forced.match(/<w:b\/>/g) || []).length, 2, 'opts.b must bold every run');
   assert.strictEqual((forced.match(/<w:i\/>/g) || []).length, 2, 'opts.i must italicise every run');
 
-  assert.match(docxP([{ text: 'big' }], { sz: 56 }), /<w:sz w:val="56"\/>/);
+  assert.match(docxP([{ text: 'big' }], { sz: 56 }, S), /<w:sz w:val="56"\/>/);
 });
 
 test('a newline inside run text becomes an explicit <w:br/>, never a literal newline', () => {
@@ -166,7 +167,7 @@ test('a newline inside run text becomes an explicit <w:br/>, never a literal new
   // Word collapses it to a space. If this ever regressed, pasted multi-line text would
   // silently run together in the exported .docx while looking fine in the editor.
   withSettings({});
-  const xml = docxP([{ text: 'first\nsecond\nthird' }]);
+  const xml = docxP([{ text: 'first\nsecond\nthird' }], {}, S);
 
   assert.deepStrictEqual(wtPayloads(xml), ['first', 'second', 'third'],
     'the newline-separated segments were not split into separate runs');
@@ -178,17 +179,17 @@ test('a newline inside run text becomes an explicit <w:br/>, never a literal new
   assert.ok(!/<w:r><w:br\/><\/w:r>$/.test(xml.replace('</w:p>', '')), 'trailing break emitted');
 
   // Formatting has to be reapplied to each segment, not just the first.
-  const bold = docxP([{ text: 'one\ntwo', b: true }]);
+  const bold = docxP([{ text: 'one\ntwo', b: true }], {}, S);
   assert.strictEqual((bold.match(/<w:b\/>/g) || []).length, 2,
     'the run style was dropped after the line break');
 
   // A newline at the very start or end still yields empty segments rather than vanishing.
-  assert.deepStrictEqual(wtPayloads(docxP([{ text: '\nmid\n' }])), ['', 'mid', '']);
+  assert.deepStrictEqual(wtPayloads(docxP([{ text: '\nmid\n' }], {}, S)), ['', 'mid', '']);
 });
 
 test('XML-significant characters in run text are escaped, not emitted raw', () => {
   withSettings({});
-  const xml = docxP([{ text: 'Tom & Jerry <b>not a tag</b>' }]);
+  const xml = docxP([{ text: 'Tom & Jerry <b>not a tag</b>' }], {}, S);
 
   assert.deepStrictEqual(wtPayloads(xml), ['Tom &amp; Jerry &lt;b&gt;not a tag&lt;/b&gt;']);
   // Nothing inside <w:t> may be a bare '<' or a bare '&' — either one makes Word refuse
@@ -201,9 +202,9 @@ test('XML-significant characters in run text are escaped, not emitted raw', () =
   // Quotes are NOT escaped, which is correct: " and ' are only significant inside
   // attribute values, and these land in element content. Pinned so nobody "fixes" it into
   // &quot; noise, and so the real constraint (no bare < or &) stays the thing asserted.
-  assert.deepStrictEqual(wtPayloads(docxP([{ text: `say "hi" it's fine` }])), [`say "hi" it's fine`]);
+  assert.deepStrictEqual(wtPayloads(docxP([{ text: `say "hi" it's fine` }], {}, S)), [`say "hi" it's fine`]);
 
-  assert.deepStrictEqual(wtPayloads(docxP([{ text: 'Кавычки «ёлочки» — тире' }])),
+  assert.deepStrictEqual(wtPayloads(docxP([{ text: 'Кавычки «ёлочки» — тире' }], {}, S)),
     ['Кавычки «ёлочки» — тире'], 'Cyrillic and typographic punctuation must pass through');
 });
 
@@ -213,7 +214,7 @@ test('a paragraph with no runs still emits a well-formed empty run', () => {
   withSettings({});
   const expected = '<w:r><w:t xml:space="preserve"></w:t></w:r>';
   for (const [label, runs] of [['undefined', undefined], ['null', null], ['empty array', []]]) {
-    const xml = docxP(runs);
+    const xml = docxP(runs, {}, S);
     assert.ok(xml.includes(expected), `${label}: no fallback run emitted`);
     assert.strictEqual(runCount(xml), 1, `${label}: expected exactly one run`);
     assert.match(xml, /^<w:p>.*<\/w:p>$/s, `${label}: paragraph is not well-formed`);
@@ -221,7 +222,7 @@ test('a paragraph with no runs still emits a well-formed empty run', () => {
 
   // A run that exists but holds empty/absent text still produces a real run.
   for (const [label, runs] of [['empty text', [{ text: '' }]], ['absent text', [{}]], ['null text', [{ text: null }]]]) {
-    const xml = docxP(runs);
+    const xml = docxP(runs, {}, S);
     assert.strictEqual(runCount(xml), 1, `${label}: expected exactly one run`);
     assert.deepStrictEqual(wtPayloads(xml), [''], `${label}: unexpected payload`);
   }
@@ -229,7 +230,7 @@ test('a paragraph with no runs still emits a well-formed empty run', () => {
 
 test('docxP output is always a single balanced w:p with pPr before the runs', () => {
   withSettings({ align: 'justify', lineSpacing: 2, paraSpacing: 'space', indent: 'indent' });
-  const xml = docxP([{ text: 'body text' }]);
+  const xml = docxP([{ text: 'body text' }], {}, S);
 
   assert.match(xml, /^<w:p><w:pPr>.*<\/w:pPr><w:r>/, 'w:pPr must come first inside w:p');
   assert.match(xml, /<\/w:p>$/);
@@ -252,7 +253,7 @@ const FLOW = [
 ];
 
 // The TOC body lines are everything after the "Contents" heading paragraph.
-const tocTitles = flow => wtPayloads(docxTOC(flow)).slice(1);
+const tocTitles = flow => wtPayloads(docxTOC(flow, S)).slice(1);
 
 test('docxTOC always lists parts and chapters, whatever the depth setting', () => {
   for (const tocDepth of ['chapters', 'scenes']) {
@@ -285,7 +286,7 @@ test('docxTOC includes a scene only when depth is "scenes" AND the scene shows i
 
 test('docxTOC opens with a centred, bold, unindented "Contents" heading', () => {
   withSettings({ tocDepth: 'chapters', indent: 'indent' });
-  const xml = docxTOC(FLOW);
+  const xml = docxTOC(FLOW, S);
   const heading = xml.slice(0, xml.indexOf('</w:p>') + 6);
 
   assert.match(heading, /<w:jc w:val="center"\/>/);
@@ -303,7 +304,7 @@ test('docxTOC escapes entry titles and emits a heading even with an empty flow',
   assert.deepStrictEqual(tocTitles([{ type: 'chapter', title: 'Cloak & Dagger <1>', showTitle: true }]),
     ['Cloak &amp; Dagger &lt;1&gt;']);
 
-  const empty = docxTOC([]);
+  const empty = docxTOC([], S);
   assert.deepStrictEqual(wtPayloads(empty), ['Contents'], 'an empty flow should still emit the heading');
   assert.strictEqual((empty.match(/<w:p>/g) || []).length, 1);
 });

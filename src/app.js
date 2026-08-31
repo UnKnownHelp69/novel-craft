@@ -3807,12 +3807,14 @@ function renderCompSettings() {
 }
 
 /* ---- compiled flow (shared by preview + all exporters) ---- */
-function sepText() {
-  const s = comp.settings;
+/* --- sep-text:start --- */
+function sepText(settings) {
+  const s = settings;
   if (s.sceneSeparator === 'blank') return '';
   if (s.sceneSeparator === 'custom') return s.sceneSepCustom || '* * *';
   return '* * *';
 }
+/* --- sep-text:end --- */
 /* --- build-flow:start --- */
 function chapterHeadingText(chap, ci, settings) {
   const title = chap.title || ('Chapter ' + (ci + 1));
@@ -3862,9 +3864,9 @@ function flowToBodyHTML(flow, xhtml) {
   flow.forEach(f => {
     if (f.type === 'part') { html += `<h1 class="c-part" id="${f.anchor}">${esc(f.title)}</h1>`; lastScene = false; }
     else if (f.type === 'chapter') { html += `<h1 class="c-chapter" id="${f.anchor}">${esc(f.title)}</h1>`; lastScene = false; }
-    else if (f.type === 'break') { const t = sepText(); html += t ? `<p class="c-sep">${esc(t)}</p>` : '<p class="c-sep">&#160;</p>'; lastScene = false; }
+    else if (f.type === 'break') { const t = sepText(s); html += t ? `<p class="c-sep">${esc(t)}</p>` : '<p class="c-sep">&#160;</p>'; lastScene = false; }
     else {
-      if (lastScene) { const t = sepText(); html += t ? `<p class="c-sep">${esc(t)}</p>` : '<p class="c-sep">&#160;</p>'; }
+      if (lastScene) { const t = sepText(s); html += t ? `<p class="c-sep">${esc(t)}</p>` : '<p class="c-sep">&#160;</p>'; }
       if (f.showTitle) html += `<h2 class="c-scene" id="${f.anchor}">${esc(f.title)}</h2>`;
       const body = normalizeSceneHTML(f.html, xhtml);
       html += body || (xhtml ? '<p></p>' : '<p></p>');
@@ -3972,9 +3974,9 @@ function compileTXT() {
   flow.forEach(f => {
     if (f.type === 'part') { L.push('', '', f.title.toUpperCase(), ''); lastScene = false; }
     else if (f.type === 'chapter') { L.push('', '', f.title.toUpperCase(), ''); lastScene = false; }
-    else if (f.type === 'break') { L.push('', sepText() || '* * *', ''); lastScene = false; }
+    else if (f.type === 'break') { L.push('', sepText(s) || '* * *', ''); lastScene = false; }
     else {
-      if (lastScene) L.push('', sepText() || '', '');
+      if (lastScene) L.push('', sepText(s) || '', '');
       if (f.showTitle) L.push(f.title, '');
       L.push(stripHtml(f.html).trim(), '');
       lastScene = true;
@@ -4347,9 +4349,9 @@ async function exportCompPDF() {
   flow.forEach(f => {
     if (f.type === 'part') { if (cur.length) newPage(); y = pageH * 0.5; heading(f.title, size + 8, true); lastScene = false; }
     else if (f.type === 'chapter') { if (cur.length) newPage(); heading(f.title, size + 5, true); lastScene = false; }
-    else if (f.type === 'break') { blank(0.5); line(normalizeForPdf(sepText() || '* * *'), { align: 'center' }); blank(0.5); lastScene = false; }
+    else if (f.type === 'break') { blank(0.5); line(normalizeForPdf(sepText(s) || '* * *'), { align: 'center' }); blank(0.5); lastScene = false; }
     else {
-      if (lastScene) { blank(0.4); line(normalizeForPdf(sepText() || ''), { align: 'center' }); blank(0.4); }
+      if (lastScene) { blank(0.4); line(normalizeForPdf(sepText(s) || ''), { align: 'center' }); blank(0.4); }
       if (f.showTitle) heading(f.title, size + 2, false);
       htmlToBlocks(f.html).forEach(bl => {
         const txt = bl.runs.map(r => r.text).join('');
@@ -4554,13 +4556,18 @@ function htmlToBlocks(html) {
   return blocks;
 }
 /* --- docx-strings:builders:start ---
-   test/docx-strings.test.js reassembles these out of the three `docx-strings:*` marker
-   pairs (esc, xmlesc, builders) — htmlToBlocks sits between them and is deliberately
-   excluded, since it needs a real DOM. These read the module-level `comp` global rather
-   than taking settings as an argument, so the test injects a stand-in `comp`. --- */
-function docxP(runs, opts) {
+   Pure, DOM-free builders for the DOCX package: the paragraph/TOC string builders plus the
+   OOXML envelope ([Content_Types].xml, _rels/.rels, word/document.xml) and the body
+   assembly. test/docx-strings.test.js reassembles these out of the three `docx-strings:*`
+   marker pairs (esc, xmlesc, builders) — htmlToBlocks sits between them and is
+   deliberately excluded, since it needs a real DOM. They take the compile settings as an
+   explicit argument rather than reading the module-level `comp` global, and
+   buildDocxBodyXml() takes htmlToBlocks itself as a parameter for the same reason; that is
+   what lets them run in isolation. Their only other dependencies are esc(), sepText()
+   (own marker pair) and compTocEntries(). --- */
+function docxP(runs, opts, settings) {
   opts = opts || {};
-  const s = comp.settings;
+  const s = settings;
   let ppr = '';
   const jc = opts.align === 'center' ? 'center' : (s.align === 'justify' ? 'both' : 'left');
   ppr += `<w:jc w:val="${jc}"/>`;
@@ -4585,48 +4592,63 @@ function docxP(runs, opts) {
   return `<w:p>${ppr ? `<w:pPr>${ppr}</w:pPr>` : ''}${rs}</w:p>`;
 }
 function docxPageBreak() { return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'; }
-function docxTOC(flow) {
-  const s = comp.settings;
+function docxTOC(flow, settings) {
+  const s = settings;
   const entries = compTocEntries(flow, s);
-  let x = docxP([{ text: 'Contents', b: true }], { sz: 32, align: 'center', noIndent: true });
-  entries.forEach(f => { x += docxP([{ text: f.title }], { noIndent: true }); });
+  let x = docxP([{ text: 'Contents', b: true }], { sz: 32, align: 'center', noIndent: true }, s);
+  entries.forEach(f => { x += docxP([{ text: f.title }], { noIndent: true }, s); });
   return x;
+}
+function buildDocxBodyXml(flow, settings, htmlToBlocksFn) {
+  const s = settings;
+  let bodyXml = '';
+  if (s.titlePage) {
+    bodyXml += docxP([{ text: s.titleText, b: true }], { sz: 56, align: 'center', noIndent: true }, s);
+    if (s.subtitle) bodyXml += docxP([{ text: s.subtitle, i: true }], { align: 'center', noIndent: true }, s);
+    if (s.author) bodyXml += docxP([{ text: s.author }], { align: 'center', noIndent: true }, s);
+    if (s.dateText) bodyXml += docxP([{ text: s.dateText }], { align: 'center', noIndent: true }, s);
+    bodyXml += docxPageBreak();
+  }
+  if (s.toc && s.tocPosition === 'afterTitle') { bodyXml += docxTOC(flow, s); bodyXml += docxPageBreak(); }
+  let lastScene = false;
+  flow.forEach(f => {
+    if (f.type === 'part') { bodyXml += docxP([{ text: f.title, b: true }], { sz: 44, align: 'center', noIndent: true }, s); lastScene = false; }
+    else if (f.type === 'chapter') { bodyXml += docxP([{ text: f.title, b: true }], { sz: 34, align: 'center', noIndent: true }, s); lastScene = false; }
+    else if (f.type === 'break') { bodyXml += docxP([{ text: sepText(s) || '* * *' }], { align: 'center', noIndent: true }, s); lastScene = false; }
+    else {
+      if (lastScene) bodyXml += docxP([{ text: sepText(s) || '' }], { align: 'center', noIndent: true }, s);
+      if (f.showTitle) bodyXml += docxP([{ text: f.title, b: true }], { sz: 26, noIndent: true }, s);
+      htmlToBlocksFn(f.html).forEach(bl => {
+        const heading = bl.tag[0] === 'h';
+        const sz = bl.tag === 'h1' ? 32 : bl.tag === 'h2' ? 28 : bl.tag === 'h3' ? 24 : null;
+        bodyXml += docxP(bl.runs, { sz, b: heading || undefined, noIndent: heading }, s);
+      });
+      lastScene = true;
+    }
+  });
+  if (s.toc && s.tocPosition === 'end') { bodyXml += docxPageBreak(); bodyXml += docxTOC(flow, s); }
+  return bodyXml;
+}
+function buildDocxDocumentXml({ bodyXml, pageSize }) {
+  const letter = pageSize === 'Letter';
+  const sect = `<w:sectPr><w:pgSz w:w="${letter ? 12240 : 11906}" w:h="${letter ? 15840 : 16838}"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${bodyXml}${sect}</w:body></w:document>`;
+}
+function buildDocxContentTypesXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`;
+}
+function buildDocxRelsXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
 }
 /* --- docx-strings:builders:end --- */
 function exportCompDOCX() {
   const s = comp.settings;
   const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
-  let bodyXml = '';
-  if (s.titlePage) {
-    bodyXml += docxP([{ text: s.titleText || novel.title, b: true }], { sz: 56, align: 'center', noIndent: true });
-    if (s.subtitle) bodyXml += docxP([{ text: s.subtitle, i: true }], { align: 'center', noIndent: true });
-    if (s.author) bodyXml += docxP([{ text: s.author }], { align: 'center', noIndent: true });
-    if (s.dateText) bodyXml += docxP([{ text: s.dateText }], { align: 'center', noIndent: true });
-    bodyXml += docxPageBreak();
-  }
-  if (s.toc && s.tocPosition === 'afterTitle') { bodyXml += docxTOC(flow); bodyXml += docxPageBreak(); }
-  let lastScene = false;
-  flow.forEach(f => {
-    if (f.type === 'part') { bodyXml += docxP([{ text: f.title, b: true }], { sz: 44, align: 'center', noIndent: true }); lastScene = false; }
-    else if (f.type === 'chapter') { bodyXml += docxP([{ text: f.title, b: true }], { sz: 34, align: 'center', noIndent: true }); lastScene = false; }
-    else if (f.type === 'break') { bodyXml += docxP([{ text: sepText() || '* * *' }], { align: 'center', noIndent: true }); lastScene = false; }
-    else {
-      if (lastScene) bodyXml += docxP([{ text: sepText() || '' }], { align: 'center', noIndent: true });
-      if (f.showTitle) bodyXml += docxP([{ text: f.title, b: true }], { sz: 26, noIndent: true });
-      htmlToBlocks(f.html).forEach(bl => {
-        const heading = bl.tag[0] === 'h';
-        const sz = bl.tag === 'h1' ? 32 : bl.tag === 'h2' ? 28 : bl.tag === 'h3' ? 24 : null;
-        bodyXml += docxP(bl.runs, { sz, b: heading || undefined, noIndent: heading });
-      });
-      lastScene = true;
-    }
-  });
-  if (s.toc && s.tocPosition === 'end') { bodyXml += docxPageBreak(); bodyXml += docxTOC(flow); }
-  const letter = s.pageSize === 'Letter';
-  const sect = `<w:sectPr><w:pgSz w:w="${letter ? 12240 : 11906}" w:h="${letter ? 15840 : 16838}"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>`;
-  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${bodyXml}${sect}</w:body></w:document>`;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`;
-  const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
+  // The builders stay free of the `novel` global, so the title-page fallback resolves here.
+  const bodyXml = buildDocxBodyXml(flow, { ...s, titleText: s.titleText || novel.title }, htmlToBlocks);
+  const documentXml = buildDocxDocumentXml({ bodyXml, pageSize: s.pageSize });
+  const contentTypes = buildDocxContentTypesXml();
+  const rels = buildDocxRelsXml();
   const enc = new TextEncoder();
   const files = [
     { name: '[Content_Types].xml', bytes: enc.encode(contentTypes) },
