@@ -1025,6 +1025,13 @@ function toggleMarkdownMode() {
 }
 
 /* ---------- markdown <-> html ---------- */
+/* --- mdtohtml:start --- pure, DOM-free. The markdown -> HTML direction of the editor:
+   run on every save while markdown mode is on (saveCurrentScene) and when toggling back
+   out of it (toggleMarkdownMode), and what it returns is written straight into the
+   contenteditable as HTML. test/md-to-html.test.js lifts everything between these two
+   markers together with esc() from the `docx-strings:esc` pair — inlineMd()'s only
+   dependency — and pins what the two regex passes actually produce. Keep this block free
+   of DOM and app state. --- */
 function mdToHtml(md) {
   const lines = (md || '').split(/\r?\n/);
   const out = lines.map(line => {
@@ -1043,6 +1050,7 @@ function inlineMd(s) {
   s = s.replace(/\*(.+?)\*/g, '<i>$1</i>');
   return s;
 }
+/* --- mdtohtml:end --- */
 function htmlToMd(html) {
   const d = document.createElement('div');
   d.innerHTML = html || '';
