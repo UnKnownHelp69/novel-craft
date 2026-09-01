@@ -4280,33 +4280,31 @@ function bytesToBinary(bytes) {
   for (let i = 0; i < bytes.length; i += chunk) s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
   return s;
 }
-async function exportCompPDF() {
-  const s = comp.settings;
-  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
-  const pageW = s.pageSize === 'Letter' ? 612 : 595;
-  const pageH = s.pageSize === 'Letter' ? 792 : 842;
-  const marg = ({ narrow: 42, normal: 64, wide: 90 })[s.margins] || 64;
-  const size = s.fontSize || 12;
-  const lh = size * (s.lineSpacing || 1.5);
-  const usableW = pageW - marg * 2;
-  const charW = size * 0.6;                       // IBM Plex Mono advance = 0.6em
-  const maxChars = Math.max(8, Math.floor(usableW / charW));
-  const F = { normal: 'F1', bold: 'F2', italic: 'F3' };
-
-  const pages = []; let cur = []; let y = pageH - marg;
-  const newPage = () => { pages.push(cur); cur = []; y = pageH - marg; };
-  const ensure = () => { if (y - lh < marg) newPage(); };
+/* --- pdf-layout:start --- pure, DOM-free. The PDF pagination engine: a cursor moving
+   down a growing list of pages, where every emitted line is a plain
+   {x, y, text, font, fs} record that exportCompPDF() later turns into PDF text-showing
+   operators. This factory owns the only mutable layout state there is — the finished
+   pages, the page in progress and the vertical cursor — which is why callers get
+   startPage()/finish() instead of reaching into that state themselves. Font selection is
+   per line: a line carries exactly one font id, which is why a paragraph's bold/italic
+   runs cannot survive into the PDF today. test/pdf-layout.test.js lifts this block along
+   with `pdf-text-core` (pdfLen/normalizeForPdf, its only dependencies) and `pdf-pages`,
+   so keep it free of DOM, fetch and app state. --- */
+function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWidth, charWidth, maxChars, fonts }) {
+  const pages = []; let cur = []; let y = pageH - margin;
+  const newPage = () => { pages.push(cur); cur = []; y = pageH - margin; };
+  const ensure = () => { if (y - lineHeight < margin) newPage(); };
   const line = (text, opts = {}) => {
     ensure();
-    const font = opts.font || F.normal;
-    const fs = opts.fsize || size;
+    const font = opts.font || fonts.normal;
+    const fs = opts.fsize || fontSize;
     const cw = fs * 0.6;
-    let x = marg + (opts.indent || 0) * charW;
-    if (opts.align === 'center') x = marg + (usableW - pdfLen(text) * cw) / 2;
-    cur.push({ x: Math.max(marg, x), y, text, font, fs });
-    y -= (opts.lh || lh);
+    let x = margin + (opts.indent || 0) * charWidth;
+    if (opts.align === 'center') x = margin + (usableWidth - pdfLen(text) * cw) / 2;
+    cur.push({ x: Math.max(margin, x), y, text, font, fs });
+    y -= (opts.lh || lineHeight);
   };
-  const blank = (n = 1) => { y -= lh * n; if (y < marg) newPage(); };
+  const blank = (n = 1) => { y -= lineHeight * n; if (y < margin) newPage(); };
   const wrap = (text, opts = {}) => {
     const words = normalizeForPdf(text).split(/\s+/).filter(Boolean);
     if (!words.length) return;
@@ -4322,21 +4320,46 @@ async function exportCompPDF() {
   const heading = (text, fsize, center) => {
     ensure(); blank(0.4);
     const cw = fsize * 0.6;
-    const lim = Math.max(6, Math.floor(usableW / cw));
+    const lim = Math.max(6, Math.floor(usableWidth / cw));
     const norm = normalizeForPdf(text);
     const segs = norm.match(new RegExp('.{1,' + lim + '}(\\s+|$)', 'g'));
     const parts = (segs && segs.length) ? segs : [norm];
     parts.forEach(seg => {
       const t = seg.trim();
-      if (t) line(t, { font: F.bold, fsize, lh: fsize * 1.3, align: center ? 'center' : 'left' });
+      if (t) line(t, { font: fonts.bold, fsize, lh: fsize * 1.3, align: center ? 'center' : 'left' });
     });
     blank(0.5);
   };
+  /* Start the next run of content on a page of its own: break to a fresh page unless the
+     current one is still untouched, then optionally drop the cursor to a fraction of the
+     page height — how a part title and the title page start partway down. */
+  const startPage = fraction => {
+    if (cur.length) newPage();
+    if (fraction != null) y = pageH * fraction;
+  };
+  /* Terminal. Flushes the page in progress, guarantees at least one page even for an
+     empty document, and hands back the finished list. Call it once. */
+  const finish = () => { if (cur.length || !pages.length) newPage(); return pages; };
+  return { fontSize, fonts, newPage, ensure, line, blank, wrap, heading, startPage, finish };
+}
+/* --- pdf-layout:end --- */
+/* --- pdf-pages:start --- pure, DOM-free driver: walks the compilation flow and decides
+   what to emit into a layout built by createPdfLayout() — title page, table of contents,
+   and the part/chapter/break/scene body. htmlToBlocks() needs a real DOM, so it is
+   injected as htmlToBlocksFn; production passes the real one, tests pass a stub. Reads
+   the compile settings as an explicit argument and never the `comp`/`novel` globals:
+   the title-page fallback is resolved by exportCompPDF() before the call. Depends on
+   compTocEntries() and sepText(), which have their own marker pairs. --- */
+function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
+  const s = settings;
+  const size = layout.fontSize;
+  const F = layout.fonts;
+  const { line, blank, wrap, heading, newPage, startPage } = layout;
 
   // title page
   if (s.titlePage) {
-    y = pageH * 0.62;
-    line(normalizeForPdf((s.titleText || novel.title || 'Untitled')), { font: F.bold, fsize: size + 10, lh: (size + 10) * 1.3, align: 'center' });
+    startPage(0.62);
+    line(normalizeForPdf(s.titleText), { font: F.bold, fsize: size + 10, lh: (size + 10) * 1.3, align: 'center' });
     if (s.subtitle) { blank(0.4); line(normalizeForPdf(s.subtitle), { font: F.italic, align: 'center' }); }
     if (s.author) { blank(2); line(normalizeForPdf(s.author), { align: 'center' }); }
     if (s.dateText) { blank(0.5); line(normalizeForPdf(s.dateText), { align: 'center' }); }
@@ -4355,13 +4378,14 @@ async function exportCompPDF() {
 
   let lastScene = false;
   flow.forEach(f => {
-    if (f.type === 'part') { if (cur.length) newPage(); y = pageH * 0.5; heading(f.title, size + 8, true); lastScene = false; }
-    else if (f.type === 'chapter') { if (cur.length) newPage(); heading(f.title, size + 5, true); lastScene = false; }
+    if (f.type === 'part') { startPage(0.5); heading(f.title, size + 8, true); lastScene = false; }
+    else if (f.type === 'chapter') { startPage(); heading(f.title, size + 5, true); lastScene = false; }
     else if (f.type === 'break') { blank(0.5); line(normalizeForPdf(sepText(s) || '* * *'), { align: 'center' }); blank(0.5); lastScene = false; }
     else {
       if (lastScene) { blank(0.4); line(normalizeForPdf(sepText(s) || ''), { align: 'center' }); blank(0.4); }
       if (f.showTitle) heading(f.title, size + 2, false);
-      htmlToBlocks(f.html).forEach(bl => {
+      htmlToBlocksFn(f.html).forEach(bl => {
+        // Runs are flattened to their text: a line carries one font, so bold/italic is lost.
         const txt = bl.runs.map(r => r.text).join('');
         if (!txt.trim()) { blank(0.5); return; }
         if (bl.tag[0] === 'h') heading(txt, size + (bl.tag === 'h1' ? 4 : bl.tag === 'h2' ? 2 : 1), false);
@@ -4370,8 +4394,29 @@ async function exportCompPDF() {
       lastScene = true;
     }
   });
-  if (s.toc && s.tocPosition === 'end') { if (cur.length) newPage(); emitTOC(); }
-  if (cur.length || !pages.length) newPage();
+  if (s.toc && s.tocPosition === 'end') { startPage(); emitTOC(); }
+}
+/* --- pdf-pages:end --- */
+async function exportCompPDF() {
+  const s = comp.settings;
+  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
+  const pageW = s.pageSize === 'Letter' ? 612 : 595;
+  const pageH = s.pageSize === 'Letter' ? 792 : 842;
+  const marg = ({ narrow: 42, normal: 64, wide: 90 })[s.margins] || 64;
+  const size = s.fontSize || 12;
+  const lh = size * (s.lineSpacing || 1.5);
+  const usableW = pageW - marg * 2;
+  const charW = size * 0.6;                       // IBM Plex Mono advance = 0.6em
+  const maxChars = Math.max(8, Math.floor(usableW / charW));
+  const F = { normal: 'F1', bold: 'F2', italic: 'F3' };
+
+  const layout = createPdfLayout({
+    pageW, pageH, margin: marg, fontSize: size, lineHeight: lh,
+    usableWidth: usableW, charWidth: charW, maxChars, fonts: F
+  });
+  // The page builder stays free of the `novel` global, so the title fallback resolves here.
+  buildPdfPages(flow, { ...s, titleText: s.titleText || novel.title || 'Untitled' }, layout, htmlToBlocks);
+  const pages = layout.finish();
 
   // serialize — embed only the styles the document actually uses
   const usedRes = new Set();
