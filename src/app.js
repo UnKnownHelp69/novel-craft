@@ -21,6 +21,13 @@ const uuid = () =>
 /* --- docx-strings:esc:start --- */
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 /* --- docx-strings:esc:end --- */
+/* --- docx-strings:escAttr:start --- */
+/* escAttr: like esc() but also escapes " → &quot;.  Use for values interpolated
+   inside double-quoted HTML attribute strings (e.g. value="${escAttr(x)}").
+   esc() intentionally leaves quotes alone — its element-content behavior is
+   pinned by existing DOCX tests — so attribute contexts need this variant. */
+const escAttr = s => esc(s).replace(/"/g, '&quot;');
+/* --- docx-strings:escAttr:end --- */
 const countWords = t => {
   const m = (t || '').trim().match(/[\p{L}\p{N}'’-]+/gu);
   return m ? m.length : 0;
@@ -2714,7 +2721,7 @@ function openCharPanel(ch) {
   panel.innerHTML =
     `<div class="gp-head">Character<button class="gp-x" id="gpClose">✕</button></div>
      <label class="field-label">Name</label>
-     <input type="text" id="gcName" class="control" value="${esc(ch.name || '')}" />
+     <input type="text" id="gcName" class="control" value="${escAttr(ch.name || '')}" />
      <label class="field-label">Role</label>
      <select id="gcRole" class="control"></select>
      <label class="field-label">Node colour</label>
@@ -3775,16 +3782,16 @@ function renderCompSettings() {
      <label class="toggle-row"><input type="checkbox" data-cs="includeParts"${s.includeParts ? ' checked' : ''}> <span>Include part dividers</span></label>
      <label class="field-label">Scene separator</label>
      <select class="control" data-cs="sceneSeparator">${[['***', '* * *'], ['blank', 'Blank line'], ['custom', 'Custom…']].map(([v, t]) => opt(v, t, s.sceneSeparator)).join('')}</select>
-     ${s.sceneSeparator === 'custom' ? `<input type="text" class="control" data-cs="sceneSepCustom" value="${esc(s.sceneSepCustom || '')}" placeholder="Separator text">` : ''}
+     ${s.sceneSeparator === 'custom' ? `<input type="text" class="control" data-cs="sceneSepCustom" value="${escAttr(s.sceneSepCustom || '')}" placeholder="Separator text">` : ''}
      <label class="field-label">Number chapters</label>
      <select class="control" data-cs="numberChapters">${[['arabic', 'Chapter 1'], ['word', 'Chapter One'], ['plain', '1.'], ['none', 'None']].map(([v, t]) => opt(v, t, s.numberChapters)).join('')}</select>
 
      <div class="cs-group">Title page</div>
      <label class="toggle-row"><input type="checkbox" data-cs="titlePage"${s.titlePage ? ' checked' : ''}> <span>Include title page</span></label>
-     <label class="field-label">Title</label><input type="text" class="control" data-cs="titleText" value="${esc(s.titleText || '')}">
-     <label class="field-label">Subtitle</label><input type="text" class="control" data-cs="subtitle" value="${esc(s.subtitle || '')}">
-     <label class="field-label">Author</label><input type="text" class="control" data-cs="author" value="${esc(s.author || '')}">
-     <label class="field-label">Date</label><input type="text" class="control" data-cs="dateText" value="${esc(s.dateText || '')}" placeholder="e.g. 2026">
+     <label class="field-label">Title</label><input type="text" class="control" data-cs="titleText" value="${escAttr(s.titleText || '')}">
+     <label class="field-label">Subtitle</label><input type="text" class="control" data-cs="subtitle" value="${escAttr(s.subtitle || '')}">
+     <label class="field-label">Author</label><input type="text" class="control" data-cs="author" value="${escAttr(s.author || '')}">
+     <label class="field-label">Date</label><input type="text" class="control" data-cs="dateText" value="${escAttr(s.dateText || '')}" placeholder="e.g. 2026">
 
      <div class="cs-group">Table of contents</div>
      <label class="toggle-row"><input type="checkbox" data-cs="toc"${s.toc ? ' checked' : ''}> <span>Include table of contents</span></label>
