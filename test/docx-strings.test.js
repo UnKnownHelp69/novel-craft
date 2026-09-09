@@ -43,12 +43,12 @@ function loadDocxBuilders() {
   assert.ok(compTocStart !== -1 && compTocEnd > compTocStart,
     'comp-toc markers missing from src/app.js — compTocEntries moved, update this test');
   const compTocSrc = APP.slice(compTocStart, compTocEnd);
-  const src = compTocSrc + '\n' + ['esc', 'xmlesc', 'builders'].map(slice).join('\n');
+  const src = compTocSrc + '\n' + ['esc', 'escAttr', 'xmlesc', 'builders'].map(slice).join('\n');
   // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function(`'use strict';\n${src}\nreturn { xmlEsc, docxP, docxTOC, docxPageBreak };`)();
+  return new Function(`'use strict';\n${src}\nreturn { esc, escAttr, xmlEsc, docxP, docxTOC, docxPageBreak };`)();
 }
 
-const { xmlEsc, docxP, docxTOC, docxPageBreak } = loadDocxBuilders();
+const { esc, escAttr, xmlEsc, docxP, docxTOC, docxPageBreak } = loadDocxBuilders();
 
 /* Mirrors defaultCompSettings() for the fields these builders read; each test overrides
    only what it is about, so an unrelated default changing cannot make a test lie. */
@@ -84,6 +84,42 @@ test('xmlEsc turns null and undefined into an empty string, not "null"/"undefine
   assert.strictEqual(xmlEsc(''), '');
   assert.strictEqual(xmlEsc(0), '0', 'a real zero is not the same as absent');
   assert.strictEqual(xmlEsc(false), 'false');
+});
+
+/* ---------- escAttr ---------- */
+
+test('escAttr passes through a plain string with nothing to escape', () => {
+  assert.strictEqual(escAttr('hello world'), 'hello world');
+  assert.strictEqual(escAttr(''), '');
+});
+
+test('escAttr escapes double quotes to &quot;', () => {
+  assert.strictEqual(escAttr('say "hi"'), 'say &quot;hi&quot;');
+  assert.strictEqual(escAttr('"'), '&quot;');
+  assert.strictEqual(escAttr('a"b"c'), 'a&quot;b&quot;c');
+});
+
+test('escAttr still escapes &, <, > exactly like esc()', () => {
+  assert.strictEqual(escAttr('a & b'), 'a &amp; b');
+  assert.strictEqual(escAttr('<tag>'), '&lt;tag&gt;');
+  assert.strictEqual(escAttr('a<b>c&d'), 'a&lt;b&gt;c&amp;d');
+  // Ampersand-first ordering preserved: a literal '&lt;' becomes '&amp;lt;'
+  assert.strictEqual(escAttr('&lt;'), '&amp;lt;');
+});
+
+test('escAttr handles a string combining multiple special characters and Cyrillic/typographic punctuation', () => {
+  assert.strictEqual(
+    escAttr('Кавычки «ёлочки» & "dagger" — <тире>'),
+    'Кавычки «ёлочки» &amp; &quot;dagger&quot; — &lt;тире&gt;'
+  );
+});
+
+test('escAttr agrees with esc() on every input that contains no double quotes', () => {
+  // escAttr is defined as esc(s) + quote escaping, so for strings without ",
+  // its output must be identical to esc().
+  for (const s of ['plain', 'Tom & Jerry', '<tag>', 'Привет & мир', '&lt;', '']) {
+    assert.strictEqual(escAttr(s), esc(s), `mismatch for: ${JSON.stringify(s)}`);
+  }
 });
 
 /* ---------- docxP: paragraph properties ---------- */
