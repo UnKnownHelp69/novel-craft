@@ -425,3 +425,80 @@ test('scene fields absent from an older file are defaulted without clobbering re
   assert.strictEqual(set.timeOfDay, 'night');
   assert.strictEqual(set.status, 'done');
 });
+
+test('leftover chapter.notes are merged into the first scene when scenes already exist (issue #16)', () => {
+  // A partially-migrated or hand-edited file can have a chapter that already has a
+  // populated scenes array *and* still carries c.notes on the chapter object itself.
+  // Before the fix, those notes were silently destroyed by `delete c.notes`.
+  const n = migrateNovel({
+    chapters: [{
+      title: 'Mixed',
+      scenes: [
+        { title: 'S1', content: '<p>First</p>', notes: [{ content: 'existing scene note', typeId: 'fix' }] },
+        { title: 'S2', content: '<p>Second</p>' }
+      ],
+      notes: [
+        { content: 'orphan chapter note', typeId: 'Исправить' },
+        { content: 'another orphan' }
+      ]
+    }]
+  });
+
+  const c = n.chapters[0];
+
+  // chapter.notes must be gone (same cleanup as before)
+  assert.ok(!('notes' in c), 'chapter.notes survived the migration');
+
+  // The two orphan notes should have been appended to the first scene's notes,
+  // after its own existing note.
+  const s1Notes = c.scenes[0].notes;
+  assert.strictEqual(s1Notes.length, 3,
+    'first scene should have 1 existing + 2 merged notes');
+
+  // Existing scene note is still first and untouched
+  assert.strictEqual(s1Notes[0].content, 'existing scene note');
+  assert.strictEqual(s1Notes[0].typeId, 'fix');
+  assert.ok(isId(s1Notes[0].id), 'existing scene note must have an id');
+
+  // First orphan note: Russian typeId should be remapped by normNote
+  assert.strictEqual(s1Notes[1].content, 'orphan chapter note');
+  assert.strictEqual(s1Notes[1].typeId, 'fix', 'Russian typeId "Исправить" was not remapped');
+  assert.ok(isId(s1Notes[1].id), 'merged orphan note must have an id');
+
+  // Second orphan note: missing typeId should fall back to 'idea'
+  assert.strictEqual(s1Notes[2].content, 'another orphan');
+  assert.strictEqual(s1Notes[2].typeId, 'idea', 'missing typeId should fall back to idea');
+  assert.ok(isId(s1Notes[2].id), 'merged orphan note must have an id');
+
+  // Second scene must be unaffected
+  assert.deepStrictEqual(c.scenes[1].notes, [], 'second scene should have no notes');
+});
+
+test('a chapter with scenes and no leftover notes is unaffected (issue #16 no-op case)', () => {
+  // Confirm nothing changes for a chapter that has scenes and either no c.notes property
+  // at all, or an empty c.notes array.
+  for (const notes of [undefined, [], null]) {
+    const label = JSON.stringify(notes);
+    const input = {
+      chapters: [{
+        title: 'Normal',
+        scenes: [
+          { title: 'S1', content: '<p>Text</p>', notes: [{ content: 'scene note' }] },
+          { title: 'S2', content: '<p>More</p>' }
+        ]
+      }]
+    };
+    if (notes !== undefined) input.chapters[0].notes = notes;
+    const n = migrateNovel(input);
+    const c = n.chapters[0];
+
+    assert.ok(!('notes' in c), `notes=${label}: chapter.notes was not deleted`);
+    assert.strictEqual(c.scenes[0].notes.length, 1,
+      `notes=${label}: first scene notes were altered`);
+    assert.strictEqual(c.scenes[0].notes[0].content, 'scene note',
+      `notes=${label}: scene note content changed`);
+    assert.deepStrictEqual(c.scenes[1].notes, [],
+      `notes=${label}: second scene should have no notes`);
+  }
+});
+

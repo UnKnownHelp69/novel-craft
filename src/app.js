@@ -733,6 +733,15 @@ function migrateNovel(d) {
       s.notes = Array.isArray(c.notes) ? c.notes : [];
       c.scenes = [s];
       migratedToScenes = true;
+    } else if (Array.isArray(c.notes) && c.notes.length) {
+      // Issue #16: the chapter already had scenes (legacy-wrap was skipped)
+      // but still carries leftover c.notes — merge them into the first scene's
+      // notes so they aren't silently destroyed by the delete below.  This is
+      // consistent with the legacy-wrap branch above, which places chapter-level
+      // notes on the (single) scene it creates.
+      const dest = c.scenes[0];
+      if (!Array.isArray(dest.notes)) dest.notes = [];
+      dest.notes.push(...c.notes);
     }
     delete c.content; delete c.markdownContent; delete c.notes;
     c.scenes.forEach(normScene);
