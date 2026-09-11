@@ -1552,7 +1552,15 @@ async function checkRecovery() {
     const onCancel = () => done('declined');   // keep the backup untouched; just go to the start menu
     confirmModal('Recover unsaved work',
       'Unsaved changes from a previous session were found. Restore them?',
-      () => { setCurrentNovel(payload, data.path); markDirty(); toast('Recovered'); done('restored'); });
+      () => {
+        try {
+          setCurrentNovel(payload, data.path); markDirty(); toast('Recovered'); done('restored');
+        } catch (e) {
+          console.error('Recovery restore failed:', e);
+          toast('Could not restore backup — the saved data appears corrupted');
+          done('declined');   // leave the start menu; backup stays in localStorage for inspection
+        }
+      });
     cancel.addEventListener('click', onCancel);
   });
 }
