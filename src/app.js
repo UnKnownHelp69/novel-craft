@@ -325,6 +325,7 @@ function deleteScene(sceneId) {
     updateCounters();
     renderNotes();
     renderNoteCard();
+    if (corkboardOpen) renderCorkboard();
     markDirty();
     toast('Scene deleted');
   });
@@ -2297,7 +2298,7 @@ function buildSceneCard(s, c) {
   let clickTimer = null;
   card.querySelector('.cc-badge').onclick = e => { e.stopPropagation(); cycleStatus(s); };
   card.querySelector('.cc-edit').onclick = e => { e.stopPropagation(); selectScene(s.id); closeCorkboard(); };
-  card.querySelector('.cc-del').onclick = e => { e.stopPropagation(); deleteScene(s.id); setTimeout(renderCorkboard, 60); };
+  card.querySelector('.cc-del').onclick = e => { e.stopPropagation(); deleteScene(s.id); };
   card.querySelector('.cc-title').ondblclick = e => { e.stopPropagation(); if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; } renameScene(s.id); setTimeout(renderCorkboard, 60); };
   card.onclick = e => {
     if (suppressCorkClick) return;
