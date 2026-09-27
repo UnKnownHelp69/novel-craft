@@ -949,7 +949,8 @@ mdEditor.addEventListener('input', () => {
   const s = currentScene();
   if (!s) return;
   s.markdownContent = mdEditor.value;
-  s.wordCount = countWords(mdEditor.value);
+  // count the rendered text, not the raw markdown, so both modes agree (and match saveCurrentScene)
+  s.wordCount = countWords(stripHtml(mdToHtml(mdEditor.value)));
   s.modifiedAt = nowISO();
   updateCounters();
   refreshSceneWordCount(s);
