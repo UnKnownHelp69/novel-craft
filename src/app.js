@@ -243,7 +243,7 @@ function selectScene(sceneId, saveFirst = true) {
   updateCounters();
   renderNotes();
   renderNoteCard();
-  localBackup();
+  if (dirty) localBackup();   // a clean novel matches disk; backing it up would plant a stale recovery offer
 }
 function selectChapter(id) {
   const c = findChapter(id);
@@ -1424,6 +1424,7 @@ async function doSave(saveAs = false) {
     }
     snapshotSaved();
     setSaved();
+    clearBackup();
     updateFilePathIndicator();
     toast(saveAs ? 'Saved a copy' : 'Project saved');
     return true;
@@ -1513,6 +1514,12 @@ function localBackup() {
     localStorage.setItem(LS_KEY, JSON.stringify({ ts: Date.now(), path: currentFilePath, novel }));
   } catch (_) {}
 }
+/* Drop the recovery backup once the in-memory novel matches disk (or was knowingly
+   discarded). A leftover backup is older than the file, and restoring it would let the
+   next autosave overwrite newer saved work with it. */
+function clearBackup() {
+  try { localStorage.removeItem(LS_KEY); } catch (_) {}
+}
 setInterval(() => { if (dirty && novel) localBackup(); }, 10000); // every 10s while dirty
 
 // every 30s: write to the current file if we have one, else only localStorage
@@ -1525,6 +1532,7 @@ setInterval(async () => {
       await invoke('write_text', { path: currentFilePath, content: serializeNovel(novel) });
       snapshotSaved();
       setSaved();
+      clearBackup();
       updateFilePathIndicator();
     } catch (_) { localBackup(); }
   } else {
@@ -4889,7 +4897,9 @@ async function destroyWindow() {
 }
 /* Three-option close flow */
 function requestClose() {
-  if (!dirty) { destroyWindow(); return; }
+  // Clean close: the open novel matches disk. With no novel open (start menu, e.g. after
+  // declining recovery) the backup is left alone so it is offered again next launch.
+  if (!dirty) { if (novel) clearBackup(); destroyWindow(); return; }
   $('#closeOverlay').classList.remove('hidden');
 }
 $('#closeSaveBtn').addEventListener('click', async () => {
@@ -4899,6 +4909,7 @@ $('#closeSaveBtn').addEventListener('click', async () => {
 });
 $('#closeDiscardBtn').addEventListener('click', () => {
   dirty = false;
+  clearBackup();   // otherwise the next launch offers to restore what was just discarded
   $('#closeOverlay').classList.add('hidden');
   destroyWindow();
 });
