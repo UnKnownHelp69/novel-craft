@@ -4333,29 +4333,36 @@ function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWid
     return rec;   // callers may patch .text later (TOC page numbers); x/y are already final
   };
   const blank = (n = 1) => { y -= lineHeight * n; if (y < margin) newPage(); };
-  const wrap = (text, opts = {}) => {
-    const words = normalizeForPdf(text).split(/\s+/).filter(Boolean);
-    if (!words.length) return;
-    const limit = opts.maxChars || maxChars;
-    let ln = '', indent = opts.firstIndent || 0;
-    words.forEach(w => {
-      const cand = ln ? ln + ' ' + w : w;
-      if (pdfLen(cand) + indent > limit && ln) { line(ln, { font: opts.font, indent, align: opts.align }); ln = w; indent = 0; }
-      else ln = cand;
+  /* Greedy line packing shared by wrap() and heading(): whole words while they fit, and a
+     word too long for any line on its own is hard-broken at the glyph that fills the line
+     (no hyphen, so the pieces rejoin to the exact word). Only the first line carries
+     firstIndent, and it counts against that line's budget. */
+  const packLines = (text, limit, firstIndent = 0) => {
+    const out = [];
+    let ln = '', indent = firstIndent;
+    const push = () => { out.push({ text: ln, indent }); ln = ''; indent = 0; };
+    normalizeForPdf(text).split(/\s+/).filter(Boolean).forEach(w => {
+      if (ln && pdfLen(ln) + 1 + pdfLen(w) + indent <= limit) { ln += ' ' + w; return; }
+      if (ln) push();
+      let g = [...w];   // code points, the unit pdfLen() measures in
+      for (let room = Math.max(1, limit - indent); g.length > room; room = Math.max(1, limit - indent)) {
+        ln = g.slice(0, room).join(''); g = g.slice(room); push();
+      }
+      ln = g.join('');
     });
-    if (ln) line(ln, { font: opts.font, indent, align: opts.align });
+    if (ln) push();
+    return out;
+  };
+  const wrap = (text, opts = {}) => {
+    packLines(text, opts.maxChars || maxChars, opts.firstIndent || 0)
+      .forEach(l => line(l.text, { font: opts.font, indent: l.indent, align: opts.align }));
   };
   const heading = (text, fsize, center) => {
     ensure(); blank(0.4);
     const cw = fsize * 0.6;
     const lim = Math.max(6, Math.floor(usableWidth / cw));
-    const norm = normalizeForPdf(text);
-    const segs = norm.match(new RegExp('.{1,' + lim + '}(\\s+|$)', 'g'));
-    const parts = (segs && segs.length) ? segs : [norm];
     let page = null;   // index of the page the heading's first line lands on
-    parts.forEach(seg => {
-      const t = seg.trim();
-      if (!t) return;
+    packLines(text, lim).forEach(({ text: t }) => {
       line(t, { font: fonts.bold, fsize, lh: fsize * 1.3, align: center ? 'center' : 'left' });
       if (page == null) page = pages.length;   // the line just went onto `cur`, i.e. pages[pages.length]
     });
