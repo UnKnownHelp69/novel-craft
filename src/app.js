@@ -35,7 +35,28 @@ const countWords = t => {
 const stripHtml = html => {
   const d = document.createElement('div');
   d.innerHTML = html || '';
-  return d.textContent || '';
+  const blocks = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TR', 'UL', 'OL', 'TABLE']);
+  let text = '';
+  const walk = node => {
+    if (node.nodeType === 3) {
+      text += node.nodeValue;
+      return;
+    }
+    if (node.nodeName === 'BR') {
+      text += '\n';
+      return;
+    }
+    const isBlock = blocks.has(node.nodeName);
+    if (isBlock && text.length > 0 && !text.endsWith('\n')) {
+      text += '\n';
+    }
+    for (let c of node.childNodes) walk(c);
+    if (isBlock && text.length > 0 && !text.endsWith('\n')) {
+      text += '\n';
+    }
+  };
+  walk(d);
+  return text.trim();
 };
 
 /* ---------- state ---------- */
