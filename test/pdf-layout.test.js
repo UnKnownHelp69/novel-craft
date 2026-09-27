@@ -14,8 +14,8 @@
  * test/docx-package.test.js).
  *
  * Several tests are marked CHARACTERIZATION: they pin what the engine does today,
- * including two behaviours that are arguably wrong (heading() dropping the front of an
- * over-long word, and bold/italic runs being flattened to plain text). They are recorded
+ * including behaviour that is arguably wrong (bold/italic runs being flattened to plain
+ * text; over-long TOC entries not wrapping). They are recorded
  * so the extraction can be proved behaviour-preserving and so a later fix has to
  * deliberately update them — not as a claim that the behaviour is correct.
  *
@@ -117,13 +117,50 @@ test('wrap fills each line greedily — the next word would not have fit', () =>
   }
 });
 
-test('CHARACTERIZATION: a word longer than the limit overflows its own line', () => {
-  // wrap() never breaks inside a word, so an over-long one is emitted whole and simply
-  // runs past the right margin. That is the deliberate trade-off, not a page-break bug.
+/* ---------- hard breaks for over-long words (issue #30) ---------- */
+
+test('wrap hard-breaks a word longer than the limit instead of overrunning the margin', () => {
   const l = layoutOf({ maxChars: 10 });
   l.wrap('short antidisestablishmentarianism end');
-  assert.deepStrictEqual(texts(l.finish()[0]),
-    ['short', 'antidisestablishmentarianism', 'end']);
+  const lines = texts(l.finish()[0]);
+  assert.deepStrictEqual(lines, ['short', 'antidisest', 'ablishment', 'arianism', 'end']);
+  for (const t of lines) assert.ok(pdfLen(t) <= 10, `over the limit: ${t}`);
+});
+
+test('the tail of a hard-broken word keeps packing words after it', () => {
+  const l = layoutOf({ maxChars: 10 });
+  l.wrap('abcdefghijklmn op qr');
+  assert.deepStrictEqual(texts(l.finish()[0]), ['abcdefghij', 'klmn op qr']);
+});
+
+test('hard breaks count code points, so Cyrillic and astral characters split intact', () => {
+  const l = layoutOf({ maxChars: 8 });
+  const word = 'Достопримечательность';   // 21 Cyrillic letters
+  l.wrap(word);
+  const lines = texts(l.finish()[0]);
+  assert.deepStrictEqual(lines, ['Достопри', 'мечатель', 'ность']);
+  assert.strictEqual(lines.join(''), word, 'no glyph is lost or duplicated');
+
+  const e = layoutOf({ maxChars: 8 });
+  e.wrap('𝔸𝔹ℂ𝔻𝔼𝔽𝔾ℍ𝕀𝕁');                      // surrogate pairs must not be cut in half
+  const astral = texts(e.finish()[0]);
+  assert.deepStrictEqual(astral.map(pdfLen), [8, 2]);
+  assert.strictEqual(astral.join(''), '𝔸𝔹ℂ𝔻𝔼𝔽𝔾ℍ𝕀𝕁');
+});
+
+test('a hard break on the first line respects firstIndent, later lines do not carry it', () => {
+  const l = layoutOf({ maxChars: 10 });
+  l.wrap('abcdefghijklmnopqrstuvwxyz', { firstIndent: 5 });
+  const page = l.finish()[0];
+  assert.deepStrictEqual(texts(page), ['abcde', 'fghijklmno', 'pqrstuvwxy', 'z']);
+  assert.strictEqual(page[0].x, A4.margin + 5 * A4.charWidth);
+  for (const ln of page.slice(1)) assert.strictEqual(ln.x, A4.margin);
+});
+
+test('ordinary text wraps exactly as before — hard breaks only kick in for over-long words', () => {
+  const l = layoutOf({ maxChars: 20 });
+  l.wrap('the quick brown fox jumps over the lazy dog', { firstIndent: 5 });
+  assert.deepStrictEqual(texts(l.finish()[0]), ['the quick brown', 'fox jumps over the', 'lazy dog']);
 });
 
 test('wrap firstIndent shifts only the first line and counts against its limit', () => {
@@ -199,19 +236,26 @@ test('heading chunks a long title by width, not by words', () => {
     'alpha bravo charlie delta echo foxtrot golf hotel india juliett kilo lima');
 });
 
-test('CHARACTERIZATION: heading DROPS the front of a word longer than the chunk width', () => {
-  // heading() chunks with /.{1,lim}(\s+|$)/g. For a single word longer than lim there is
-  // no chunk boundary that can be followed by whitespace-or-end, so the regex skips
-  // forward until the tail fits — and everything before that tail is silently discarded.
-  // This is worse than a mid-word split: the characters never reach the PDF at all.
-  // Pinned as current behaviour; see the report — worth its own issue.
+test('heading keeps every glyph of a word longer than the chunk width (issue #30)', () => {
+  // The old /.{1,lim}(\s+|$)/g chunking silently dropped the front of such a word
+  // ("Supercalifragilistic" -> "ragilistic"). It is now hard-broken instead.
   const l = layoutOf({ usableWidth: 72 });          // lim = floor(72 / 7.2) = 10
   l.heading('Supercalifragilistic', 12, false);     // 20 glyphs, no spaces
-  assert.deepStrictEqual(texts(l.finish()[0]), ['ragilistic']);
+  assert.deepStrictEqual(texts(l.finish()[0]), ['Supercalif', 'ragilistic']);
 
   const l2 = layoutOf({ usableWidth: 72 });
   l2.heading('abcdefghijklmno', 12, false);         // 15 glyphs
-  assert.deepStrictEqual(texts(l2.finish()[0]), ['fghijklmno']);
+  assert.deepStrictEqual(texts(l2.finish()[0]), ['abcdefghij', 'klmno']);
+});
+
+test('a long word inside a production-size part heading is broken, not truncated', () => {
+  // A4, normal margins, 20pt part heading: floor(467 / 12) = 38 glyphs per line.
+  const word = 'Анти' + 'x'.repeat(50);             // 54 glyphs, mixed scripts
+  const l = layoutOf();
+  l.heading('Part ' + word, 20, true);
+  const lines = texts(l.finish()[0]);
+  assert.deepStrictEqual(lines, ['Part', word.slice(0, 38), word.slice(38)]);
+  assert.strictEqual(lines.slice(1).join(''), word);
 });
 
 test('heading chunking uses the heading font size, not the body size', () => {
