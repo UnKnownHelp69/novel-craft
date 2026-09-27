@@ -335,7 +335,9 @@ function renameScene(sceneId) {
   if (!f) return;
   promptModal('Rename scene', 'New title:', f.scene.title, v => {
     f.scene.title = v || f.scene.title;
-    renderTree(); updateBreadcrumb(); markDirty();
+    renderTree(); updateBreadcrumb();
+    if (corkboardOpen) renderCorkboard();
+    markDirty();
   });
 }
 function moveSceneToChapter(sceneId, chapterId) {
@@ -2300,7 +2302,7 @@ function buildSceneCard(s, c) {
   card.querySelector('.cc-badge').onclick = e => { e.stopPropagation(); cycleStatus(s); };
   card.querySelector('.cc-edit').onclick = e => { e.stopPropagation(); selectScene(s.id); closeCorkboard(); };
   card.querySelector('.cc-del').onclick = e => { e.stopPropagation(); deleteScene(s.id); };
-  card.querySelector('.cc-title').ondblclick = e => { e.stopPropagation(); if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; } renameScene(s.id); setTimeout(renderCorkboard, 60); };
+  card.querySelector('.cc-title').ondblclick = e => { e.stopPropagation(); if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; } renameScene(s.id); };
   card.onclick = e => {
     if (suppressCorkClick) return;
     if (e.target.closest('.cc-actions') || e.target.closest('.cc-badge')) return;
