@@ -318,3 +318,34 @@ test('a flow with only breaks works', () => {
   assert.strictEqual(flow.length, 2);
   assert.ok(flow.every(f => f.type === 'break'));
 });
+
+/* ============================================================
+ * Scene item titles — live vs. explicit override (issue #38)
+ * ============================================================ */
+
+/* Compilation scene items no longer copy the scene title when created; `title` is set
+   only when the user renames the item in the compilation. buildFlow() must then track
+   the live scene title, including renames made after the item was created. */
+test('a scene item without its own title uses the live scene title, and follows renames', () => {
+  const chapters = [{ id: 'c', title: 'Chapter 1', scenes: [{ id: 'x', title: 'Scene 2', content: '' }] }];
+  const find = id => { const s = chapters[0].scenes.find(v => v.id === id); return s && { chapter: chapters[0], scene: s }; };
+  const items = [{ type: 'scene', sceneId: 'x' }];
+
+  const before = buildFlow(items, BASE_SETTINGS, chapters, find).find(f => f.type === 'scene');
+  assert.strictEqual(before.title, 'Scene 2');
+
+  chapters[0].scenes[0].title = 'The Duel';   // renamed in the tree after the item existed
+  const flow = buildFlow(items, BASE_SETTINGS, chapters, find);
+  assert.strictEqual(flow.find(f => f.type === 'scene').title, 'The Duel');
+  assert.deepStrictEqual(
+    compTocEntries(flow, { ...BASE_SETTINGS, tocDepth: 'scenes' }).filter(f => f.type === 'scene').map(f => f.title),
+    ['The Duel'], 'the TOC entry follows the rename too');
+});
+
+test('an explicit compilation title overrides the scene title and survives scene renames', () => {
+  const chapters = [{ id: 'c', title: 'Chapter 1', scenes: [{ id: 'x', title: 'Scene 2', content: '' }] }];
+  const find = id => { const s = chapters[0].scenes.find(v => v.id === id); return s && { chapter: chapters[0], scene: s }; };
+  const items = [{ type: 'scene', sceneId: 'x', title: 'Прелюдия' }];
+  chapters[0].scenes[0].title = 'The Duel';
+  assert.strictEqual(buildFlow(items, BASE_SETTINGS, chapters, find).find(f => f.type === 'scene').title, 'Прелюдия');
+});

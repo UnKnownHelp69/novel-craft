@@ -3633,7 +3633,8 @@ const STANDARD_PRESET = defaultCompSettings();
 function buildDefaultOrder() {
   const items = [];
   novel.chapters.forEach(c => (c.scenes || []).forEach(s => {
-    items.push({ id: uuid(), type: 'scene', sceneId: s.id, chapterId: c.id, title: s.title });
+    // no `title`: scene items show the live scene title unless renamed in the compilation
+    items.push({ id: uuid(), type: 'scene', sceneId: s.id, chapterId: c.id });
   }));
   return items;
 }
@@ -3685,7 +3686,7 @@ function renderCompAvailable() {
       row.dataset.sceneId = s.id;
       row.dataset.chapterId = c.id;
       row.innerHTML = `<span class="ca-t">🎬 ${esc(s.title)}</span><span class="ca-w">${s.wordCount || 0}</span><button class="ca-add" title="Add to compilation">＋</button>`;
-      row.querySelector('.ca-add').onclick = e => { e.stopPropagation(); comp.items.push({ id: uuid(), type: 'scene', sceneId: s.id, chapterId: c.id, title: s.title }); renderComp(); };
+      row.querySelector('.ca-add').onclick = e => { e.stopPropagation(); comp.items.push({ id: uuid(), type: 'scene', sceneId: s.id, chapterId: c.id }); renderComp(); };
       grp.appendChild(row);
     });
     host.appendChild(grp);
@@ -3719,7 +3720,11 @@ function renderCompOrder() {
          <span class="co-src">from Ch. ${ci}</span>
          <span class="co-w">${words}</span>
          <button class="co-x" title="Remove from compilation">✕</button>`;
-      row.querySelector('.co-title').ondblclick = () => promptModal('Rename in compilation', 'Title (does not change the original scene):', it.title, v => { it.title = v || it.title; renderComp(); });
+      // it.title is an explicit override only; typing the scene's own title drops it again
+      row.querySelector('.co-title').ondblclick = () => promptModal('Rename in compilation', 'Title (does not change the original scene):', it.title || (f ? f.scene.title : ''), v => {
+        if (v) { if (f && v === f.scene.title) delete it.title; else it.title = v; }
+        renderComp();
+      });
     }
     row.querySelector('.co-x').onclick = () => { comp.items.splice(idx, 1); renderComp(); };
     host.appendChild(row);
@@ -3774,8 +3779,7 @@ function initCompEvents() {
     if (d.el) d.el.classList.remove('co-dragging');
     if (!d.started || d.targetIdx === null) return;
     if (d.mode === 'new') {
-      const f = findScene(d.sceneId);
-      const item = { id: uuid(), type: 'scene', sceneId: d.sceneId, chapterId: d.chapterId, title: f ? f.scene.title : 'Scene' };
+      const item = { id: uuid(), type: 'scene', sceneId: d.sceneId, chapterId: d.chapterId };
       comp.items.splice(d.targetIdx, 0, item);
     } else {
       let ti = d.targetIdx;
