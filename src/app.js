@@ -2118,10 +2118,10 @@ function showCustomTypeForm(existing, anchorRow) {
   form.className = 'nt-form';
   const color = existing ? existing.color : '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
   form.innerHTML =
-    `<input type="text" class="control ntf-name" placeholder="Name" value="${existing ? esc(existing.name) : ''}">
+    `<input type="text" class="control ntf-name" placeholder="Name" value="${existing ? escAttr(existing.name) : ''}">
      <div class="ntf-row">
        <input type="color" class="ntf-color" value="${color}" title="Color">
-       <input type="text" class="control ntf-icon" maxlength="2" placeholder="Icon" value="${existing ? esc(existing.icon || '') : ''}">
+       <input type="text" class="control ntf-icon" maxlength="2" placeholder="Icon" value="${existing ? escAttr(existing.icon || '') : ''}">
      </div>
      <div class="ntf-actions">
        <button class="tbtn subtle ntf-cancel">Cancel</button>
