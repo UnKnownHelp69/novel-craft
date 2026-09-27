@@ -4327,8 +4327,10 @@ function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWid
     const cw = fs * 0.6;
     let x = margin + (opts.indent || 0) * charWidth;
     if (opts.align === 'center') x = margin + (usableWidth - pdfLen(text) * cw) / 2;
-    cur.push({ x: Math.max(margin, x), y, text, font, fs });
+    const rec = { x: Math.max(margin, x), y, text, font, fs };
+    cur.push(rec);
     y -= (opts.lh || lineHeight);
+    return rec;   // callers may patch .text later (TOC page numbers); x/y are already final
   };
   const blank = (n = 1) => { y -= lineHeight * n; if (y < margin) newPage(); };
   const wrap = (text, opts = {}) => {
@@ -4350,11 +4352,16 @@ function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWid
     const norm = normalizeForPdf(text);
     const segs = norm.match(new RegExp('.{1,' + lim + '}(\\s+|$)', 'g'));
     const parts = (segs && segs.length) ? segs : [norm];
+    let page = null;   // index of the page the heading's first line lands on
     parts.forEach(seg => {
       const t = seg.trim();
-      if (t) line(t, { font: fonts.bold, fsize, lh: fsize * 1.3, align: center ? 'center' : 'left' });
+      if (!t) return;
+      line(t, { font: fonts.bold, fsize, lh: fsize * 1.3, align: center ? 'center' : 'left' });
+      if (page == null) page = pages.length;   // the line just went onto `cur`, i.e. pages[pages.length]
     });
+    if (page == null) page = pages.length;
     blank(0.5);
+    return page;
   };
   /* Start the next run of content on a page of its own: break to a fresh page unless the
      current one is still untouched, then optionally drop the cursor to a fraction of the
@@ -4366,7 +4373,7 @@ function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWid
   /* Terminal. Flushes the page in progress, guarantees at least one page even for an
      empty document, and hands back the finished list. Call it once. */
   const finish = () => { if (cur.length || !pages.length) newPage(); return pages; };
-  return { fontSize, fonts, newPage, ensure, line, blank, wrap, heading, startPage, finish };
+  return { fontSize, fonts, maxChars, newPage, ensure, line, blank, wrap, heading, startPage, finish };
 }
 /* --- pdf-layout:end --- */
 /* --- pdf-pages:start --- pure, DOM-free driver: walks the compilation flow and decides
@@ -4393,23 +4400,31 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
   }
   // toc (after title)
   const tocEntries = compTocEntries(flow, s);
+  /* Page numbers aren't known when a leading TOC is emitted, so each entry is drawn as
+     its bare title and patched once the body is laid out. One entry is always one line,
+     so the patch never changes how many pages the TOC takes — no second layout pass. */
+  const tocLines = [];
+  const headingPage = new Map();   // flow entry -> page index its heading landed on
   const emitTOC = () => {
     if (!s.toc || !tocEntries.length) return;
     line('Contents', { font: F.bold, fsize: size + 4, lh: (size + 4) * 1.4, align: 'center' });
     blank(0.6);
-    tocEntries.forEach(f => line(normalizeForPdf(f.title), { indent: f.type === 'scene' ? 3 : 0 }));
+    tocEntries.forEach(f => {
+      const indent = f.type === 'scene' ? 3 : 0;
+      tocLines.push({ f, indent, rec: line(normalizeForPdf(f.title), { indent }) });
+    });
     newPage();
   };
   if (s.toc && s.tocPosition === 'afterTitle') emitTOC();
 
   let lastScene = false;
   flow.forEach(f => {
-    if (f.type === 'part') { startPage(0.5); heading(f.title, size + 8, true); lastScene = false; }
-    else if (f.type === 'chapter') { startPage(); heading(f.title, size + 5, true); lastScene = false; }
+    if (f.type === 'part') { startPage(0.5); headingPage.set(f, heading(f.title, size + 8, true)); lastScene = false; }
+    else if (f.type === 'chapter') { startPage(); headingPage.set(f, heading(f.title, size + 5, true)); lastScene = false; }
     else if (f.type === 'break') { blank(0.5); line(normalizeForPdf(sepText(s) || '* * *'), { align: 'center' }); blank(0.5); lastScene = false; }
     else {
       if (lastScene) { blank(0.4); line(normalizeForPdf(sepText(s) || ''), { align: 'center' }); blank(0.4); }
-      if (f.showTitle) heading(f.title, size + 2, false);
+      if (f.showTitle) headingPage.set(f, heading(f.title, size + 2, false));
       htmlToBlocksFn(f.html).forEach(bl => {
         // Runs are flattened to their text: a line carries one font, so bold/italic is lost.
         const txt = bl.runs.map(r => r.text).join('');
@@ -4421,6 +4436,14 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
     }
   });
   if (s.toc && s.tocPosition === 'end') { startPage(); emitTOC(); }
+
+  // Same label the page footer prints (exportCompPDF): startPage + page index. Dot leaders
+  // right-align the number at the margin; the font is monospaced, so glyphs are columns.
+  tocLines.forEach(({ f, indent, rec }) => {
+    const num = String((s.startPage || 1) + headingPage.get(f));
+    const dots = layout.maxChars - indent - pdfLen(rec.text) - pdfLen(num) - 2;
+    rec.text += dots > 0 ? ' ' + '.'.repeat(dots) + ' ' + num : ' ' + num;
+  });
 }
 /* --- pdf-pages:end --- */
 async function exportCompPDF() {

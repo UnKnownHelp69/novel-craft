@@ -532,12 +532,20 @@ test('no title page means the body starts on the first page', () => {
   assert.deepStrictEqual(texts(pages[0]), ['Часть Первая']);
 });
 
+/* A TOC line is "<title> <dot leaders> <page>", or "<title> <page>" when the title
+   leaves no room for leaders. */
+const tocEntry = text => {
+  const m = /^(.*?) (?:\.+ )?(\d+)$/.exec(text);
+  assert.ok(m, `not a numbered TOC entry: ${JSON.stringify(text)}`);
+  return { title: m[1], page: Number(m[2]) };
+};
+
 test('the table of contents follows the title page and matches compTocEntries', () => {
   const { s, flow, pages } = build();
   const toc = pages[1];
   assert.strictEqual(toc[0].text, 'Contents');
   assert.strictEqual(toc[0].font, A4.fonts.bold);
-  assert.deepStrictEqual(texts(toc).slice(1), compTocEntries(flow, s).map(f => f.title));
+  assert.deepStrictEqual(texts(toc).slice(1).map(t => tocEntry(t).title), compTocEntries(flow, s).map(f => f.title));
 });
 
 test('scene entries in the contents are indented, parts and chapters are not', () => {
@@ -555,7 +563,88 @@ test('tocPosition "end" puts the contents on the last page instead', () => {
   assert.strictEqual(pages[1][0].text, 'Часть Первая', 'the body starts right after the title page');
   const last = pages[pages.length - 1];
   assert.strictEqual(last[0].text, 'Contents');
-  assert.deepStrictEqual(texts(last).slice(1), compTocEntries(flow, s).map(f => f.title));
+  assert.deepStrictEqual(texts(last).slice(1).map(t => tocEntry(t).title), compTocEntries(flow, s).map(f => f.title));
+});
+
+/* ---------- TOC page numbers (issue #8) ---------- */
+
+/* Every TOC line, parsed, next to the page its heading actually landed on. The heading is
+   the bold line whose text is exactly the title; the TOC's own lines never match it
+   because they carry the leaders and number. */
+function tocVsHeadings(pages, s) {
+  const titles = new Set(compTocEntries(buildFlow(ITEMS, s, CHAPTERS, findScene), s).map(f => f.title));
+  return pages.flatMap(p => p)
+    .filter(l => l.font === A4.fonts.normal && / \d+$/.test(l.text) && titles.has(tocEntry(l.text).title))
+    .map(l => {
+      const e = tocEntry(l.text);
+      const at = pages.findIndex(p => p.some(h => h.font === A4.fonts.bold && h.text === e.title));
+      assert.ok(at !== -1, `no heading found for TOC entry ${e.title}`);
+      return { ...e, expected: (s.startPage || 1) + at };
+    });
+}
+
+test('each TOC entry carries the page number its heading lands on', () => {
+  const { s, flow, pages } = build();
+  const rows = tocVsHeadings(pages, s);
+  assert.strictEqual(rows.length, compTocEntries(flow, s).length);
+  for (const r of rows) assert.strictEqual(r.page, r.expected, `TOC entry ${r.title}`);
+  // The first part follows the title page and the one-page TOC: physical page 3.
+  assert.strictEqual(rows[0].title, 'Часть Первая');
+  assert.strictEqual(rows[0].page, 3);
+});
+
+test('page numbers are also right with the TOC at the end and with no title page', () => {
+  for (const over of [{ tocPosition: 'end' }, { titlePage: false }, { titlePage: false, tocPosition: 'end' }]) {
+    const { s, pages } = build(over);
+    for (const r of tocVsHeadings(pages, s)) assert.strictEqual(r.page, r.expected, `${JSON.stringify(over)}: ${r.title}`);
+  }
+});
+
+test('TOC numbers follow the footer label, which starts at settings.startPage', () => {
+  const plain = tocVsHeadings(build().pages, settings());
+  const offset = build({ startPage: 7 });
+  const rows = tocVsHeadings(offset.pages, offset.s);
+  assert.deepStrictEqual(rows.map(r => r.page), plain.map(r => r.page + 6));
+  for (const r of rows) assert.strictEqual(r.page, r.expected, r.title);
+});
+
+test('a TOC spanning several pages shifts every body page number by its length', () => {
+  // 90 chapters: the leading TOC alone needs more than two pages, and every number after
+  // it has to account for that.
+  const flow = [];
+  for (let i = 1; i <= 90; i++) {
+    flow.push({ type: 'chapter', title: `Chapter ${i}`, anchor: 'h' + i });
+    flow.push({ type: 'scene', title: 's' + i, html: '', showTitle: false, anchor: null });
+  }
+  const s = settings({ titlePage: false });
+  const layout = createPdfLayout({ ...A4 });
+  buildPdfPages(flow, s, layout, stubBlocks([{ tag: 'p', runs: [{ text: 'body' }] }]));
+  const pages = layout.finish();
+  const toc = pages.flatMap(p => p).filter(l => /^Chapter \d+ \.+ \d+$/.test(l.text)).map(l => tocEntry(l.text));
+  assert.strictEqual(toc.length, 90);
+  const bodyStart = pages.findIndex(p => p.some(l => l.text === 'Chapter 1'));
+  assert.ok(bodyStart >= 3, `the TOC should span 3+ pages, body starts at index ${bodyStart}`);
+  // one chapter per page from there on, so chapter i is on physical page bodyStart + i
+  toc.forEach((e, i) => assert.strictEqual(e.page, bodyStart + 1 + i, e.title));
+});
+
+test('dot leaders right-align every number at the right margin', () => {
+  const { pages } = build();
+  pages[1].slice(1).forEach(l => {
+    const indentCols = Math.round((l.x - A4.margin) / A4.charWidth);
+    assert.strictEqual(indentCols + pdfLen(l.text), A4.maxChars, `entry ${JSON.stringify(l.text)}`);
+  });
+});
+
+test('CHARACTERIZATION: a title too long for leaders still gets its number, unwrapped', () => {
+  // TOC entries are single, unwrapped lines (issue #42); a title that leaves no room for
+  // leaders keeps just a space before the number and overflows like the title alone did.
+  const long = 'An Extremely Long Part Title That Will Not Fit On One Line At All Here';
+  const flow = [{ type: 'part', title: long, anchor: 'h0' }];
+  const layout = createPdfLayout({ ...A4 });
+  buildPdfPages(flow, settings({ titlePage: false }), layout, stubBlocks());
+  const entry = layout.finish()[0][1];
+  assert.strictEqual(entry.text, long + ' 2');
 });
 
 test('toc disabled emits no contents page at either position', () => {
