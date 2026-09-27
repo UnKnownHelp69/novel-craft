@@ -777,6 +777,10 @@ function migrateNovel(d) {
 function setCurrentNovel(n, path) {
   novel = migrateNovel(n);
   currentFilePath = path || null;
+  // Compile state belongs to the previous novel (its order, title, author); openCompile()
+  // rebuilds it for this one. Ctrl+O / the menu work while the dialog is up, so close it too.
+  comp = null;
+  if (compOpen) closeCompile();
   refreshUI();
   snapshotSaved();
   setSaved();
