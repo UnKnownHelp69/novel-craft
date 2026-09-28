@@ -325,6 +325,7 @@ function addScene(chapterId) {
   return s;
 }
 function duplicateScene(sceneId) {
+  saveCurrentScene();
   const f = findScene(sceneId);
   if (!f) return;
   const now = new Date().toISOString();
@@ -397,6 +398,7 @@ function addChapter() {
   toast('Chapter added');
 }
 function duplicateChapter(id) {
+  saveCurrentScene();
   const src = findChapter(id);
   if (!src) return;
   const copy = { ...src, id: uuid(), title: src.title + ' (copy)' };
