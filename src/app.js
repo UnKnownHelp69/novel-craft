@@ -287,7 +287,12 @@ function loadSceneIntoEditor() {
 function saveCurrentScene() {
   const s = currentScene();
   if (!s) return;
-  if (mdMode) { s.markdownContent = mdEditor.value; s.content = mdToHtml(mdEditor.value); }
+  if (mdMode) { 
+    if (mdEditor.value !== htmlToMd(s.content)) {
+      s.content = mdToHtml(mdEditor.value); 
+    }
+    s.markdownContent = mdEditor.value; 
+  }
   else { s.content = editor.innerHTML; s.markdownContent = htmlToMd(s.content); }
   s.wordCount = countWords(stripHtml(s.content));
   s.modifiedAt = new Date().toISOString();
@@ -1057,9 +1062,11 @@ function toggleMarkdownMode() {
     mdMode = true;
   } else {
     // markdown -> visual
+    if (mdEditor.value !== htmlToMd(s.content)) {
+      s.content = mdToHtml(mdEditor.value);
+    }
     s.markdownContent = mdEditor.value;
-    s.content = mdToHtml(mdEditor.value);
-    editor.innerHTML = s.content;
+    editor.innerHTML = s.content || '';
     mdEditor.classList.add('hidden');
     editor.classList.remove('hidden');
     $('#btnMarkdownMode').classList.remove('active');
