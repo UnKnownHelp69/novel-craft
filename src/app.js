@@ -4162,6 +4162,7 @@ function normalizeForPdf(str) {
     if (code === 0x2026) { o += '...'; continue; }
     if (code === 0x00A0) { o += ' '; continue; }
     if (code === 9) { o += '    '; continue; }
+    if (code === 10 || code === 13) { o += ' '; continue; }
     if (code < 32) continue;
     o += ch;
   }
@@ -4380,14 +4381,18 @@ function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWid
     const out = [];
     let ln = '', indent = firstIndent;
     const push = () => { out.push({ text: ln, indent }); ln = ''; indent = 0; };
-    normalizeForPdf(text).split(/\s+/).filter(Boolean).forEach(w => {
-      if (ln && pdfLen(ln) + 1 + pdfLen(w) + indent <= limit) { ln += ' ' + w; return; }
-      if (ln) push();
-      let g = [...w];   // code points, the unit pdfLen() measures in
-      for (let room = Math.max(1, limit - indent); g.length > room; room = Math.max(1, limit - indent)) {
-        ln = g.slice(0, room).join(''); g = g.slice(room); push();
-      }
-      ln = g.join('');
+    const pieces = (text || '').split('\n');
+    pieces.forEach((piece, i) => {
+      if (i > 0) push();
+      normalizeForPdf(piece).split(/\s+/).filter(Boolean).forEach(w => {
+        if (ln && pdfLen(ln) + 1 + pdfLen(w) + indent <= limit) { ln += ' ' + w; return; }
+        if (ln) push();
+        let g = [...w];   // code points, the unit pdfLen() measures in
+        for (let room = Math.max(1, limit - indent); g.length > room; room = Math.max(1, limit - indent)) {
+          ln = g.slice(0, room).join(''); g = g.slice(room); push();
+        }
+        ln = g.join('');
+      });
     });
     if (ln) push();
     return out;
