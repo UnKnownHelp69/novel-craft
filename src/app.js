@@ -279,7 +279,7 @@ function loadSceneIntoEditor() {
   const s = currentScene();
   if (!s) { editor.innerHTML = ''; mdEditor.value = ''; }
   else if (mdMode) mdEditor.value = s.markdownContent || htmlToMd(s.content);
-  else editor.innerHTML = s.content || '';
+  else { editor.innerHTML = s.content || ''; reconcileNotes(s); }
   updateBreadcrumb();
   updateSceneMeta();
   isLoadingContent = wasLoading;
@@ -1092,6 +1092,7 @@ function toggleMarkdownMode() {
     editor.classList.remove('hidden');
     $('#btnMarkdownMode').classList.remove('active');
     mdMode = false;
+    reconcileNotes(s);
   }
   isLoadingContent = false;
   renderNotes();   // margin dots / highlights only exist in visual mode
