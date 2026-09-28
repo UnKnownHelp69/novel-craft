@@ -4398,8 +4398,12 @@ function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWid
     return out;
   };
   const wrap = (text, opts = {}) => {
-    packLines(text, opts.maxChars || maxChars, opts.firstIndent || 0)
-      .forEach(l => line(l.text, { font: opts.font, indent: l.indent, align: opts.align }));
+    let limit = opts.maxChars || maxChars;
+    if (opts.fsize && !opts.maxChars) {
+      limit = Math.max(6, Math.floor(usableWidth / (opts.fsize * 0.6)));
+    }
+    return packLines(text, limit, opts.firstIndent || 0)
+      .map(l => line(l.text, { font: opts.font, fsize: opts.fsize, lh: opts.lh, indent: l.indent, align: opts.align }));
   };
   const heading = (text, fsize, center) => {
     ensure(); blank(0.4);
@@ -4443,10 +4447,10 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
   // title page
   if (s.titlePage) {
     startPage(0.62);
-    line(normalizeForPdf(s.titleText), { font: F.bold, fsize: size + 10, lh: (size + 10) * 1.3, align: 'center' });
-    if (s.subtitle) { blank(0.4); line(normalizeForPdf(s.subtitle), { font: F.italic, align: 'center' }); }
-    if (s.author) { blank(2); line(normalizeForPdf(s.author), { align: 'center' }); }
-    if (s.dateText) { blank(0.5); line(normalizeForPdf(s.dateText), { align: 'center' }); }
+    wrap(s.titleText, { font: F.bold, fsize: size + 10, lh: (size + 10) * 1.3, align: 'center' });
+    if (s.subtitle) { blank(0.4); wrap(s.subtitle, { font: F.italic, align: 'center' }); }
+    if (s.author) { blank(2); wrap(s.author, { align: 'center' }); }
+    if (s.dateText) { blank(0.5); wrap(s.dateText, { align: 'center' }); }
     newPage();
   }
   // toc (after title)
@@ -4462,7 +4466,10 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
     blank(0.6);
     tocEntries.forEach(f => {
       const indent = f.type === 'scene' ? 3 : 0;
-      tocLines.push({ f, indent, rec: line(normalizeForPdf(f.title), { indent }) });
+      const recs = wrap(f.title, { firstIndent: indent, maxChars: layout.maxChars - 5 });
+      if (recs && recs.length) {
+        tocLines.push({ f, indent: recs.length > 1 ? 0 : indent, rec: recs[recs.length - 1] });
+      }
     });
     newPage();
   };
