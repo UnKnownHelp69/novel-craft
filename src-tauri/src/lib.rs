@@ -119,6 +119,21 @@ fn autosave(app: tauri::AppHandle, content: String) -> Result<(), String> {
     atomic_write(&working_file(&app).to_string_lossy(), content).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn read_autosave(app: tauri::AppHandle) -> Result<String, String> {
+    fs::read_to_string(working_file(&app)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_autosave(app: tauri::AppHandle) -> Result<(), String> {
+    let p = working_file(&app);
+    if p.exists() {
+        fs::remove_file(p).map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// Write a binary file (EPUB / DOCX / images) from a base64-encoded payload.
 #[tauri::command]
 fn write_binary(path: String, base64: String) -> Result<(), String> {
@@ -321,6 +336,8 @@ pub fn run() {
             get_last_file,
             set_last_file,
             autosave,
+            read_autosave,
+            clear_autosave,
             minimize_window,
             maximize_window,
             unmaximize_window,
