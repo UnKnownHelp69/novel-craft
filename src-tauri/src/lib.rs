@@ -76,9 +76,26 @@ fn read_text(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+fn atomic_write(path: &str, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let target = PathBuf::from(path);
+    let mut temp_path = target.parent().unwrap_or_else(|| std::path::Path::new("")).to_path_buf();
+    
+    let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let temp_name = format!(".~tmp_{}_{}.tmp", epoch.as_secs(), epoch.subsec_nanos());
+    temp_path.push(temp_name);
+    
+    std::fs::write(&temp_path, contents)?;
+    
+    if let Err(e) = std::fs::rename(&temp_path, &target) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(e);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn write_text(path: String, content: String) -> Result<(), String> {
-    fs::write(&path, content).map_err(|e| e.to_string())
+    atomic_write(&path, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -94,19 +111,19 @@ fn get_last_file(app: tauri::AppHandle) -> Option<String> {
 
 #[tauri::command]
 fn set_last_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    fs::write(last_file_ptr(&app), path).map_err(|e| e.to_string())
+    atomic_write(&last_file_ptr(&app).to_string_lossy(), path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn autosave(app: tauri::AppHandle, content: String) -> Result<(), String> {
-    fs::write(working_file(&app), content).map_err(|e| e.to_string())
+    atomic_write(&working_file(&app).to_string_lossy(), content).map_err(|e| e.to_string())
 }
 
 /// Write a binary file (EPUB / DOCX / images) from a base64-encoded payload.
 #[tauri::command]
 fn write_binary(path: String, base64: String) -> Result<(), String> {
     let bytes = b64_decode(&base64).ok_or_else(|| "invalid base64".to_string())?;
-    fs::write(&path, bytes).map_err(|e| e.to_string())
+    atomic_write(&path, bytes).map_err(|e| e.to_string())
 }
 
 /// Minimal standard-base64 decoder (avoids pulling in an extra crate).
