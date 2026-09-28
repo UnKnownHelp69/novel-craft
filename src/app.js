@@ -1591,17 +1591,33 @@ $('#exportMenu').addEventListener('click', e => {
 
 /* ================= AUTOSAVE / RECOVERY ================= */
 const LS_KEY = 'novelcraft:autosave';
+let backupFailed = false;
 function localBackup() {
-  try {
-    flushNovel();
-    localStorage.setItem(LS_KEY, JSON.stringify({ ts: Date.now(), path: currentFilePath, novel }));
-  } catch (_) {}
+  flushNovel();
+  const payload = JSON.stringify({ ts: Date.now(), path: currentFilePath, novel });
+  if (hasTauri) {
+    invoke('autosave', { content: payload }).catch(e => console.error(e));
+  } else {
+    try {
+      localStorage.setItem(LS_KEY, payload);
+      backupFailed = false;
+    } catch (_) {
+      if (!backupFailed) {
+        toast('Novel too large for auto-backup. Save manually!');
+        backupFailed = true;
+      }
+    }
+  }
 }
 /* Drop the recovery backup once the in-memory novel matches disk (or was knowingly
    discarded). A leftover backup is older than the file, and restoring it would let the
    next autosave overwrite newer saved work with it. */
 function clearBackup() {
-  try { localStorage.removeItem(LS_KEY); } catch (_) {}
+  if (hasTauri) {
+    invoke('clear_autosave').catch(e => console.error(e));
+  } else {
+    try { localStorage.removeItem(LS_KEY); } catch (_) {}
+  }
 }
 setInterval(() => { if (dirty && novel) localBackup(); }, 10000); // every 10s while dirty
 
@@ -1631,7 +1647,12 @@ setInterval(async () => {
 async function checkRecovery() {
   let data, payload;
   try {
-    const raw = localStorage.getItem(LS_KEY);
+    let raw = null;
+    if (hasTauri) {
+      try { raw = await invoke('read_autosave'); } catch (_) {}
+    } else {
+      raw = localStorage.getItem(LS_KEY);
+    }
     if (!raw) return null;
     data = JSON.parse(raw);
     // support new (novel) and legacy (library) backups
