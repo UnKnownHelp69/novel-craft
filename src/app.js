@@ -1532,7 +1532,13 @@ async function doExport(kind) {
   if (hasTauri) {
     const path = await invoke('pick_save', { defaultName: name });
     if (!path) return;
-    await invoke('write_text', { path, content });
+    try {
+      await invoke('write_text', { path, content });
+    } catch (e) {
+      console.error(e);
+      toast('Export failed');
+      return;
+    }
   } else {
     downloadFile(name, content);
   }
@@ -2271,7 +2277,13 @@ async function doExportNotes(kind) {
   if (hasTauri) {
     const path = await invoke('pick_save', { defaultName: name });
     if (!path) return;
-    await invoke('write_text', { path, content });
+    try {
+      await invoke('write_text', { path, content });
+    } catch (e) {
+      console.error(e);
+      toast('Export failed');
+      return;
+    }
   } else {
     downloadFile(name, content);
   }
@@ -4059,8 +4071,13 @@ async function saveTextFile(name, content) {
   if (hasTauri) {
     const path = await invoke('pick_save', { defaultName: name });
     if (!path) return;
-    await invoke('write_text', { path, content });
-    toast('Saved ' + baseName(path));
+    try {
+      await invoke('write_text', { path, content });
+      toast('Saved ' + baseName(path));
+    } catch (e) {
+      console.error(e);
+      toast('Export failed');
+    }
   } else { downloadFile(name, content); toast('Exported ' + name); }
 }
 function compileTXT() {
@@ -4103,11 +4120,11 @@ function compileHTML() {
 async function doCompExport(kind) {
   if (!comp || !comp.items.length) { toast('Nothing to compile'); return; }
   saveCurrentScene();
-  if (kind === 'txt') return saveTextFile(compFileName('txt'), compileTXT());
-  if (kind === 'html') return saveTextFile(compFileName('html'), compileHTML());
-  if (kind === 'pdf') return exportCompPDF();
-  if (kind === 'epub') return exportCompEPUB();
-  if (kind === 'docx') return exportCompDOCX();
+  if (kind === 'txt') return await saveTextFile(compFileName('txt'), compileTXT());
+  if (kind === 'html') return await saveTextFile(compFileName('html'), compileHTML());
+  if (kind === 'pdf') return await exportCompPDF();
+  if (kind === 'epub') return await exportCompEPUB();
+  if (kind === 'docx') return await exportCompDOCX();
 }
 /* ---- binary output helpers (ZIP / base64) ---- */
 function bytesToBase64(bytes) {
@@ -4119,8 +4136,13 @@ async function saveBinary(name, bytes, mime) {
   if (hasTauri) {
     const path = await invoke('pick_save', { defaultName: name });
     if (!path) return;
-    await invoke('write_binary', { path, base64: bytesToBase64(bytes) });
-    toast('Saved ' + baseName(path));
+    try {
+      await invoke('write_binary', { path, base64: bytesToBase64(bytes) });
+      toast('Saved ' + baseName(path));
+    } catch (e) {
+      console.error(e);
+      toast('Export failed');
+    }
   } else {
     const blob = new Blob([bytes], { type: mime });
     const a = document.createElement('a');
@@ -4677,7 +4699,7 @@ function buildEpubBookXhtml({ title, lang, docClasses, innerHtml }) {
   return `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="${lang}" lang="${lang}"><head><meta charset="utf-8"/><title>${esc(title)}</title><link rel="stylesheet" type="text/css" href="style.css"/></head><body><div class="${docClasses}">${innerHtml}</div></body></html>`;
 }
 /* --- epub-xml:end --- */
-function exportCompEPUB() {
+async function exportCompEPUB() {
   const s = comp.settings;
   const title = s.titleText || novel.title || 'Untitled';
   const author = s.author || 'Unknown';
@@ -4705,7 +4727,7 @@ function exportCompEPUB() {
     { name: 'OEBPS/book.xhtml', bytes: enc.encode(bookXhtml) },
     { name: 'OEBPS/style.css', bytes: enc.encode(css) }
   ];
-  saveBinary(compFileName('epub'), makeZip(files), 'application/epub+zip');
+  await saveBinary(compFileName('epub'), makeZip(files), 'application/epub+zip');
 }
 /* XHTML-safe title page / TOC (avoid unescaped entities) */
 function titlePageHTMLx() {
@@ -4838,7 +4860,7 @@ function buildDocxRelsXml() {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
 }
 /* --- docx-strings:builders:end --- */
-function exportCompDOCX() {
+async function exportCompDOCX() {
   const s = comp.settings;
   const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
   // The builders stay free of the `novel` global, so the title-page fallback resolves here.
@@ -4852,7 +4874,7 @@ function exportCompDOCX() {
     { name: '_rels/.rels', bytes: enc.encode(rels) },
     { name: 'word/document.xml', bytes: enc.encode(documentXml) }
   ];
-  saveBinary(compFileName('docx'), makeZip(files), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  await saveBinary(compFileName('docx'), makeZip(files), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
 }
 
 /* ---- presets ---- */
