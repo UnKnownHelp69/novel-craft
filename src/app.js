@@ -2478,12 +2478,15 @@ function graphEdges(chars) {
 function ensureGraphPositions() {
   const chars = novel.characters;
   const n = chars.length;
+  let changed = false;
   chars.forEach((c, i) => {
     if (!c.graphPosition || typeof c.graphPosition.x !== 'number') {
       const ang = (i / Math.max(1, n)) * Math.PI * 2;
       c.graphPosition = { x: Math.cos(ang) * 220 + (Math.random() * 40 - 20), y: Math.sin(ang) * 220 + (Math.random() * 40 - 20) };
+      changed = true;
     }
   });
+  if (changed) markDirty();
 }
 function w2s(x, y) { return { x: x * gView.zoom + gView.x, y: y * gView.zoom + gView.y }; }
 function s2w(x, y) { return { x: (x - gView.x) / gView.zoom, y: (y - gView.y) / gView.zoom }; }
@@ -2505,7 +2508,6 @@ function openGraph() {
 function closeGraph() {
   graphOpen = false;
   $('#graphOverlay').classList.add('hidden');
-  markDirty();   // positions may have changed
 }
 function gCenterView() {
   const chars = graphChars();
@@ -2968,7 +2970,6 @@ function closeMap() {
   mapOpen = false;
   cancelRouteMode();
   $('#mapOverlay').classList.add('hidden');
-  markDirty();   // pin positions / drawings may have changed
 }
 function loadMapImage() {
   const wm = worldMap();
