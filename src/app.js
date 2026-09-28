@@ -819,18 +819,37 @@ async function handleLibraryFile(data, path) {
   const novels = (data.novels || []).map(migrateNovel);
   if (!novels.length) { setCurrentNovel(newNovel(), null); return; }
   const active = novels.find(n => n.id === data.activeNovelId) || novels[0];
-  setCurrentNovel(active, path);   // keep the currently-active one in this file
   const others = novels.filter(n => n !== active);
-  if (!others.length) return;
+  
+  if (!others.length) {
+    setCurrentNovel(active, path);
+    return;
+  }
+  
+  setCurrentNovel(active, null);   // open as unsaved so we don't silently overwrite the library file
+  
   confirmModal('Multiple novels found',
     `This file contains ${novels.length} novels, but NovelCraft now uses one file per novel. ` +
-    `Save the other ${others.length} as separate .novel files now?`,
+    `Save all ${novels.length} as separate .novel files now?`,
     async () => {
-      for (const n of others) {
+      for (const n of novels) {
         const content = serializeNovel(n);
         if (hasTauri) {
           const p = await invoke('pick_save', { defaultName: (n.title || 'novel') + '.novel' });
-          if (p) { await invoke('write_text', { path: p, content }); await addRecent(p); }
+          if (p) { 
+            try {
+              await invoke('write_text', { path: p, content }); 
+              await addRecent(p); 
+              if (n === active) {
+                currentFilePath = p;
+                await invoke('set_last_file', { path: p });
+                updateFilePathIndicator();
+              }
+            } catch (e) {
+              console.error(e);
+              toast('Save failed for ' + n.title);
+            }
+          }
         } else {
           downloadFile((n.title || 'novel') + '.novel', content);
         }
