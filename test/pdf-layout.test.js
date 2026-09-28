@@ -680,15 +680,24 @@ test('dot leaders right-align every number at the right margin', () => {
   });
 });
 
-test('CHARACTERIZATION: a title too long for leaders still gets its number, unwrapped', () => {
-  // TOC entries are single, unwrapped lines (issue #42); a title that leaves no room for
-  // leaders keeps just a space before the number and overflows like the title alone did.
+test('a TOC entry too long for a single line wraps and receives its page number on the last line', () => {
   const long = 'An Extremely Long Part Title That Will Not Fit On One Line At All Here';
   const flow = [{ type: 'part', title: long, anchor: 'h0' }];
   const layout = createPdfLayout({ ...A4 });
   buildPdfPages(flow, settings({ titlePage: false }), layout, stubBlocks());
-  const entry = layout.finish()[0][1];
-  assert.strictEqual(entry.text, long + ' 2');
+  const page = layout.finish()[0];
+  
+  // page[0] is 'Contents'
+  // page[1] is the first line of the wrapped title
+  // page[2] is the second line with dots and the page number
+  const text1 = page[1].text;
+  const text2 = page[2].text;
+  
+  assert.ok(!text1.includes(' 2'), 'first line should not have page number');
+  assert.ok(text2.endsWith(' 2'), 'last line should end with page number');
+  
+  const indentCols = Math.round((page[2].x - A4.margin) / A4.charWidth);
+  assert.strictEqual(indentCols + pdfLen(text2), A4.maxChars, 'last line should align correctly to the margin');
 });
 
 test('toc disabled emits no contents page at either position', () => {
