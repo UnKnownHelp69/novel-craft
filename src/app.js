@@ -1098,8 +1098,16 @@ function mdToHtml(md) {
 }
 function inlineMd(s) {
   s = esc(s);
+  s = s.replace(/\\\\/g, '\x01');
+  s = s.replace(/\\\*/g, '\x02');
+  s = s.replace(/\\#/g, '\x03');
+  
   s = s.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
   s = s.replace(/\*(.+?)\*/g, '<i>$1</i>');
+  
+  s = s.replace(/\x01/g, '\\\\');
+  s = s.replace(/\x02/g, '*');
+  s = s.replace(/\x03/g, '#');
   return s;
 }
 /* --- mdtohtml:end --- */
@@ -1110,7 +1118,14 @@ function htmlToMd(html) {
   const inline = node => {
     let s = '';
     node.childNodes.forEach(ch => {
-      if (ch.nodeType === 3) s += ch.textContent;
+      if (ch.nodeType === 3) {
+        let t = ch.textContent;
+        t = t.replace(/\\/g, '\\\\');
+        t = t.replace(/\*/g, '\\*');
+        t = t.replace(/^#/g, '\\#');
+        t = t.replace(/\n#/g, '\n\\#');
+        s += t;
+      }
       else if (/^(B|STRONG)$/.test(ch.tagName)) s += '**' + inline(ch) + '**';
       else if (/^(I|EM)$/.test(ch.tagName)) s += '*' + inline(ch) + '*';
       else if (ch.tagName === 'BR') s += '\n';
