@@ -1458,12 +1458,20 @@ async function doSave(saveAs = false) {
   renumber();
   const content = serializeNovel(novel);
   const defaultName = (novel.title || 'novel') + '.novel';
+  const wasDirty = dirty;
   setSaving();
+  snapshotSaved();
+  dirty = false;
   try {
     if (hasTauri) {
       let path = currentFilePath;
       if (!path || saveAs) path = await invoke('pick_save', { defaultName });
-      if (!path) { setSaved(); return false; } // user cancelled the dialog
+      if (!path) {
+        if (wasDirty) markDirty();
+        else if (!dirty) setSaved();
+        else $('#saveIndicator').classList.remove('saving');
+        return false;
+      }
       await invoke('write_text', { path, content });
       currentFilePath = path;
       await invoke('set_last_file', { path });
@@ -1471,8 +1479,8 @@ async function doSave(saveAs = false) {
     } else {
       downloadFile(defaultName, content);
     }
-    snapshotSaved();
-    setSaved();
+    if (!dirty) setSaved();
+    else $('#saveIndicator').classList.remove('saving');
     clearBackup();
     updateFilePathIndicator();
     toast(saveAs ? 'Saved a copy' : 'Project saved');
@@ -1480,7 +1488,8 @@ async function doSave(saveAs = false) {
   } catch (e) {
     console.error(e);
     toast('Save failed');
-    markDirty();
+    if (wasDirty || dirty) markDirty();
+    else setSaved();
     return false;
   }
 }
@@ -1578,12 +1587,15 @@ setInterval(async () => {
     try {
       flushNovel();
       renumber();
-      await invoke('write_text', { path: currentFilePath, content: serializeNovel(novel) });
+      const content = serializeNovel(novel);
       snapshotSaved();
-      setSaved();
+      dirty = false;
+      await invoke('write_text', { path: currentFilePath, content });
+      if (!dirty) setSaved();
+      else $('#saveIndicator').classList.remove('saving');
       clearBackup();
       updateFilePathIndicator();
-    } catch (_) { localBackup(); }
+    } catch (_) { localBackup(); markDirty(); }
   } else {
     localBackup();   // unsaved (new) novel -> localStorage only
   }
