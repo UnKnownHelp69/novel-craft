@@ -361,7 +361,8 @@ function renameScene(sceneId) {
   const f = findScene(sceneId);
   if (!f) return;
   promptModal('Rename scene', 'New title:', f.scene.title, v => {
-    f.scene.title = v || f.scene.title;
+    if (!v || v === f.scene.title) return;
+    f.scene.title = v;
     renderTree(); updateBreadcrumb();
     if (corkboardOpen) renderCorkboard();
     markDirty();
@@ -435,7 +436,8 @@ function renameChapter(id) {
   const c = findChapter(id);
   if (!c) return;
   promptModal('Rename chapter', 'New title:', c.title, val => {
-    c.title = val || c.title;
+    if (!val || val === c.title) return;
+    c.title = val;
     renderTree(); updateBreadcrumb(); markDirty();
   });
 }
@@ -1341,7 +1343,7 @@ $('#btnGoal').addEventListener('click', () => {
   if (!novel) return;
   promptModal('Word goal', 'Target total words:', String(novel.settings.wordGoal), v => {
     const n = parseInt(v, 10);
-    if (n > 0) {
+    if (n > 0 && n !== novel.settings.wordGoal) {
       novel.settings.wordGoal = n;
       updateCounters();
       markDirty();
