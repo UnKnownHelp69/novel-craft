@@ -1328,7 +1328,7 @@ function updateCounters() {
   const c = currentChapter();
   const chapWords = c ? chapterWordCount(c) : 0;
   const total = novel ? novel.chapters.reduce((s, x) => s + chapterWordCount(x), 0) : 0;
-  const txt = !novel ? '' : mdMode ? mdEditor.value : stripHtml(editor.innerHTML);
+  const txt = !novel ? '' : mdMode ? stripHtml(mdToHtml(mdEditor.value)) : stripHtml(editor.innerHTML);
   $('#statChapWords').textContent = chapWords;
   $('#statTotalWords').textContent = total;
   $('#statChars').textContent = txt.length;
