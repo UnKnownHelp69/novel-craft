@@ -1530,7 +1530,7 @@ const newProject = newNovelFile;   // "New"  == new .novel file
    test/novel-language.test.js lifts this block out and runs it in isolation, so keep it
    free of DOM, globals and app state. --- */
 /* Languages offered in the Compile dialog, in display order. Add new ones here; the
-   per-format tables (EPUB_TOC_LABEL, DOCX_LOCALE) fall back gracefully for any they lack. */
+   per-format tables (TOC_LABEL, DOCX_LOCALE) fall back gracefully for any they lack. */
 const NOVEL_LANGUAGES = [['en', 'English'], ['ru', 'Русский']];
 /* Majority script of the title plus every scene's text: Cyrillic -> 'ru', Latin -> 'en'
    (ties go to 'en'), no letters of either script at all -> null. Tags and entities are
@@ -4095,13 +4095,18 @@ function titlePageHTML() {
 function compTocEntries(flow, settings) {
   return flow.filter(f => f.type === 'part' || f.type === 'chapter' || (settings.tocDepth === 'scenes' && f.type === 'scene' && f.showTitle));
 }
+/* The table of contents heading, per export language (resolveLanguage()). Every format's
+   TOC and the EPUB nav document read it through tocLabel(); a language missing here falls
+   back to English. */
+const TOC_LABEL = { en: 'Contents', ru: 'Содержание' };
+function tocLabel(lang) { return TOC_LABEL[lang] || TOC_LABEL.en; }
 /* --- comp-toc:end --- */
 function tocHTML(flow) {
   const s = comp.settings;
   if (!s.toc) return '';
   const entries = compTocEntries(flow, s);
   if (!entries.length) return '';
-  return `<section class="c-toc"><h1 class="c-toc-title">Contents</h1><ul>` +
+  return `<section class="c-toc"><h1 class="c-toc-title">${esc(tocLabel(resolveLanguage(novel)))}</h1><ul>` +
     entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') +
     `</ul></section>`;
 }
@@ -4178,7 +4183,7 @@ function compileTXT() {
     L.push('', '');
   }
   if (s.toc) {
-    L.push('CONTENTS', '');
+    L.push(tocLabel(resolveLanguage(novel)).toUpperCase(), '');
     compTocEntries(flow, s)
       .forEach(f => L.push((f.type === 'scene' ? '    ' : '') + f.title));
     L.push('', '');
@@ -4622,8 +4627,9 @@ function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWid
    and the part/chapter/break/scene body. htmlToBlocks() needs a real DOM, so it is
    injected as htmlToBlocksFn; production passes the real one, tests pass a stub. Reads
    the compile settings as an explicit argument and never the `comp`/`novel` globals:
-   the title-page fallback is resolved by exportCompPDF() before the call. Depends on
-   compTocEntries() and sepText(), which have their own marker pairs. --- */
+   the title-page fallback and settings.language are resolved by exportCompPDF() before
+   the call. Depends on compTocEntries()/tocLabel() and sepText(), which have their own
+   marker pairs. --- */
 function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
   const s = settings;
   const size = layout.fontSize;
@@ -4648,7 +4654,7 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
   const headingPage = new Map();   // flow entry -> page index its heading landed on
   const emitTOC = () => {
     if (!s.toc || !tocEntries.length) return;
-    line('Contents', { font: F.bold, fsize: size + 4, lh: (size + 4) * 1.4, align: 'center' });
+    line(tocLabel(s.language), { font: F.bold, fsize: size + 4, lh: (size + 4) * 1.4, align: 'center' });
     blank(0.6);
     tocEntries.forEach(f => {
       const indent = f.type === 'scene' ? 3 : 0;
@@ -4707,8 +4713,8 @@ async function exportCompPDF() {
     pageW, pageH, margin: marg, fontSize: size, lineHeight: lh,
     usableWidth: usableW, charWidth: charW, maxChars, fonts: F
   });
-  // The page builder stays free of the `novel` global, so the title fallback resolves here.
-  buildPdfPages(flow, { ...s, titleText: s.titleText || novel.title || 'Untitled' }, layout, htmlToBlocks);
+  // The page builder stays free of the `novel` global, so the title fallback and language resolve here.
+  buildPdfPages(flow, { ...s, titleText: s.titleText || novel.title || 'Untitled', language: resolveLanguage(novel) }, layout, htmlToBlocks);
   const pages = layout.finish();
 
   // serialize — embed only the styles the document actually uses
@@ -4810,19 +4816,17 @@ async function exportCompPDF() {
    them out from between these markers and runs them in isolation, so they must stay free
    of the `comp`/`novel` globals and of anything non-deterministic — the identifier and the
    dcterms:modified timestamp are computed once in exportCompEPUB() and passed in, which is
-   what makes the package XML reproducible for a fixed input. esc() is their only
-   dependency. The body of the book (flowToBodyHTML/normalizeSceneHTML) needs a real DOM
-   and deliberately stays outside. --- */
+   what makes the package XML reproducible for a fixed input. Their only dependencies are
+   esc() and tocLabel() (comp-toc marker pair). The body of the book
+   (flowToBodyHTML/normalizeSceneHTML) needs a real DOM and deliberately stays outside. --- */
 function buildEpubContainerXml() {
   return `<?xml version="1.0" encoding="utf-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`;
 }
-/* The nav document's one visible string, per language; anything missing falls back to English. */
-const EPUB_TOC_LABEL = { en: 'Contents', ru: 'Содержание' };
 function buildEpubOpfXml({ uid, title, author, modifiedISO, lang }) {
   return `<?xml version="1.0" encoding="utf-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">${uid}</dc:identifier><dc:title>${esc(title)}</dc:title><dc:creator>${esc(author)}</dc:creator><dc:language>${esc(lang)}</dc:language><meta property="dcterms:modified">${modifiedISO}</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="book" href="book.xhtml" media-type="application/xhtml+xml"/><item id="css" href="style.css" media-type="text/css"/></manifest><spine toc="ncx"><itemref idref="book"/></spine></package>`;
 }
 function buildEpubNavXhtml({ navItems, lang }) {
-  const label = esc(EPUB_TOC_LABEL[lang] || EPUB_TOC_LABEL.en);
+  const label = esc(tocLabel(lang));
   const navOl = navItems.map(f => `<li><a href="book.xhtml${f.anchor ? '#' + f.anchor : ''}">${esc(f.title)}</a></li>`).join('');
   return `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="${esc(lang)}" lang="${esc(lang)}"><head><meta charset="utf-8"/><title>${label}</title></head><body><nav epub:type="toc" id="toc"><h1>${label}</h1><ol>${navOl}</ol></nav></body></html>`;
 }
@@ -4842,12 +4846,12 @@ async function exportCompEPUB() {
   const modifiedISO = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
   const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
   const body = flowToBodyHTML(flow, true);
-  const inner = titlePageHTMLx() + (s.toc && s.tocPosition === 'afterTitle' ? tocHTMLx(flow) : '') + body + (s.toc && s.tocPosition === 'end' ? tocHTMLx(flow) : '');
+  const lang = resolveLanguage(novel);
+  const inner = titlePageHTMLx() + (s.toc && s.tocPosition === 'afterTitle' ? tocHTMLx(flow, lang) : '') + body + (s.toc && s.tocPosition === 'end' ? tocHTMLx(flow, lang) : '');
   const navEntries = compTocEntries(flow, s);
   // A book with no parts/chapters still needs one nav target, so fall back to the book itself.
   const navItems = navEntries.length ? navEntries : [{ anchor: null, title }];
   const css = `html,body{margin:0;padding:1em;font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};}\n` + compileCSS();
-  const lang = resolveLanguage(novel);
   const bookXhtml = buildEpubBookXhtml({ title, lang, docClasses: compDocClasses(), innerHtml: inner });
   const navXhtml = buildEpubNavXhtml({ navItems, lang });
   const ncx = buildEpubNcxXml({ uid, title, navItems, lang });
@@ -4874,12 +4878,12 @@ function titlePageHTMLx() {
     (s.author ? `<p class="c-author">${esc(s.author)}</p>` : '') +
     (s.dateText ? `<p class="c-date">${esc(s.dateText)}</p>` : '') + `</section>`;
 }
-function tocHTMLx(flow) {
+function tocHTMLx(flow, lang) {
   const s = comp.settings;
   if (!s.toc) return '';
   const entries = compTocEntries(flow, s);
   if (!entries.length) return '';
-  return `<section class="c-toc"><h1 class="c-toc-title">Contents</h1><ul>` +
+  return `<section class="c-toc"><h1 class="c-toc-title">${esc(tocLabel(lang))}</h1><ul>` +
     entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') + `</ul></section>`;
 }
 
@@ -4920,7 +4924,7 @@ function htmlToBlocks(html) {
    buildDocxBodyXml() takes htmlToBlocks itself as a parameter for the same reason; that is
    what lets them run in isolation — settings.language included: exportCompDOCX() resolves
    it before the call. Their only other dependencies are esc(), sepText() (own marker
-   pair) and compTocEntries(). --- */
+   pair) and compTocEntries()/tocLabel() (comp-toc marker pair). --- */
 /* settings.language -> the OOXML locale every run is tagged with (spellcheck, hyphenation).
    A language missing here simply gets no w:lang, leaving it to Word's default. */
 const DOCX_LOCALE = { en: 'en-US', ru: 'ru-RU' };
@@ -4955,7 +4959,7 @@ function docxPageBreak() { return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
 function docxTOC(flow, settings) {
   const s = settings;
   const entries = compTocEntries(flow, s);
-  let x = docxP([{ text: 'Contents', b: true }], { sz: 32, align: 'center', noIndent: true }, s);
+  let x = docxP([{ text: tocLabel(s.language), b: true }], { sz: 32, align: 'center', noIndent: true }, s);
   entries.forEach(f => { x += docxP([{ text: f.title }], { noIndent: true }, s); });
   return x;
 }

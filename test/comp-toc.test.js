@@ -30,10 +30,10 @@ function loadCompToc() {
     'comp-toc markers missing from src/app.js — the function moved, update this test');
   const src = APP.slice(start, end);
   // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function(`'use strict';\n${src}\nreturn { compTocEntries };`)();
+  return new Function(`'use strict';\n${src}\nreturn { compTocEntries, tocLabel, TOC_LABEL };`)();
 }
 
-const { compTocEntries } = loadCompToc();
+const { compTocEntries, tocLabel, TOC_LABEL } = loadCompToc();
 
 /* A representative compilation flow covering every entry type the predicate
    cares about. Breaks should never appear in a TOC regardless of settings. */
@@ -128,5 +128,27 @@ test('a flow with only parts and chapters returns them all at any depth', () => 
   ];
   for (const tocDepth of ['chapters', 'scenes']) {
     assert.deepStrictEqual(titles(compTocEntries(noscenes, { tocDepth })), ['P', 'C']);
+  }
+});
+
+/* ---------- tocLabel() (issue #81) ---------- */
+
+test('tocLabel gives the TOC heading in the export language', () => {
+  assert.strictEqual(tocLabel('en'), 'Contents');
+  assert.strictEqual(tocLabel('ru'), 'Содержание');
+});
+
+test('tocLabel falls back to English for a language without its own label, or none', () => {
+  for (const lang of ['de', 'pt-BR', '', null, undefined]) {
+    assert.strictEqual(tocLabel(lang), 'Contents', JSON.stringify(lang));
+  }
+});
+
+test('every language the Compile dialog offers has its own TOC label', () => {
+  // NOVEL_LANGUAGES lives in the novel-language block; read its codes straight from the source.
+  const m = /const NOVEL_LANGUAGES = (\[[^\n]*\]);/.exec(APP);
+  assert.ok(m, 'NOVEL_LANGUAGES not found in src/app.js — the code moved, update this test');
+  for (const [code] of new Function(`return ${m[1]}`)()) {
+    assert.ok(Object.hasOwn(TOC_LABEL, code), `no TOC label for "${code}"`);
   }
 });

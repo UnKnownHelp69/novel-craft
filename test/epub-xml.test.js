@@ -47,7 +47,7 @@ function load() {
 
   const src = [
     APP.slice(onesIdx, numWordEnd),
-    sliceMarker('docx-strings:esc'),  // esc() — the builders' only dependency
+    sliceMarker('docx-strings:esc'),  // esc(); tocLabel() comes from comp-toc below
     sliceMarker('epub-xml'),
     sliceMarker('build-flow'),
     sliceMarker('comp-toc'),

@@ -929,3 +929,24 @@ test('pagination is deterministic', () => {
   const b = build().pages;
   assert.deepStrictEqual(a, b);
 });
+
+/* ---------- TOC heading language (issue #81) ---------- */
+
+test('the contents page is headed in settings.language, at either position', () => {
+  const { pages } = build({ language: 'ru' });
+  assert.strictEqual(pages[1][0].text, 'Содержание');
+  assert.strictEqual(pages[1][0].font, A4.fonts.bold);
+
+  const end = build({ language: 'ru', tocPosition: 'end' }).pages;
+  assert.strictEqual(end[end.length - 1][0].text, 'Содержание');
+
+  for (const pages of [build({ language: 'ru' }).pages, end]) {
+    assert.ok(!pages.flat().some(l => l.text === 'Contents'), 'an English heading survived');
+  }
+});
+
+test('an unset or unlabelled language keeps the English "Contents" heading', () => {
+  for (const language of [undefined, 'en', 'de']) {
+    assert.strictEqual(build({ language }).pages[1][0].text, 'Contents', String(language));
+  }
+});
