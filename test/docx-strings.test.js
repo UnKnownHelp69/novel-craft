@@ -390,3 +390,17 @@ test('the docxTOC paragraphs carry the language too', () => {
   assert.ok(runs.length >= 2);
   for (const r of runs) assert.ok(r.includes('<w:lang w:val="ru-RU"/>'), r);
 });
+
+/* ---------- TOC heading language (issue #81) ---------- */
+
+test('docxTOC heads the contents in settings.language', () => {
+  withSettings({ tocDepth: 'chapters', language: 'ru' });
+  const xml = docxTOC(FLOW, S);
+  assert.deepStrictEqual(wtPayloads(xml.slice(0, xml.indexOf('</w:p>') + 6)), ['Содержание']);
+  assert.ok(!xml.includes('Contents'), 'an English heading survived in a Russian TOC');
+
+  for (const language of ['en', 'de', undefined]) {
+    withSettings({ tocDepth: 'chapters', language });
+    assert.strictEqual(wtPayloads(docxTOC(FLOW, S))[0], 'Contents', String(language));
+  }
+});

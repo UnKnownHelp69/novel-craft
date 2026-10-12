@@ -586,3 +586,16 @@ test('settings.language reaches every text run in the compiled document', () => 
   assert.ok(!readDocx().text('word/document.xml').includes('w:lang'),
     'settings without a language must not invent one');
 });
+
+/* ---------- TOC heading language (issue #81) ---------- */
+
+test('the TOC of a Russian manuscript is headed "Содержание", wherever it sits', () => {
+  for (const tocPosition of ['afterTitle', 'end']) {
+    const xml = buildDocxBodyXml(TOC_FLOW, settings({ toc: true, tocPosition, language: 'ru' }), stubBlocks());
+    const at = paragraphs(xml).findIndex(p => wtPayloads(p)[0] === 'Содержание');
+    assert.ok(at !== -1, `tocPosition=${tocPosition}: no Russian TOC heading`);
+    assert.deepStrictEqual(paragraphs(xml).slice(at, at + 4).map(p => wtPayloads(p)[0]),
+      ['Содержание', 'Part One', 'Chapter 1', 'Глава 2']);
+    assert.strictEqual(contentsAt(xml), -1, `tocPosition=${tocPosition}: an English heading survived`);
+  }
+});
