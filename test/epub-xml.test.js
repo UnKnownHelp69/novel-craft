@@ -92,7 +92,7 @@ test('buildEpubContainerXml takes no arguments and is stable across calls', () =
  * ============================================================ */
 
 test('the OPF identifier is exactly the uid it was handed, not a fresh one', () => {
-  const opf = buildEpubOpfXml({ uid: UID, title: 'T', author: 'A', modifiedISO: MODIFIED });
+  const opf = buildEpubOpfXml({ uid: UID, title: 'T', author: 'A', modifiedISO: MODIFIED, lang: 'en' });
   assert.ok(opf.includes(`<dc:identifier id="bookid">${UID}</dc:identifier>`),
     'dc:identifier does not carry the supplied uid');
   // Nothing else in the document may look like a second, generated identifier.
@@ -102,26 +102,26 @@ test('the OPF identifier is exactly the uid it was handed, not a fresh one', () 
 
 test('dcterms:modified is the exact string passed in, verbatim', () => {
   const odd = 'NOT-A-TIMESTAMP';
-  const opf = buildEpubOpfXml({ uid: UID, title: 'T', author: 'A', modifiedISO: odd });
+  const opf = buildEpubOpfXml({ uid: UID, title: 'T', author: 'A', modifiedISO: odd, lang: 'en' });
   assert.ok(opf.includes(`<meta property="dcterms:modified">${odd}</meta>`),
     'the builder reformatted or replaced the timestamp it was given');
   assert.ok(!/\d{4}-\d\d-\d\dT/.test(opf), 'the builder produced a timestamp of its own');
 });
 
 test('buildEpubOpfXml is deterministic for fixed inputs', () => {
-  const args = { uid: UID, title: 'Стойкий', author: 'Автор', modifiedISO: MODIFIED };
+  const args = { uid: UID, title: 'Стойкий', author: 'Автор', modifiedISO: MODIFIED, lang: 'en' };
   assert.strictEqual(buildEpubOpfXml(args), buildEpubOpfXml(args));
 });
 
 test('title and author land in dc:title and dc:creator', () => {
-  const opf = buildEpubOpfXml({ uid: UID, title: 'The Long Night', author: 'J. Doe', modifiedISO: MODIFIED });
+  const opf = buildEpubOpfXml({ uid: UID, title: 'The Long Night', author: 'J. Doe', modifiedISO: MODIFIED, lang: 'en' });
   assert.ok(opf.includes('<dc:title>The Long Night</dc:title>'));
   assert.ok(opf.includes('<dc:creator>J. Doe</dc:creator>'));
 });
 
 test('XML special characters in title and author are escaped', () => {
   const opf = buildEpubOpfXml({
-    uid: UID, title: 'Smith & Sons <the> "saga"', author: 'A & B <co>', modifiedISO: MODIFIED
+    uid: UID, title: 'Smith & Sons <the> "saga"', author: 'A & B <co>', modifiedISO: MODIFIED, lang: 'en'
   });
   assert.ok(opf.includes('<dc:title>Smith &amp; Sons &lt;the&gt; "saga"</dc:title>'),
     'title was not escaped: ' + opf);
@@ -133,14 +133,14 @@ test('XML special characters in title and author are escaped', () => {
 
 test('Cyrillic titles and authors pass through unchanged', () => {
   const opf = buildEpubOpfXml({
-    uid: UID, title: 'Тайна старого дома', author: 'Кирилл Мефодьев', modifiedISO: MODIFIED
+    uid: UID, title: 'Тайна старого дома', author: 'Кирилл Мефодьев', modifiedISO: MODIFIED, lang: 'en'
   });
   assert.ok(opf.includes('<dc:title>Тайна старого дома</dc:title>'));
   assert.ok(opf.includes('<dc:creator>Кирилл Мефодьев</dc:creator>'));
 });
 
 test('the OPF manifest and spine reference every file the exporter writes', () => {
-  const opf = buildEpubOpfXml({ uid: UID, title: 'T', author: 'A', modifiedISO: MODIFIED });
+  const opf = buildEpubOpfXml({ uid: UID, title: 'T', author: 'A', modifiedISO: MODIFIED, lang: 'en' });
   for (const href of ['nav.xhtml', 'toc.ncx', 'book.xhtml', 'style.css']) {
     assert.ok(opf.includes(`href="${href}"`), `manifest is missing ${href}`);
   }
@@ -159,7 +159,7 @@ const NAV_ITEMS = [
 ];
 
 test('nav.xhtml renders one linked <li> per item, in order', () => {
-  const nav = buildEpubNavXhtml({ navItems: NAV_ITEMS });
+  const nav = buildEpubNavXhtml({ navItems: NAV_ITEMS, lang: 'en' });
   const lis = nav.match(/<li>.*?<\/li>/g);
   assert.deepStrictEqual(lis, [
     '<li><a href="book.xhtml#h0">Часть Первая</a></li>',
@@ -170,7 +170,7 @@ test('nav.xhtml renders one linked <li> per item, in order', () => {
 
 test('nav.xhtml links to the document itself when an item has anchor: null', () => {
   // The single-book fallback exportCompEPUB() applies when there are no TOC entries.
-  const nav = buildEpubNavXhtml({ navItems: [{ anchor: null, title: 'Безымянная книга' }] });
+  const nav = buildEpubNavXhtml({ navItems: [{ anchor: null, title: 'Безымянная книга' }], lang: 'en' });
   assert.ok(nav.includes('<li><a href="book.xhtml">Безымянная книга</a></li>'),
     'a null anchor must produce a bare book.xhtml href with no "#": ' + nav);
   assert.ok(!nav.includes('book.xhtml#'), 'a fragment was emitted for a null anchor');
@@ -178,12 +178,12 @@ test('nav.xhtml links to the document itself when an item has anchor: null', () 
 
 test('nav.xhtml declares the epub:type="toc" nav element regardless of item count', () => {
   for (const items of [[], NAV_ITEMS]) {
-    const nav = buildEpubNavXhtml({ navItems: items });
+    const nav = buildEpubNavXhtml({ navItems: items, lang: 'en' });
     assert.ok(nav.startsWith('<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'));
     assert.ok(nav.includes('<nav epub:type="toc" id="toc">'));
     assert.ok(nav.includes('xmlns:epub="http://www.idpf.org/2007/ops"'));
   }
-  assert.ok(buildEpubNavXhtml({ navItems: [] }).includes('<ol></ol>'),
+  assert.ok(buildEpubNavXhtml({ navItems: [], lang: 'en' }).includes('<ol></ol>'),
     'an empty item list should still emit an empty <ol>');
 });
 
@@ -192,7 +192,7 @@ test('nav.xhtml declares the epub:type="toc" nav element regardless of item coun
  * ============================================================ */
 
 test('toc.ncx renders one navPoint per item with sequential ids and playOrder', () => {
-  const ncx = buildEpubNcxXml({ uid: UID, title: 'Книга', navItems: NAV_ITEMS });
+  const ncx = buildEpubNcxXml({ uid: UID, title: 'Книга', navItems: NAV_ITEMS, lang: 'en' });
   const pts = ncx.match(/<navPoint .*?<\/navPoint>/g);
   assert.deepStrictEqual(pts, [
     '<navPoint id="n0" playOrder="1"><navLabel><text>Часть Первая</text></navLabel><content src="book.xhtml#h0"/></navPoint>',
@@ -202,20 +202,20 @@ test('toc.ncx renders one navPoint per item with sequential ids and playOrder', 
 });
 
 test('toc.ncx carries the supplied uid as dtb:uid and escapes the docTitle', () => {
-  const ncx = buildEpubNcxXml({ uid: UID, title: 'Ampersand & Co <x>', navItems: NAV_ITEMS });
+  const ncx = buildEpubNcxXml({ uid: UID, title: 'Ampersand & Co <x>', navItems: NAV_ITEMS, lang: 'en' });
   assert.ok(ncx.includes(`<meta name="dtb:uid" content="${UID}"/>`), 'dtb:uid is wrong');
   assert.ok(ncx.includes('<docTitle><text>Ampersand &amp; Co &lt;x&gt;</text></docTitle>'));
 });
 
 test('toc.ncx points at the document itself when an item has anchor: null', () => {
-  const ncx = buildEpubNcxXml({ uid: UID, title: 'T', navItems: [{ anchor: null, title: 'Whole book' }] });
+  const ncx = buildEpubNcxXml({ uid: UID, title: 'T', navItems: [{ anchor: null, title: 'Whole book' }], lang: 'en' });
   assert.ok(ncx.includes('<content src="book.xhtml"/>'),
     'a null anchor must produce a bare book.xhtml src: ' + ncx);
   assert.ok(!ncx.includes('book.xhtml#'), 'a fragment was emitted for a null anchor');
 });
 
 test('an empty item list yields an empty navMap rather than throwing', () => {
-  const ncx = buildEpubNcxXml({ uid: UID, title: 'T', navItems: [] });
+  const ncx = buildEpubNcxXml({ uid: UID, title: 'T', navItems: [], lang: 'en' });
   assert.ok(ncx.includes('<navMap></navMap>'));
 });
 
@@ -312,7 +312,7 @@ const EPUB_TITLE = 'Тайна старого дома & прочее';
 const EPUB_AUTHOR = 'Кирилл <Мефодьев>';
 
 /* Mirrors exportCompEPUB()'s assembly, minus the DOM-dependent body and the file save. */
-function compileEpubFiles() {
+function compileEpubFiles(lang = 'en') {
   const flow = buildFlow(ITEMS, SETTINGS, CHAPTERS, findScene);
   const navEntries = compTocEntries(flow, SETTINGS);
   const navItems = navEntries.length ? navEntries : [{ anchor: null, title: EPUB_TITLE }];
@@ -326,17 +326,17 @@ function compileEpubFiles() {
   const files = [
     { name: 'mimetype', bytes: enc.encode('application/epub+zip') },
     { name: 'META-INF/container.xml', bytes: enc.encode(buildEpubContainerXml()) },
-    { name: 'OEBPS/content.opf', bytes: enc.encode(buildEpubOpfXml({ uid: UID, title: EPUB_TITLE, author: EPUB_AUTHOR, modifiedISO: MODIFIED })) },
-    { name: 'OEBPS/nav.xhtml', bytes: enc.encode(buildEpubNavXhtml({ navItems })) },
-    { name: 'OEBPS/toc.ncx', bytes: enc.encode(buildEpubNcxXml({ uid: UID, title: EPUB_TITLE, navItems })) },
-    { name: 'OEBPS/book.xhtml', bytes: enc.encode(buildEpubBookXhtml({ title: EPUB_TITLE, lang: 'en', docClasses: 'comp-doc comp-indent', innerHtml: inner })) },
+    { name: 'OEBPS/content.opf', bytes: enc.encode(buildEpubOpfXml({ uid: UID, title: EPUB_TITLE, author: EPUB_AUTHOR, modifiedISO: MODIFIED, lang })) },
+    { name: 'OEBPS/nav.xhtml', bytes: enc.encode(buildEpubNavXhtml({ navItems, lang })) },
+    { name: 'OEBPS/toc.ncx', bytes: enc.encode(buildEpubNcxXml({ uid: UID, title: EPUB_TITLE, navItems, lang })) },
+    { name: 'OEBPS/book.xhtml', bytes: enc.encode(buildEpubBookXhtml({ title: EPUB_TITLE, lang, docClasses: 'comp-doc comp-indent', innerHtml: inner })) },
     { name: 'OEBPS/style.css', bytes: enc.encode('.comp-doc{color:#111;}') },
   ];
   return { flow, navItems, files };
 }
 
-function readEpub() {
-  const { flow, navItems, files } = compileEpubFiles();
+function readEpub(lang) {
+  const { flow, navItems, files } = compileEpubFiles(lang);
   const { eocd, entries } = readZip(makeZip(files));
   const dec = new TextDecoder();
   const text = name => {
@@ -426,4 +426,53 @@ test('the compiled archive is byte-for-byte reproducible for fixed inputs', () =
   const a = makeZip(compileEpubFiles().files);
   const b = makeZip(compileEpubFiles().files);
   assert.deepStrictEqual(Buffer.from(a), Buffer.from(b));
+});
+
+/* ============================================================
+ * language (issue #24) — every part of the package declares the novel's language
+ * ============================================================ */
+
+test('the OPF dc:language is exactly the language it was handed', () => {
+  for (const lang of ['en', 'ru']) {
+    const opf = buildEpubOpfXml({ uid: UID, title: 'T', author: 'A', modifiedISO: MODIFIED, lang });
+    assert.ok(opf.includes(`<dc:language>${lang}</dc:language>`), opf);
+    assert.strictEqual((opf.match(/<dc:language>/g) || []).length, 1);
+  }
+});
+
+test('nav.xhtml declares the language and localizes its one visible label', () => {
+  const en = buildEpubNavXhtml({ navItems: NAV_ITEMS, lang: 'en' });
+  assert.ok(en.includes('xml:lang="en" lang="en"'), en);
+  assert.ok(en.includes('<title>Contents</title>') && en.includes('<h1>Contents</h1>'));
+
+  const ru = buildEpubNavXhtml({ navItems: NAV_ITEMS, lang: 'ru' });
+  assert.ok(ru.includes('xml:lang="ru" lang="ru"'), ru);
+  assert.ok(ru.includes('<title>Содержание</title>') && ru.includes('<h1>Содержание</h1>'));
+  assert.ok(!ru.includes('Contents'), 'an English label survived in a Russian nav document');
+});
+
+test('a language with no label of its own falls back to the English "Contents"', () => {
+  const nav = buildEpubNavXhtml({ navItems: NAV_ITEMS, lang: 'de' });
+  assert.ok(nav.includes('xml:lang="de" lang="de"'));
+  assert.ok(nav.includes('<h1>Contents</h1>'));
+});
+
+test('toc.ncx declares the language on its root element', () => {
+  for (const lang of ['en', 'ru']) {
+    const ncx = buildEpubNcxXml({ uid: UID, title: 'T', navItems: NAV_ITEMS, lang });
+    assert.ok(ncx.includes(`<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1" xml:lang="${lang}">`), ncx);
+  }
+});
+
+test('a Russian book says "ru" in every part of the compiled archive, and "en" nowhere', () => {
+  const { text } = readEpub('ru');
+  const opf = text('OEBPS/content.opf'), nav = text('OEBPS/nav.xhtml');
+  const ncx = text('OEBPS/toc.ncx'), book = text('OEBPS/book.xhtml');
+  assert.ok(opf.includes('<dc:language>ru</dc:language>'));
+  assert.ok(nav.includes('xml:lang="ru" lang="ru"') && nav.includes('<h1>Содержание</h1>'));
+  assert.ok(ncx.includes('xml:lang="ru"'));
+  assert.ok(book.includes('xml:lang="ru" lang="ru"'));
+  for (const [name, xml] of Object.entries({ opf, nav, ncx, book })) {
+    assert.ok(!/lang="en"|<dc:language>en</.test(xml), `${name} still declares English`);
+  }
 });

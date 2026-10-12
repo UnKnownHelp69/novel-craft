@@ -91,7 +91,7 @@ function newNovel(title) {
   return {
     version: '1.0',
     title: title || 'Untitled Novel',
-    settings: { fontSize: 18, defaultFont: 'Georgia, serif', wordGoal: 80000, customNoteTypes: [], noteTypeColors: {}, worldMap: blankWorldMap(), compilationPresets: [] },
+    settings: { fontSize: 18, defaultFont: 'Georgia, serif', wordGoal: 80000, customNoteTypes: [], noteTypeColors: {}, worldMap: blankWorldMap(), compilationPresets: [], language: null },
     chapters: [blankChapter(0)],
     characters: [],
     locations: [],
@@ -722,6 +722,9 @@ function migrateNovel(d) {
   });
   n.settings.worldMap = wm;
   if (!Array.isArray(n.settings.compilationPresets)) n.settings.compilationPresets = [];
+  // Unset (null) means "auto-detect from the text" — files older than the setting get that
+  // too, rather than being pinned to English just for predating it.
+  if (typeof n.settings.language !== 'string' || !n.settings.language) n.settings.language = null;
   if (!Array.isArray(n.chapters) || !n.chapters.length) n.chapters = [blankChapter(0)];
   let migratedToScenes = false;
   const normNote = nt => {
@@ -1520,6 +1523,37 @@ const doOpen = openNovelFile;      // "Open" == open a .novel file
 const newProject = newNovelFile;   // "New"  == new .novel file
 
 /* ================= EXPORT ================= */
+/* --- novel-language:start --- pure, DOM-free: the language an exported document declares.
+   novel.settings.language is either an explicit choice ('en', 'ru', ...) or null, meaning
+   "detect it from the text". Exporters call resolveLanguage(novel) fresh every time and
+   never store the detected value, so a novel's exports follow its text as it changes.
+   test/novel-language.test.js lifts this block out and runs it in isolation, so keep it
+   free of DOM, globals and app state. --- */
+/* Languages offered in the Compile dialog, in display order. Add new ones here; the
+   per-format tables (EPUB_TOC_LABEL, DOCX_LOCALE) fall back gracefully for any they lack. */
+const NOVEL_LANGUAGES = [['en', 'English'], ['ru', 'Русский']];
+/* Majority script of the title plus every scene's text: Cyrillic -> 'ru', Latin -> 'en'
+   (ties go to 'en'), no letters of either script at all -> null. Tags and entities are
+   stripped first so markup like <p> or &nbsp; never counts as Latin text. */
+function detectLanguage(novel) {
+  if (!novel) return null;
+  let text = String(novel.title || '');
+  (novel.chapters || []).forEach(c => (c.scenes || []).forEach(sc => {
+    text += ' ' + String(sc.content || '').replace(/<[^>]*>/g, ' ').replace(/&[#a-z0-9]+;/gi, ' ');
+  }));
+  const cyr = (text.match(/[\u0400-\u04FF]/g) || []).length;
+  const lat = (text.match(/[A-Za-z]/g) || []).length;
+  if (cyr > lat) return 'ru';
+  return lat ? 'en' : null;
+}
+/* An explicit setting wins if it is shaped like a language tag; anything else (unset, or a
+   hand-edited file holding garbage) falls back to detection, then to English. */
+function resolveLanguage(novel) {
+  const set = novel && novel.settings && novel.settings.language;
+  if (typeof set === 'string' && /^[a-z]{2,3}(-[A-Za-z0-9]{1,8})*$/.test(set)) return set;
+  return detectLanguage(novel) || 'en';
+}
+/* --- novel-language:end --- */
 function buildExport(kind, n) {
   if (!n) return '';
   if (n === novel) saveCurrentScene();
@@ -1542,7 +1576,7 @@ function buildExport(kind, n) {
         scenesOf(c).map(s => `<article><h2>${esc(s.title)}</h2>\n${s.content}</article>`).join('\n') +
         `</section>`)
       .join('\n<hr/>\n');
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(n.title)}</title>
+    return `<!DOCTYPE html><html lang="${escAttr(resolveLanguage(n))}"><head><meta charset="utf-8"><title>${esc(n.title)}</title>
 <style>body{font-family:Georgia,serif;max-width:720px;margin:40px auto;line-height:1.7;padding:0 20px;}</style>
 </head><body>${body}</body></html>`;
   }
@@ -3761,6 +3795,7 @@ function openCompile() {
   if (!comp) comp = { items: buildDefaultOrder(), settings: defaultCompSettings() };
   else syncCompItems();
   if (!comp.settings.titleText) comp.settings.titleText = novel.title || '';
+  comp.settings.language = novel.settings.language || null;   // null renders as Auto-detect
   compPreview = false;
   $('#compileOverlay').classList.remove('hidden');
   if (!compEventsInit) { initCompEvents(); compEventsInit = true; }
@@ -3911,6 +3946,8 @@ function renderCompSettings() {
   const opt = (v, t, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${t}</option>`;
   host.innerHTML =
     `<div class="cs-group">Formatting</div>
+     <label class="field-label">Language</label>
+     <select class="control" data-cs="language">${[['', 'Auto-detect'], ...NOVEL_LANGUAGES].map(([v, t]) => opt(v, t, s.language || '')).join('')}</select>
      <label class="field-label">Font</label>
      <select class="control" data-cs="font">
        ${['Georgia, serif|Georgia', "'Lora', serif|Lora", "'Merriweather', serif|Merriweather", "'Inter', sans-serif|Inter", 'Roboto, sans-serif|Roboto', 'Arial, sans-serif|Arial'].map(o => { const [v, t] = o.split('|'); return opt(v, t, s.font); }).join('')}
@@ -3963,6 +4000,12 @@ function renderCompSettings() {
     el.addEventListener(ev, () => {
       let v = el.type === 'checkbox' ? el.checked : el.value;
       if (['fontSize', 'lineSpacing', 'startPage'].includes(key)) v = parseFloat(v);
+      if (key === 'language') {
+        // The language belongs to the novel, not to this compile: write it back (null =
+        // auto-detect) so it is saved with the file and the quick Export uses it too.
+        v = v || null;
+        if ((novel.settings.language || null) !== v) { novel.settings.language = v; markDirty(); }
+      }
       s[key] = v;
       if (key === 'sceneSeparator') renderCompSettings();       // toggles the custom field
       if (compPreview) renderCompPreview();
@@ -4156,7 +4199,7 @@ function compileTXT() {
 }
 function compileHTML() {
   const s = comp.settings;
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${esc(s.titleText || novel.title)}</title>
+  return `<!DOCTYPE html><html lang="${escAttr(resolveLanguage(novel))}"><head><meta charset="utf-8"><title>${esc(s.titleText || novel.title)}</title>
 <style>body{background:#fff;margin:0;padding:40px 20px;}${compileCSS()}</style></head>
 <body><div class="${compDocClasses()}" style="${compDocStyle()}">${docBodyHTML(false)}</div></body></html>`;
 }
@@ -4773,19 +4816,22 @@ async function exportCompPDF() {
 function buildEpubContainerXml() {
   return `<?xml version="1.0" encoding="utf-8"?>\n<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`;
 }
-function buildEpubOpfXml({ uid, title, author, modifiedISO }) {
-  return `<?xml version="1.0" encoding="utf-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">${uid}</dc:identifier><dc:title>${esc(title)}</dc:title><dc:creator>${esc(author)}</dc:creator><dc:language>en</dc:language><meta property="dcterms:modified">${modifiedISO}</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="book" href="book.xhtml" media-type="application/xhtml+xml"/><item id="css" href="style.css" media-type="text/css"/></manifest><spine toc="ncx"><itemref idref="book"/></spine></package>`;
+/* The nav document's one visible string, per language; anything missing falls back to English. */
+const EPUB_TOC_LABEL = { en: 'Contents', ru: 'Содержание' };
+function buildEpubOpfXml({ uid, title, author, modifiedISO, lang }) {
+  return `<?xml version="1.0" encoding="utf-8"?>\n<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">${uid}</dc:identifier><dc:title>${esc(title)}</dc:title><dc:creator>${esc(author)}</dc:creator><dc:language>${esc(lang)}</dc:language><meta property="dcterms:modified">${modifiedISO}</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="book" href="book.xhtml" media-type="application/xhtml+xml"/><item id="css" href="style.css" media-type="text/css"/></manifest><spine toc="ncx"><itemref idref="book"/></spine></package>`;
 }
-function buildEpubNavXhtml({ navItems }) {
+function buildEpubNavXhtml({ navItems, lang }) {
+  const label = esc(EPUB_TOC_LABEL[lang] || EPUB_TOC_LABEL.en);
   const navOl = navItems.map(f => `<li><a href="book.xhtml${f.anchor ? '#' + f.anchor : ''}">${esc(f.title)}</a></li>`).join('');
-  return `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en"><head><meta charset="utf-8"/><title>Contents</title></head><body><nav epub:type="toc" id="toc"><h1>Contents</h1><ol>${navOl}</ol></nav></body></html>`;
+  return `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="${esc(lang)}" lang="${esc(lang)}"><head><meta charset="utf-8"/><title>${label}</title></head><body><nav epub:type="toc" id="toc"><h1>${label}</h1><ol>${navOl}</ol></nav></body></html>`;
 }
-function buildEpubNcxXml({ uid, title, navItems }) {
+function buildEpubNcxXml({ uid, title, navItems, lang }) {
   const ncxPts = navItems.map((f, i) => `<navPoint id="n${i}" playOrder="${i + 1}"><navLabel><text>${esc(f.title)}</text></navLabel><content src="book.xhtml${f.anchor ? '#' + f.anchor : ''}"/></navPoint>`).join('');
-  return `<?xml version="1.0" encoding="utf-8"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="${uid}"/></head><docTitle><text>${esc(title)}</text></docTitle><navMap>${ncxPts}</navMap></ncx>`;
+  return `<?xml version="1.0" encoding="utf-8"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1" xml:lang="${esc(lang)}"><head><meta name="dtb:uid" content="${uid}"/></head><docTitle><text>${esc(title)}</text></docTitle><navMap>${ncxPts}</navMap></ncx>`;
 }
 function buildEpubBookXhtml({ title, lang, docClasses, innerHtml }) {
-  return `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="${lang}" lang="${lang}"><head><meta charset="utf-8"/><title>${esc(title)}</title><link rel="stylesheet" type="text/css" href="style.css"/></head><body><div class="${docClasses}">${innerHtml}</div></body></html>`;
+  return `<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="${esc(lang)}" lang="${esc(lang)}"><head><meta charset="utf-8"/><title>${esc(title)}</title><link rel="stylesheet" type="text/css" href="style.css"/></head><body><div class="${docClasses}">${innerHtml}</div></body></html>`;
 }
 /* --- epub-xml:end --- */
 async function exportCompEPUB() {
@@ -4801,10 +4847,11 @@ async function exportCompEPUB() {
   // A book with no parts/chapters still needs one nav target, so fall back to the book itself.
   const navItems = navEntries.length ? navEntries : [{ anchor: null, title }];
   const css = `html,body{margin:0;padding:1em;font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};}\n` + compileCSS();
-  const bookXhtml = buildEpubBookXhtml({ title, lang: 'en', docClasses: compDocClasses(), innerHtml: inner });
-  const navXhtml = buildEpubNavXhtml({ navItems });
-  const ncx = buildEpubNcxXml({ uid, title, navItems });
-  const opf = buildEpubOpfXml({ uid, title, author, modifiedISO });
+  const lang = resolveLanguage(novel);
+  const bookXhtml = buildEpubBookXhtml({ title, lang, docClasses: compDocClasses(), innerHtml: inner });
+  const navXhtml = buildEpubNavXhtml({ navItems, lang });
+  const ncx = buildEpubNcxXml({ uid, title, navItems, lang });
+  const opf = buildEpubOpfXml({ uid, title, author, modifiedISO, lang });
   const container = buildEpubContainerXml();
   const enc = new TextEncoder();
   const files = [
@@ -4871,8 +4918,12 @@ function htmlToBlocks(html) {
    deliberately excluded, since it needs a real DOM. They take the compile settings as an
    explicit argument rather than reading the module-level `comp` global, and
    buildDocxBodyXml() takes htmlToBlocks itself as a parameter for the same reason; that is
-   what lets them run in isolation. Their only other dependencies are esc(), sepText()
-   (own marker pair) and compTocEntries(). --- */
+   what lets them run in isolation — settings.language included: exportCompDOCX() resolves
+   it before the call. Their only other dependencies are esc(), sepText() (own marker
+   pair) and compTocEntries(). --- */
+/* settings.language -> the OOXML locale every run is tagged with (spellcheck, hyphenation).
+   A language missing here simply gets no w:lang, leaving it to Word's default. */
+const DOCX_LOCALE = { en: 'en-US', ru: 'ru-RU' };
 function docxP(runs, opts, settings) {
   opts = opts || {};
   const s = settings;
@@ -4892,6 +4943,7 @@ function docxP(runs, opts, settings) {
       if (r.b || opts.b) rpr += '<w:b/>';
       if (r.i || opts.i) rpr += '<w:i/>';
       if (opts.sz) rpr += `<w:sz w:val="${opts.sz}"/>`;
+      if (DOCX_LOCALE[s.language]) rpr += `<w:lang w:val="${DOCX_LOCALE[s.language]}"/>`;
       rs += `<w:r>${rpr ? `<w:rPr>${rpr}</w:rPr>` : ''}<w:t xml:space="preserve">${xmlEsc(seg)}</w:t></w:r>`;
       if (i < segs.length - 1) rs += '<w:r><w:br/></w:r>';
     });
@@ -4953,7 +5005,7 @@ async function exportCompDOCX() {
   const s = comp.settings;
   const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
   // The builders stay free of the `novel` global, so the title-page fallback resolves here.
-  const bodyXml = buildDocxBodyXml(flow, { ...s, titleText: s.titleText || novel.title }, htmlToBlocks);
+  const bodyXml = buildDocxBodyXml(flow, { ...s, titleText: s.titleText || novel.title, language: resolveLanguage(novel) }, htmlToBlocks);
   const documentXml = buildDocxDocumentXml({ bodyXml, pageSize: s.pageSize });
   const contentTypes = buildDocxContentTypesXml();
   const rels = buildDocxRelsXml();
@@ -4974,9 +5026,11 @@ function renderPresetSelect() {
     presets.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
 }
 function loadPreset(id) {
-  if (id === '__standard') { comp.settings = { ...defaultCompSettings(), titleText: comp.settings.titleText, author: comp.settings.author, subtitle: comp.settings.subtitle }; renderComp(); toast('Loaded Standard Manuscript'); return; }
+  // The language is the novel's own setting, not part of a preset: keep showing the novel's.
+  const language = novel.settings.language || null;
+  if (id === '__standard') { comp.settings = { ...defaultCompSettings(), titleText: comp.settings.titleText, author: comp.settings.author, subtitle: comp.settings.subtitle, language }; renderComp(); toast('Loaded Standard Manuscript'); return; }
   const p = (novel.settings.compilationPresets || []).find(x => x.id === id);
-  if (p) { comp.settings = { ...defaultCompSettings(), ...p.settings }; renderComp(); toast('Loaded “' + p.name + '”'); }
+  if (p) { comp.settings = { ...defaultCompSettings(), ...p.settings, language }; renderComp(); toast('Loaded “' + p.name + '”'); }
 }
 function saveCompPreset() {
   promptModal('Save preset', 'Preset name:', '', name => {
