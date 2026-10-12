@@ -571,3 +571,18 @@ test('the compiled archive is byte-for-byte reproducible for fixed inputs', () =
   const b = makeZip(compileDocxFiles().files);
   assert.deepStrictEqual(Buffer.from(a), Buffer.from(b));
 });
+
+/* ---------- w:lang (issue #24) ---------- */
+
+test('settings.language reaches every text run in the compiled document', () => {
+  const runsWithText = xml => xml.split('<w:r>').slice(1).filter(r => /<w:t xml:space="preserve">[^<]/.test(r));
+  const ru = runsWithText(readDocx({ language: 'ru' }).text('word/document.xml'));
+  assert.ok(ru.length > 5, 'expected a whole manuscript of runs');
+  for (const r of ru) assert.ok(r.includes('<w:lang w:val="ru-RU"/>'), r);
+
+  const en = runsWithText(readDocx({ language: 'en' }).text('word/document.xml'));
+  for (const r of en) assert.ok(r.includes('<w:lang w:val="en-US"/>'), r);
+
+  assert.ok(!readDocx().text('word/document.xml').includes('w:lang'),
+    'settings without a language must not invent one');
+});

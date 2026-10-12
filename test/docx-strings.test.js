@@ -353,3 +353,40 @@ test('docxPageBreak output is exactly the expected paragraph', () => {
   withSettings({ align: 'justify', indent: 'indent', lineSpacing: 2 });
   assert.strictEqual(docxPageBreak(), '<w:p><w:r><w:br w:type="page"/></w:r></w:p>');
 });
+
+/* ---------- w:lang (issue #24) ---------- */
+
+// Every run that carries text, as the raw '<w:r>...' chunk.
+const textRuns = xml => xml.split('<w:r>').slice(1).filter(r => r.includes('<w:t '));
+
+test('docxP tags every text run with the OOXML locale for settings.language', () => {
+  for (const [language, locale] of [['en', 'en-US'], ['ru', 'ru-RU']]) {
+    withSettings({ language });
+    const xml = docxP([{ text: 'a' }, { text: 'b', b: true }, { text: 'c\nd', i: true }], { sz: 28 }, S);
+    const runs = textRuns(xml);
+    assert.strictEqual(runs.length, 4, 'three runs, one of them split by a line break');
+    for (const r of runs) {
+      assert.ok(r.includes(`<w:rPr>`) && r.includes(`<w:lang w:val="${locale}"/>`), r);
+      // CT_RPr is an ordered sequence in the schema: w:lang comes after w:b, w:i and w:sz.
+      assert.ok(r.indexOf('<w:sz ') < r.indexOf('<w:lang '), 'w:lang must follow w:sz: ' + r);
+    }
+    assert.ok(runs[1].indexOf('<w:b/>') < runs[1].indexOf('<w:lang '));
+    assert.ok(runs[2].indexOf('<w:i/>') < runs[2].indexOf('<w:lang '));
+  }
+});
+
+test('docxP adds no w:lang when the language is unset or has no OOXML locale', () => {
+  for (const language of [undefined, null, '', 'xx']) {
+    withSettings({ language });
+    const xml = docxP([{ text: 'a' }, { text: 'b', b: true }], {}, S);
+    assert.ok(!xml.includes('w:lang'), `${language}: ${xml}`);
+  }
+});
+
+test('the docxTOC paragraphs carry the language too', () => {
+  withSettings({ language: 'ru', toc: true });
+  const xml = docxTOC([{ type: 'chapter', title: 'Глава', anchor: 'c1' }], S);
+  const runs = textRuns(xml);
+  assert.ok(runs.length >= 2);
+  for (const r of runs) assert.ok(r.includes('<w:lang w:val="ru-RU"/>'), r);
+});

@@ -502,3 +502,27 @@ test('a chapter with scenes and no leftover notes is unaffected (issue #16 no-op
   }
 });
 
+/* ---------- settings.language (issue #24) ---------- */
+
+test('settings.language defaults to null (auto-detect) for new and pre-language novels', () => {
+  // null, not 'en': a file saved before the setting existed should have its language
+  // detected from its text rather than be pinned to English for predating the feature.
+  for (const input of [undefined, {}, { settings: {} }, { title: 'Старый роман', settings: { fontSize: 20 } }]) {
+    assert.strictEqual(migrateNovel(input).settings.language, null, JSON.stringify(input));
+  }
+});
+
+test('an explicit settings.language survives migration, including a second pass', () => {
+  for (const language of ['en', 'ru']) {
+    const once = migrateNovel({ settings: { language } });
+    assert.strictEqual(once.settings.language, language);
+    assert.strictEqual(migrateNovel(structuredClone(once)).settings.language, language);
+  }
+  assert.strictEqual(migrateNovel(structuredClone(migrateNovel({}))).settings.language, null);
+});
+
+test('a non-string or empty settings.language is reset to null', () => {
+  for (const bad of ['', 0, false, 42, {}, ['ru']]) {
+    assert.strictEqual(migrateNovel({ settings: { language: bad } }).settings.language, null, JSON.stringify(bad));
+  }
+});
