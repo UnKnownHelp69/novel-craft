@@ -31,19 +31,10 @@ function sliceMarker(name) {
 }
 
 function loadBuildFlow() {
-  // numWord + ONES/TENS are dependencies of chapterHeadingText (inside the
-  // build-flow marker block). They sit outside the markers, so we extract
-  // them by searching for the known constant declarations.
-  const onesIdx = APP.indexOf("const ONES = ['',");
-  const numWordEnd = APP.indexOf('\n', APP.indexOf('function numWord(', onesIdx)) + 1;
-  assert.ok(onesIdx !== -1 && numWordEnd > onesIdx,
-    'ONES/TENS/numWord not found in src/app.js — the code moved, update this test');
-  const numWordSrc = APP.slice(onesIdx, numWordEnd);
-
   const buildFlowSrc = sliceMarker('build-flow');
   const compTocSrc = sliceMarker('comp-toc');
 
-  const src = numWordSrc + '\n' + buildFlowSrc + '\n' + compTocSrc;
+  const src = buildFlowSrc + '\n' + compTocSrc;
   return new Function(`'use strict';\n${src}\nreturn { chapterHeadingText, buildFlow, compTocEntries };`)();
 }
 
@@ -232,13 +223,6 @@ test('numberChapters "arabic" produces "Chapter N" with suffix', () => {
   assert.strictEqual(chapterHeadingText({ title: 'Chapter 5' }, 4, s), 'Chapter 5');
 });
 
-test('numberChapters "word" produces "Chapter One" etc.', () => {
-  const s = { numberChapters: 'word' };
-  assert.strictEqual(chapterHeadingText({ title: 'Dawn' }, 0, s), 'Chapter One: Dawn');
-  assert.strictEqual(chapterHeadingText({ title: 'Noon' }, 11, s), 'Chapter Twelve: Noon');
-  assert.strictEqual(chapterHeadingText({ title: 'Chapter 1' }, 0, s), 'Chapter One');
-});
-
 test('numberChapters "plain" produces "N. Title"', () => {
   const s = { numberChapters: 'plain' };
   assert.strictEqual(chapterHeadingText({ title: 'The End' }, 0, s), '1. The End');
@@ -252,13 +236,12 @@ test('numberChapters default (none) returns the title as-is', () => {
 });
 
 test('chapterHeadingText falls back to "Chapter N" when title is empty', () => {
-  for (const mode of ['arabic', 'word', 'plain', 'none']) {
+  for (const mode of ['arabic', 'plain', 'none']) {
     const result = chapterHeadingText({ title: '' }, 2, { numberChapters: mode });
     assert.ok(result.length > 0, `mode=${mode}: should produce a non-empty heading`);
     // The fallback title is "Chapter 3" (ci=2 -> ci+1=3).
     if (mode === 'none') assert.strictEqual(result, 'Chapter 3');
     if (mode === 'arabic') assert.strictEqual(result, 'Chapter 3');
-    if (mode === 'word') assert.strictEqual(result, 'Chapter Three');
     if (mode === 'plain') assert.strictEqual(result, '3. Chapter 3');
   }
 });
@@ -348,4 +331,55 @@ test('an explicit compilation title overrides the scene title and survives scene
   const items = [{ type: 'scene', sceneId: 'x', title: 'Прелюдия' }];
   chapters[0].scenes[0].title = 'The Duel';
   assert.strictEqual(buildFlow(items, BASE_SETTINGS, chapters, find).find(f => f.type === 'scene').title, 'Прелюдия');
+});
+
+/* ============================================================
+ * Export language in chapter headings (issue #82)
+ * ============================================================ */
+
+test('"arabic" numbering says "Глава N" for a Russian export', () => {
+  const s = { numberChapters: 'arabic', language: 'ru' };
+  assert.strictEqual(chapterHeadingText({ title: 'Буря' }, 0, s), 'Глава 1: Буря');
+  assert.strictEqual(chapterHeadingText({ title: 'The Storm' }, 2, s), 'Глава 3: The Storm');
+});
+
+test('"arabic" numbering keeps "Chapter N" for English, unset and unlabelled languages', () => {
+  for (const language of ['en', undefined, null, 'de']) {
+    const s = { numberChapters: 'arabic', language };
+    assert.strictEqual(chapterHeadingText({ title: 'Буря' }, 0, s), 'Chapter 1: Буря', String(language));
+  }
+});
+
+test('a "Глава N" title counts as a default title, like "Chapter N"', () => {
+  const ru = { numberChapters: 'arabic', language: 'ru' };
+  // Not "Глава 1: Глава 1".
+  assert.strictEqual(chapterHeadingText({ title: 'Глава 1' }, 0, ru), 'Глава 1');
+  assert.strictEqual(chapterHeadingText({ title: '  глава 7 ' }, 6, ru), 'Глава 7');
+  assert.strictEqual(chapterHeadingText({ title: 'ГЛАВА 2' }, 1, ru), 'Глава 2');
+  // The widened check holds whatever the export language is.
+  assert.strictEqual(chapterHeadingText({ title: 'Глава 4' }, 3, { numberChapters: 'arabic', language: 'en' }), 'Chapter 4');
+  assert.strictEqual(chapterHeadingText({ title: 'Chapter 4' }, 3, ru), 'Глава 4');
+  // A title that merely starts with the word is a real title.
+  assert.strictEqual(chapterHeadingText({ title: 'Глава о ветре' }, 0, ru), 'Глава 1: Глава о ветре');
+});
+
+test('an untitled chapter falls back to the localized "Глава N" in every mode', () => {
+  const at = mode => chapterHeadingText({ title: '' }, 2, { numberChapters: mode, language: 'ru' });
+  assert.strictEqual(at('arabic'), 'Глава 3');
+  assert.strictEqual(at('plain'), '3. Глава 3');
+  assert.strictEqual(at('none'), 'Глава 3');
+});
+
+test('the removed "word" mode no longer produces number words', () => {
+  // Saved presets are migrated to "arabic" (test/migrate-novel.test.js); nothing renders "Chapter One".
+  const out = chapterHeadingText({ title: 'Dawn' }, 0, { numberChapters: 'word' });
+  assert.ok(!/One/.test(out), out);
+});
+
+test('buildFlow carries the export language into its chapter entries (and so the TOC)', () => {
+  const flow = buildFlow(ITEMS, { ...BASE_SETTINGS, numberChapters: 'arabic', language: 'ru' }, CHAPTERS, findScene);
+  const chapters = flow.filter(f => f.type === 'chapter').map(f => f.title);
+  assert.ok(chapters.length > 0);
+  for (const t of chapters) assert.match(t, /^Глава \d+/);
+  assert.deepStrictEqual(compTocEntries(flow, { tocDepth: 'chapters' }).filter(f => f.type === 'chapter').map(f => f.title), chapters);
 });

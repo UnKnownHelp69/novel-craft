@@ -39,16 +39,7 @@ function sliceMarker(name) {
 }
 
 function load() {
-  // numWord + ONES/TENS back chapterHeadingText() inside the build-flow block; they sit
-  // outside every marker pair, so pull them in by locating the constant declaration.
-  // (Same extraction as test/build-flow.test.js and test/epub-xml.test.js.)
-  const onesIdx = APP.indexOf("const ONES = ['',");
-  const numWordEnd = APP.indexOf('\n', APP.indexOf('function numWord(', onesIdx)) + 1;
-  assert.ok(onesIdx !== -1 && numWordEnd > onesIdx,
-    'ONES/TENS/numWord not found in src/app.js — the code moved, update this test');
-
   const src = [
-    APP.slice(onesIdx, numWordEnd),
     sliceMarker('docx-strings:esc'),
     sliceMarker('docx-strings:xmlesc'),
     sliceMarker('docx-strings:builders'),
@@ -598,4 +589,29 @@ test('the TOC of a Russian manuscript is headed "Содержание", wherever
       ['Содержание', 'Part One', 'Chapter 1', 'Глава 2']);
     assert.strictEqual(contentsAt(xml), -1, `tocPosition=${tocPosition}: an English heading survived`);
   }
+});
+
+/* ---------- empty table of contents (issue #83) ---------- */
+
+test('no TOC section at all when the TOC would have no entries', () => {
+  // Scene titles "No titles" -> no chapter entries; no parts either.
+  const flow = [
+    { type: 'scene', title: 'A', html: '<p>a</p>', showTitle: false, anchor: null },
+    { type: 'scene', title: 'B', html: '<p>b</p>', showTitle: false, anchor: null },
+  ];
+  for (const tocPosition of ['afterTitle', 'end']) {
+    for (const language of ['en', 'ru']) {
+      const withToc = buildDocxBodyXml(flow, settings({ toc: true, tocPosition, language }), stubBlocks());
+      const without = buildDocxBodyXml(flow, settings({ toc: false, tocPosition, language }), stubBlocks());
+      assert.strictEqual(withToc, without, `${tocPosition}/${language}: an empty TOC changed the body`);
+      assert.ok(!/>(Contents|Содержание)</.test(withToc), `${tocPosition}/${language}: a TOC heading was emitted`);
+    }
+  }
+});
+
+test('the TOC (and its page break) still appear once there is an entry to list', () => {
+  const flow = [{ type: 'chapter', title: 'Глава 1', anchor: 'h0' }, { type: 'scene', title: 'A', html: '<p>a</p>', showTitle: false, anchor: null }];
+  const xml = buildDocxBodyXml(flow, settings({ toc: true, tocPosition: 'afterTitle', language: 'ru' }), stubBlocks());
+  assert.deepStrictEqual(wtPayloads(xml).slice(0, 2), ['Содержание', 'Глава 1']);
+  assert.strictEqual(paragraphs(xml)[2], PAGE_BREAK);
 });
