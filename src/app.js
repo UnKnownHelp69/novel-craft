@@ -722,6 +722,10 @@ function migrateNovel(d) {
   });
   n.settings.worldMap = wm;
   if (!Array.isArray(n.settings.compilationPresets)) n.settings.compilationPresets = [];
+  // The "Chapter One" numbering mode ('word') was removed; its nearest equivalent is "Chapter 1".
+  n.settings.compilationPresets.forEach(p => {
+    if (p && p.settings && p.settings.numberChapters === 'word') p.settings.numberChapters = 'arabic';
+  });
   // Unset (null) means "auto-detect from the text" — files older than the setting get that
   // too, rather than being pinned to English just for predating it.
   if (typeof n.settings.language !== 'string' || !n.settings.language) n.settings.language = null;
@@ -3760,9 +3764,6 @@ let comp = null;                 // { items:[...], settings:{...} }
 let compPreview = false;
 let compDrag = null;
 
-const ONES = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
-const TENS = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-function numWord(n) { if (n < 20) return ONES[n] || String(n); if (n < 100) return TENS[Math.floor(n / 10)] + (n % 10 ? '-' + ONES[n % 10] : ''); return String(n); }
 
 function defaultCompSettings() {
   return {
@@ -3971,7 +3972,7 @@ function renderCompSettings() {
      <select class="control" data-cs="sceneSeparator">${[['***', '* * *'], ['blank', 'Blank line'], ['custom', 'Custom…']].map(([v, t]) => opt(v, t, s.sceneSeparator)).join('')}</select>
      ${s.sceneSeparator === 'custom' ? `<input type="text" class="control" data-cs="sceneSepCustom" value="${escAttr(s.sceneSepCustom || '')}" placeholder="Separator text">` : ''}
      <label class="field-label">Number chapters</label>
-     <select class="control" data-cs="numberChapters">${[['arabic', 'Chapter 1'], ['word', 'Chapter One'], ['plain', '1.'], ['none', 'None']].map(([v, t]) => opt(v, t, s.numberChapters)).join('')}</select>
+     <select class="control" data-cs="numberChapters">${[['arabic', 'Chapter 1'], ['plain', '1.'], ['none', 'None']].map(([v, t]) => opt(v, t, s.numberChapters)).join('')}</select>
 
      <div class="cs-group">Title page</div>
      <label class="toggle-row"><input type="checkbox" data-cs="titlePage"${s.titlePage ? ' checked' : ''}> <span>Include title page</span></label>
@@ -4024,13 +4025,17 @@ function sepText(settings) {
 }
 /* --- sep-text:end --- */
 /* --- build-flow:start --- */
+/* The word in "Chapter N" headings, per export language (settings.language, resolved by
+   compFlow()); a language missing here falls back to English. */
+const CHAPTER_LABEL = { en: 'Chapter', ru: 'Глава' };
 function chapterHeadingText(chap, ci, settings) {
-  const title = chap.title || ('Chapter ' + (ci + 1));
-  const isDefault = /^chapter\s+\d+$/i.test(title.trim());
+  const word = CHAPTER_LABEL[settings.language] || CHAPTER_LABEL.en;
+  const title = chap.title || (word + ' ' + (ci + 1));
+  // A title that is just "Chapter N" / "Глава N" adds nothing after the number.
+  const isDefault = /^(chapter|глава)\s+\d+$/i.test(title.trim());
   const suffix = isDefault ? '' : ': ' + title;
   switch (settings.numberChapters) {
-    case 'arabic': return 'Chapter ' + (ci + 1) + suffix;
-    case 'word': return 'Chapter ' + numWord(ci + 1) + suffix;
+    case 'arabic': return word + ' ' + (ci + 1) + suffix;
     case 'plain': return (ci + 1) + '. ' + title;
     default: return title;
   }
@@ -4055,6 +4060,11 @@ function buildFlow(items, settings, chapters, findSceneFn) {
   return flow;
 }
 /* --- build-flow:end --- */
+/* The compilation flow for the open novel. buildFlow() stays pure, so the export language
+   its chapter headings use is resolved here, fresh for every compile. */
+function compFlow() {
+  return buildFlow(comp.items, { ...comp.settings, language: resolveLanguage(novel) }, novel.chapters, findScene);
+}
 function normalizeSceneHTML(html, xhtml) {
   const doc = new DOMParser().parseFromString('<div id="__c">' + (html || '') + '</div>', 'text/html');
   const root = doc.getElementById('__c');
@@ -4112,7 +4122,7 @@ function tocHTML(flow) {
 }
 function docBodyHTML(xhtml) {
   const s = comp.settings;
-  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
+  const flow = compFlow();
   let body = titlePageHTML();
   if (s.toc && s.tocPosition === 'afterTitle') body += tocHTML(flow);
   body += flowToBodyHTML(flow, xhtml);
@@ -4171,9 +4181,11 @@ async function saveTextFile(name, content) {
     }
   } else { downloadFile(name, content); toast('Exported ' + name); }
 }
+/* --- compile-txt:start --- reads the comp/novel globals; test/compile-txt.test.js lifts it
+   and injects stand-ins for them. --- */
 function compileTXT() {
   const s = comp.settings;
-  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
+  const flow = compFlow();
   const L = [];
   if (s.titlePage) {
     L.push((s.titleText || novel.title).toUpperCase());
@@ -4182,10 +4194,10 @@ function compileTXT() {
     if (s.dateText) L.push(s.dateText);
     L.push('', '');
   }
-  if (s.toc) {
+  const tocEntries = compTocEntries(flow, s);
+  if (s.toc && tocEntries.length) {
     L.push(tocLabel(resolveLanguage(novel)).toUpperCase(), '');
-    compTocEntries(flow, s)
-      .forEach(f => L.push((f.type === 'scene' ? '    ' : '') + f.title));
+    tocEntries.forEach(f => L.push((f.type === 'scene' ? '    ' : '') + f.title));
     L.push('', '');
   }
   let lastScene = false;
@@ -4202,6 +4214,7 @@ function compileTXT() {
   });
   return L.join('\n').replace(/\n{4,}/g, '\n\n\n');
 }
+/* --- compile-txt:end --- */
 function compileHTML() {
   const s = comp.settings;
   return `<!DOCTYPE html><html lang="${escAttr(resolveLanguage(novel))}"><head><meta charset="utf-8"><title>${esc(s.titleText || novel.title)}</title>
@@ -4698,7 +4711,7 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
 /* --- pdf-pages:end --- */
 async function exportCompPDF() {
   const s = comp.settings;
-  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
+  const flow = compFlow();
   const pageW = s.pageSize === 'Letter' ? 612 : 595;
   const pageH = s.pageSize === 'Letter' ? 792 : 842;
   const marg = ({ narrow: 42, normal: 64, wide: 90 })[s.margins] || 64;
@@ -4844,7 +4857,7 @@ async function exportCompEPUB() {
   const author = s.author || 'Unknown';
   const uid = 'urn:uuid:' + uuid();
   const modifiedISO = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
-  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
+  const flow = compFlow();
   const body = flowToBodyHTML(flow, true);
   const lang = resolveLanguage(novel);
   const inner = titlePageHTMLx() + (s.toc && s.tocPosition === 'afterTitle' ? tocHTMLx(flow, lang) : '') + body + (s.toc && s.tocPosition === 'end' ? tocHTMLx(flow, lang) : '');
@@ -4973,7 +4986,9 @@ function buildDocxBodyXml(flow, settings, htmlToBlocksFn) {
     if (s.dateText) bodyXml += docxP([{ text: s.dateText }], { align: 'center', noIndent: true }, s);
     bodyXml += docxPageBreak();
   }
-  if (s.toc && s.tocPosition === 'afterTitle') { bodyXml += docxTOC(flow, s); bodyXml += docxPageBreak(); }
+  // docxTOC() renders its heading whenever it is called, so skip it when there is nothing to list.
+  const hasToc = s.toc && compTocEntries(flow, s).length > 0;
+  if (hasToc && s.tocPosition === 'afterTitle') { bodyXml += docxTOC(flow, s); bodyXml += docxPageBreak(); }
   let lastScene = false;
   flow.forEach(f => {
     if (f.type === 'part') { bodyXml += docxP([{ text: f.title, b: true }], { sz: 44, align: 'center', noIndent: true }, s); lastScene = false; }
@@ -4990,7 +5005,7 @@ function buildDocxBodyXml(flow, settings, htmlToBlocksFn) {
       lastScene = true;
     }
   });
-  if (s.toc && s.tocPosition === 'end') { bodyXml += docxPageBreak(); bodyXml += docxTOC(flow, s); }
+  if (hasToc && s.tocPosition === 'end') { bodyXml += docxPageBreak(); bodyXml += docxTOC(flow, s); }
   return bodyXml;
 }
 function buildDocxDocumentXml({ bodyXml, pageSize }) {
@@ -5007,7 +5022,7 @@ function buildDocxRelsXml() {
 /* --- docx-strings:builders:end --- */
 async function exportCompDOCX() {
   const s = comp.settings;
-  const flow = buildFlow(comp.items, comp.settings, novel.chapters, findScene);
+  const flow = compFlow();
   // The builders stay free of the `novel` global, so the title-page fallback resolves here.
   const bodyXml = buildDocxBodyXml(flow, { ...s, titleText: s.titleText || novel.title, language: resolveLanguage(novel) }, htmlToBlocks);
   const documentXml = buildDocxDocumentXml({ bodyXml, pageSize: s.pageSize });

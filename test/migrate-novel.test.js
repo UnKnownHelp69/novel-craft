@@ -526,3 +526,23 @@ test('a non-string or empty settings.language is reset to null', () => {
     assert.strictEqual(migrateNovel({ settings: { language: bad } }).settings.language, null, JSON.stringify(bad));
   }
 });
+
+/* ---------- removed "Chapter One" numbering mode (issue #82) ---------- */
+
+test('a saved preset using the removed "word" numbering is migrated to "arabic"', () => {
+  const n = migrateNovel({ settings: { compilationPresets: [
+    { id: 'a', name: 'Words', settings: { numberChapters: 'word', toc: true } },
+    { id: 'b', name: 'Plain', settings: { numberChapters: 'plain' } },
+    { id: 'c', name: 'None', settings: { numberChapters: 'none' } },
+    { id: 'd', name: 'Arabic', settings: { numberChapters: 'arabic' } },
+  ] } });
+  assert.deepStrictEqual(n.settings.compilationPresets.map(p => p.settings.numberChapters), ['arabic', 'plain', 'none', 'arabic']);
+  assert.strictEqual(n.settings.compilationPresets[0].settings.toc, true, 'other preset settings are left alone');
+  // Idempotent on a second pass.
+  assert.deepStrictEqual(migrateNovel(structuredClone(n)).settings.compilationPresets, n.settings.compilationPresets);
+});
+
+test('preset migration tolerates presets without settings', () => {
+  const n = migrateNovel({ settings: { compilationPresets: [{ id: 'x', name: 'X' }, null] } });
+  assert.strictEqual(n.settings.compilationPresets.length, 2);
+});

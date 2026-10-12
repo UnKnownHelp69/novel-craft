@@ -37,16 +37,7 @@ function sliceMarker(name) {
 }
 
 function load() {
-  // numWord + ONES/TENS back chapterHeadingText() inside the build-flow block; they sit
-  // outside every marker pair, so pull them in by locating the constant declaration.
-  // (Same extraction as test/build-flow.test.js.)
-  const onesIdx = APP.indexOf("const ONES = ['',");
-  const numWordEnd = APP.indexOf('\n', APP.indexOf('function numWord(', onesIdx)) + 1;
-  assert.ok(onesIdx !== -1 && numWordEnd > onesIdx,
-    'ONES/TENS/numWord not found in src/app.js — the code moved, update this test');
-
   const src = [
-    APP.slice(onesIdx, numWordEnd),
     sliceMarker('docx-strings:esc'),  // esc(); tocLabel() comes from comp-toc below
     sliceMarker('epub-xml'),
     sliceMarker('build-flow'),
