@@ -4453,9 +4453,9 @@ function bytesToBinary(bytes) {
    {x, y, text, font, fs} record that exportCompPDF() later turns into PDF text-showing
    operators. This factory owns the only mutable layout state there is — the finished
    pages, the page in progress and the vertical cursor — which is why callers get
-   startPage()/finish() instead of reaching into that state themselves. Font selection is
-   per line: a line carries exactly one font id, which is why a paragraph's bold/italic
-   runs cannot survive into the PDF today. test/pdf-layout.test.js lifts this block along
+   startPage()/finish() instead of reaching into that state themselves. A line written in
+   more than one font (a paragraph's bold/italic runs, via wrapRuns()) also carries its
+   same-font segments as .segs. test/pdf-layout.test.js lifts this block along
    with `pdf-text-core` (pdfLen/normalizeForPdf, its only dependencies) and `pdf-pages`,
    so keep it free of DOM, fetch and app state. --- */
 function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWidth, charWidth, maxChars, fonts }) {
@@ -4475,44 +4475,85 @@ function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWid
     return rec;   // callers may patch .text later (TOC page numbers); x/y are already final
   };
   const blank = (n = 1) => { y -= lineHeight * n; if (y < margin) newPage(); };
-  /* Greedy line packing shared by wrap() and heading(): whole words while they fit, and a
-     word too long for any line on its own is hard-broken at the glyph that fills the line
-     (no hyphen, so the pieces rejoin to the exact word). Only the first line carries
-     firstIndent, and it counts against that line's budget. */
-  const packLines = (text, limit, firstIndent = 0) => {
+  /* Greedy line packing shared by wrap(), wrapRuns() and heading(): whole words while they
+     fit, and a word too long for any line on its own is hard-broken at the glyph that fills
+     the line (no hyphen, so the pieces rejoin to the exact word). Only the first line
+     carries firstIndent, and it counts against that line's budget. Works on styled runs
+     ({text, font}) so every glyph keeps the font of the run it came from — a word may span
+     runs (`**bold**er`) — and each line comes back as its text plus the maximal same-font
+     segments it is made of. The space joining two words takes the font of the glyph before
+     it; the font is monospaced, so that never moves anything. */
+  const packRuns = (runs, limit, firstIndent = 0) => {
     const out = [];
-    let ln = '', indent = firstIndent;
-    const push = () => { out.push({ text: ln, indent }); ln = ''; indent = 0; };
-    const pieces = (text || '').split('\n');
-    pieces.forEach((piece, i) => {
-      if (i > 0) push();
-      normalizeForPdf(piece).split(/\s+/).filter(Boolean).forEach(w => {
-        if (ln && pdfLen(ln) + 1 + pdfLen(w) + indent <= limit) { ln += ' ' + w; return; }
-        if (ln) push();
-        let g = [...w];   // code points, the unit pdfLen() measures in
-        for (let room = Math.max(1, limit - indent); g.length > room; room = Math.max(1, limit - indent)) {
-          ln = g.slice(0, room).join(''); g = g.slice(room); push();
+    let ln = [], indent = firstIndent;   // ln: the current line's glyphs, { ch, font } each
+    const push = () => {
+      const segs = [];
+      ln.forEach(g => {
+        const last = segs[segs.length - 1];
+        if (last && last.font === g.font) last.text += g.ch;
+        else segs.push({ text: g.ch, font: g.font });
+      });
+      out.push({ text: ln.map(g => g.ch).join(''), indent, segs });
+      ln = []; indent = 0;
+    };
+    // pieces (split at hard line breaks) -> words -> glyphs; a word only ends at whitespace
+    const pieces = [[]];
+    let word = null;
+    runs.forEach(r => {
+      String(r.text || '').split('\n').forEach((part, k) => {
+        if (k > 0) { pieces.push([]); word = null; }
+        for (const ch of normalizeForPdf(part)) {   // code points, the unit pdfLen() measures in
+          if (/\s/.test(ch)) { word = null; continue; }
+          if (!word) pieces[pieces.length - 1].push(word = []);
+          word.push({ ch, font: r.font });
         }
-        ln = g.join('');
       });
     });
-    if (ln) push();
+    pieces.forEach((words, i) => {
+      if (i > 0) push();
+      words.forEach(w => {
+        if (ln.length && ln.length + 1 + w.length + indent <= limit) {
+          ln.push({ ch: ' ', font: ln[ln.length - 1].font }, ...w);
+          return;
+        }
+        if (ln.length) push();
+        let g = w;
+        for (let room = Math.max(1, limit - indent); g.length > room; room = Math.max(1, limit - indent)) {
+          ln = g.slice(0, room); g = g.slice(room); push();
+        }
+        ln = g;
+      });
+    });
+    if (ln.length) push();
     return out;
   };
-  const wrap = (text, opts = {}) => {
-    let limit = opts.maxChars || maxChars;
-    if (opts.fsize && !opts.maxChars) {
-      limit = Math.max(6, Math.floor(usableWidth / (opts.fsize * 0.6)));
-    }
-    return packLines(text, limit, opts.firstIndent || 0)
-      .map(l => line(l.text, { font: opts.font, fsize: opts.fsize, lh: opts.lh, indent: l.indent, align: opts.align }));
+  const wrapLimit = opts => (opts.fsize && !opts.maxChars)
+    ? Math.max(6, Math.floor(usableWidth / (opts.fsize * 0.6)))
+    : (opts.maxChars || maxChars);
+  /* A line made of more than one font also carries .segs ([{text, font}], in order, joining
+     to .text); its .font is then the first segment's. Single-font lines keep the plain
+     record shape. */
+  const emitPacked = (packed, opts) => packed.map(l => {
+    const rec = line(l.text, { font: l.segs.length ? l.segs[0].font : opts.font, fsize: opts.fsize, lh: opts.lh, indent: l.indent, align: opts.align });
+    if (l.segs.length > 1) rec.segs = l.segs;
+    return rec;
+  });
+  const wrap = (text, opts = {}) =>
+    emitPacked(packRuns([{ text, font: opts.font || fonts.normal }], wrapLimit(opts), opts.firstIndent || 0), opts);
+  /* wrap() for a paragraph of htmlToBlocks() runs ({text, b, i}): bold runs set in the bold
+     font, italic in the italic one. There is no bundled bold-italic face, so a run that is
+     both falls back to bold — the more visible of the two at body size. */
+  const wrapRuns = (runs, opts = {}) => {
+    const base = opts.font || fonts.normal;
+    const styled = (runs || []).map(r => ({ text: r.text, font: r.b ? fonts.bold : r.i ? fonts.italic : base }));
+    return emitPacked(packRuns(styled, wrapLimit(opts), opts.firstIndent || 0), opts);
   };
   const heading = (text, fsize, center) => {
     ensure(); blank(0.4);
     const cw = fsize * 0.6;
     const lim = Math.max(6, Math.floor(usableWidth / cw));
     let page = null;   // index of the page the heading's first line lands on
-    packLines(text, lim).forEach(({ text: t }) => {
+    packRuns([{ text, font: fonts.bold }], lim).forEach(({ text: t }) => {
       line(t, { font: fonts.bold, fsize, lh: fsize * 1.3, align: center ? 'center' : 'left' });
       if (page == null) page = pages.length;   // the line just went onto `cur`, i.e. pages[pages.length]
     });
@@ -4530,7 +4571,7 @@ function createPdfLayout({ pageW, pageH, margin, fontSize, lineHeight, usableWid
   /* Terminal. Flushes the page in progress, guarantees at least one page even for an
      empty document, and hands back the finished list. Call it once. */
   const finish = () => { if (cur.length || !pages.length) newPage(); return pages; };
-  return { fontSize, fonts, maxChars, newPage, ensure, line, blank, wrap, heading, startPage, finish };
+  return { fontSize, fonts, maxChars, newPage, ensure, line, blank, wrap, wrapRuns, heading, startPage, finish };
 }
 /* --- pdf-layout:end --- */
 /* --- pdf-pages:start --- pure, DOM-free driver: walks the compilation flow and decides
@@ -4544,7 +4585,7 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
   const s = settings;
   const size = layout.fontSize;
   const F = layout.fonts;
-  const { line, blank, wrap, heading, newPage, startPage } = layout;
+  const { line, blank, wrap, wrapRuns, heading, newPage, startPage } = layout;
 
   // title page
   if (s.titlePage) {
@@ -4586,11 +4627,11 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
       if (lastScene) { blank(0.4); line(normalizeForPdf(sepText(s) || ''), { align: 'center' }); blank(0.4); }
       if (f.showTitle) headingPage.set(f, heading(f.title, size + 2, false));
       htmlToBlocksFn(f.html).forEach(bl => {
-        // Runs are flattened to their text: a line carries one font, so bold/italic is lost.
         const txt = bl.runs.map(r => r.text).join('');
         if (!txt.trim()) { blank(0.5); return; }
+        // A heading is set entirely in bold, so its runs are flattened to their text.
         if (bl.tag[0] === 'h') heading(txt, size + (bl.tag === 'h1' ? 4 : bl.tag === 'h2' ? 2 : 1), false);
-        else wrap(txt, { firstIndent: s.indent === 'indent' ? 5 : 0 });
+        else wrapRuns(bl.runs, { firstIndent: s.indent === 'indent' ? 5 : 0 });
       });
       lastScene = true;
     }
@@ -4629,7 +4670,7 @@ async function exportCompPDF() {
 
   // serialize — embed only the styles the document actually uses
   const usedRes = new Set();
-  pages.forEach(pg => pg.forEach(l => usedRes.add(l.font)));
+  pages.forEach(pg => pg.forEach(l => (l.segs || [l]).forEach(sg => usedRes.add(sg.font))));
   if (s.pageNumber && s.pageNumber !== 'none') usedRes.add(F.normal);
   if (!usedRes.size) usedRes.add(F.normal);
 
@@ -4673,9 +4714,14 @@ async function exportCompPDF() {
   pages.forEach((pg, pi) => {
     let stream = 'BT\n';
     pg.forEach(l => {
-      const res = fonts[l.font] ? l.font : F.normal;
-      stream += `/${res} ${l.fs} Tf 1 0 0 1 ${l.x.toFixed(2)} ${l.y.toFixed(2)} Tm ` +
-        `<${pdfGlyphHex(l.text, fonts[res], reports[res])}> Tj\n`;
+      // Position once per line; each Tj advances the text position past the glyphs it drew,
+      // so a mixed-font line's later segments start exactly where the previous one ended.
+      stream += `1 0 0 1 ${l.x.toFixed(2)} ${l.y.toFixed(2)} Tm `;
+      (l.segs || [l]).forEach(sg => {
+        const res = fonts[sg.font] ? sg.font : F.normal;
+        stream += `/${res} ${l.fs} Tf <${pdfGlyphHex(sg.text, fonts[res], reports[res])}> Tj `;
+      });
+      stream += '\n';
     });
     if (s.pageNumber && s.pageNumber !== 'none') {
       const label = String((s.startPage || 1) + pi);
