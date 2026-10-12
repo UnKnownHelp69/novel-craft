@@ -13,12 +13,6 @@
  * conversion testable without a DOM or a jsdom dependency (same pattern as
  * test/docx-package.test.js).
  *
- * Several tests are marked CHARACTERIZATION: they pin what the engine does today,
- * including behaviour that is arguably wrong (bold/italic runs being flattened to plain
- * text; over-long TOC entries not wrapping). They are recorded
- * so the extraction can be proved behaviour-preserving and so a later fix has to
- * deliberately update them — not as a claim that the behaviour is correct.
- *
  * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
  * engine is lifted out between marker comments and run here in isolation — the same
  * technique as test/pdf-cyrillic.test.js, test/docx-package.test.js and the rest.
@@ -439,19 +433,101 @@ test('an explicit opts.font is respected', () => {
   assert.strictEqual(l.finish()[0][0].font, 'F3');
 });
 
-test('CHARACTERIZATION: a line carries exactly one font — nothing switches mid-line', () => {
-  // Every emitted record is {x, y, text, font, fs} with a single font id, and the
-  // serializer turns each record into one Tf/Tj pair. There is no representation for a
-  // font change inside a line, which is exactly why a paragraph's bold/italic runs get
-  // flattened before they reach here. Pinned; do not "fix" without reworking the record.
+test('single-font lines keep the plain {x, y, text, font, fs} record — no .segs', () => {
+  // Only a line that actually switches font mid-line grows a .segs array (wrapRuns, below);
+  // everything else stays the shape the serializer and the TOC patching have always used.
   const l = layoutOf();
   l.line('mixed **bold** and *italic* source text');
   l.wrap('mixed bold and italic source text');
+  l.wrapRuns([{ text: 'all of it ', i: true }, { text: 'sloped', i: true }]);
   l.heading('Mixed Heading', 20, true);
   for (const ln of l.finish()[0]) {
     assert.strictEqual(typeof ln.font, 'string');
     assert.deepStrictEqual(Object.keys(ln).sort(), ['font', 'fs', 'text', 'x', 'y']);
   }
+});
+
+/* ---------- wrapRuns(): bold/italic inside a paragraph (issue #27) ---------- */
+
+const segsOf = ln => (ln.segs || [{ text: ln.text, font: ln.font }]).map(sg => [sg.text, sg.font]);
+
+test('wrapRuns sets bold runs in the bold font and italic runs in the italic one, mid-line', () => {
+  const l = layoutOf();
+  l.wrapRuns([{ text: 'plain ' }, { text: 'bolded', b: true }, { text: ' and ' }, { text: 'sloped', i: true }]);
+  const [ln] = l.finish()[0];
+  assert.strictEqual(ln.text, 'plain bolded and sloped');
+  assert.deepStrictEqual(segsOf(ln), [
+    ['plain ', 'F1'], ['bolded ', 'F2'], ['and ', 'F1'], ['sloped', 'F3'],
+  ], 'the space after a word takes that word\'s font');
+  assert.strictEqual(ln.segs.map(sg => sg.text).join(''), ln.text, 'segments join back to the line text');
+  assert.strictEqual(ln.font, 'F1', '.font is the first segment\'s font');
+});
+
+test('a run that is both bold and italic falls back to the bold font', () => {
+  // No bold-italic face is bundled (src/fonts/pdf/ has Regular, Bold and Italic only).
+  const l = layoutOf();
+  l.wrapRuns([{ text: 'x ' }, { text: 'both', b: true, i: true }]);
+  assert.deepStrictEqual(segsOf(l.finish()[0][0]), [['x ', 'F1'], ['both', 'F2']]);
+});
+
+test('a paragraph entirely in one style is a single-font line in that font', () => {
+  const l = layoutOf();
+  l.wrapRuns([{ text: 'whole ', i: true }, { text: 'paragraph', i: true }]);
+  const [ln] = l.finish()[0];
+  assert.strictEqual(ln.font, 'F3');
+  assert.strictEqual(ln.segs, undefined);
+});
+
+test('wrapRuns breaks lines exactly where wrap() breaks the same text', () => {
+  // The emphasis must not move a single line break: pagination is unchanged by it.
+  const text = 'Ветер поднимался над пустошью и нёс с собой запах дождя. '.repeat(20).trim();
+  const words = text.split(' ');
+  const runs = words.map((w, i) => ({ text: (i ? ' ' : '') + w, b: i % 3 === 0, i: i % 5 === 0 }));
+  const a = layoutOf(); a.wrap(text, { firstIndent: 5 });
+  const b = layoutOf(); b.wrapRuns(runs, { firstIndent: 5 });
+  const pa = a.finish(), pb = b.finish();
+  assert.deepStrictEqual(pb.map(texts), pa.map(texts));
+  assert.deepStrictEqual(pb.flat().map(l => [l.x, l.y]), pa.flat().map(l => [l.x, l.y]));
+  for (const ln of pb.flat()) {
+    if (ln.segs) assert.strictEqual(ln.segs.map(sg => sg.text).join(''), ln.text);
+  }
+});
+
+test('a word split across runs stays one word and keeps each part\'s font', () => {
+  const l = layoutOf({ maxChars: 8 });
+  l.wrapRuns([{ text: 'aaaa ' }, { text: 'bold', b: true }, { text: 'er tail' }]);
+  const lines = l.finish()[0];
+  assert.deepStrictEqual(texts(lines), ['aaaa', 'bolder', 'tail'], '"bold"+"er" wraps as one word');
+  assert.deepStrictEqual(segsOf(lines[1]), [['bold', 'F2'], ['er', 'F1']]);
+});
+
+test('a hard-broken styled word keeps its font on every piece', () => {
+  const l = layoutOf({ maxChars: 4 });
+  l.wrapRuns([{ text: 'ab' }, { text: 'cdefgh', i: true }]);
+  const lines = l.finish()[0];
+  assert.deepStrictEqual(texts(lines), ['abcd', 'efgh']);
+  assert.deepStrictEqual(segsOf(lines[0]), [['ab', 'F1'], ['cd', 'F3']]);
+  assert.deepStrictEqual(segsOf(lines[1]), [['efgh', 'F3']]);
+});
+
+test('a <br> inside a styled run still breaks the line', () => {
+  // htmlToBlocks() turns <br> into a '\n' run carrying the surrounding b/i flags.
+  const l = layoutOf();
+  l.wrapRuns([{ text: 'first', b: true }, { text: '\n', b: true }, { text: 'second' }]);
+  const lines = l.finish()[0];
+  assert.deepStrictEqual(texts(lines), ['first', 'second']);
+  assert.deepStrictEqual(lines.map(x => x.font), ['F2', 'F1']);
+});
+
+test('wrapRuns normalizes each run\'s text and tolerates empty input', () => {
+  const l = layoutOf();
+  l.wrapRuns([{ text: '“quoted” — ' }, { text: 'done…', i: true }]);
+  l.wrapRuns([]);
+  l.wrapRuns(null);
+  l.wrapRuns([{ text: '   ' }]);
+  const [ln, ...rest] = l.finish()[0];
+  assert.deepStrictEqual(segsOf(ln), [['"quoted" - ', 'F1'], ['done...', 'F3']]);
+  assert.deepStrictEqual(rest, []);
 });
 
 /* ---------- startPage() / finish() ---------- */
@@ -817,16 +893,29 @@ test('body paragraphs are indented when settings.indent is "indent"', () => {
   assert.strictEqual(noneLine.x, A4.margin);
 });
 
-test('CHARACTERIZATION: bold and italic runs are flattened into plain text', () => {
-  // buildPdfPages joins bl.runs into one string and drops the b/i flags, because a layout
-  // line can only carry one font. The text survives; the emphasis does not. Pinned here so
-  // a fix has to change this test on purpose rather than by accident.
+test('scene body paragraphs keep their bold and italic runs (issue #27)', () => {
+  // Used to be pinned as CHARACTERIZATION: buildPdfPages joined bl.runs into one string and
+  // dropped the b/i flags, so every PDF body line came out in the normal font.
   const { pages } = build({ toc: false, titlePage: false }, [
     { tag: 'p', runs: [{ text: 'plain ' }, { text: 'bolded', b: true }, { text: ' and ' }, { text: 'sloped', i: true }] },
   ]);
   const line = pages.flatMap(p => p).find(l => l.text.startsWith('plain'));
   assert.strictEqual(line.text, 'plain bolded and sloped');
-  assert.strictEqual(line.font, A4.fonts.normal, 'the whole run collapses onto the normal font');
+  assert.deepStrictEqual(line.segs, [
+    { text: 'plain ', font: A4.fonts.normal },
+    { text: 'bolded ', font: A4.fonts.bold },
+    { text: 'and ', font: A4.fonts.normal },
+    { text: 'sloped', font: A4.fonts.italic },
+  ]);
+});
+
+test('heading blocks inside a scene stay all-bold even when their runs are styled', () => {
+  const { pages } = build({ toc: false, titlePage: false }, [
+    { tag: 'h2', runs: [{ text: 'Part ' }, { text: 'Two', i: true }] },
+  ]);
+  const head = pages.flatMap(p => p).find(l => l.text === 'Part Two');
+  assert.strictEqual(head.font, A4.fonts.bold);
+  assert.strictEqual(head.segs, undefined);
 });
 
 test('an empty flow still produces a single page', () => {
