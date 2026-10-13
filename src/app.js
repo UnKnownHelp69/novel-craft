@@ -28,36 +28,137 @@ const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&
    pinned by existing DOCX tests — so attribute contexts need this variant. */
 const escAttr = s => esc(s).replace(/"/g, '&quot;');
 /* --- docx-strings:escAttr:end --- */
+/* --- count-words:start --- pure: test/count-words.test.js lifts this block. A word starts
+   and ends with a letter or digit (combining marks included); apostrophes and hyphens only
+   count when they join letters (кто-то, rock'n'roll), so a hyphen typed as a dash (" - ")
+   is not a word of its own. --- */
 const countWords = t => {
-  const m = (t || '').trim().match(/[\p{L}\p{N}'’-]+/gu);
+  const m = String(t || '').match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:['’-][\p{L}\p{N}][\p{L}\p{M}\p{N}]*)*/gu);
   return m ? m.length : 0;
 };
-const stripHtml = html => {
-  const d = document.createElement('div');
-  d.innerHTML = html || '';
-  const blocks = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TR', 'UL', 'OL', 'TABLE']);
-  let text = '';
-  const walk = node => {
-    if (node.nodeType === 3) {
-      text += node.nodeValue;
-      return;
-    }
-    if (node.nodeName === 'BR') {
-      text += '\n';
-      return;
-    }
-    const isBlock = blocks.has(node.nodeName);
-    if (isBlock && text.length > 0 && !text.endsWith('\n')) {
-      text += '\n';
-    }
-    for (let c of node.childNodes) walk(c);
-    if (isBlock && text.length > 0 && !text.endsWith('\n')) {
-      text += '\n';
-    }
-  };
-  walk(d);
-  return text.trim();
+/* --- count-words:end --- */
+
+/* Parse HTML without side effects. A DOMParser document has no browsing context, so nothing
+   in it loads or runs: an <img onerror> stays inert. Never parse file or clipboard HTML
+   through document.createElement(...).innerHTML — that element belongs to the live page,
+   and its images load and fire their handlers even while it is detached. The <body> prefix
+   starts the parser in body mode, so markup lands exactly where div.innerHTML would put it
+   (and <title>/<meta>/<style> stay in the body, where the sanitizer can see them). */
+const parseInert = html => {
+  const doc = new DOMParser().parseFromString('<!DOCTYPE html><body>' + (html || ''), 'text/html');
+  return doc.body || doc.documentElement;
 };
+
+/* --- strip-html:start --- pure, DOM-free: walks any node-like tree ({nodeType, nodeName,
+   nodeValue, childNodes}); test/strip-html.test.js lifts this block and feeds it plain
+   objects. Text is collected in an array and the last emitted character is tracked on the
+   side: growing one string with += and calling .endsWith() on it makes V8 flatten the string
+   on every call, which made this walk quadratic (~0.4 s per keystroke on a 30k-word scene). --- */
+const TEXT_BLOCK_TAGS = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TR', 'UL', 'OL', 'TABLE']);
+function textFromNode(root) {
+  const parts = [];
+  let last = '';
+  const push = s => { if (s) { parts.push(s); last = s[s.length - 1]; } };
+  const walk = node => {
+    if (node.nodeType === 3) { push(node.nodeValue); return; }
+    if (node.nodeName === 'BR') { push('\n'); return; }
+    const isBlock = TEXT_BLOCK_TAGS.has(node.nodeName);
+    if (isBlock && parts.length && last !== '\n') push('\n');
+    for (const c of node.childNodes) walk(c);
+    if (isBlock && parts.length && last !== '\n') push('\n');
+  };
+  walk(root);
+  return parts.join('').trim();
+}
+/* --- strip-html:end --- */
+const stripHtml = html => textFromNode(parseInert(html));
+
+/* --- html-policy:start --- pure, DOM-free: the allowlist behind sanitizeSceneHTML().
+   test/html-policy.test.js lifts this block. Scene HTML comes from .novel files (which may
+   be someone else's) and from the clipboard, and it ends up in the live editor, so anything
+   not listed here is either dropped with its content or unwrapped to its text. --- */
+// Kept as-is (minus attributes): everything the editor, mdToHtml() and ordinary pastes produce.
+const SCENE_KEEP_TAGS = new Set([
+  'p', 'br', 'div', 'span', 'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'sub', 'sup', 'font',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'hr', 'ul', 'ol', 'li', 'img',
+  'table', 'caption', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th'
+]);
+// Dropped together with everything inside: active content, raw-text containers, form
+// controls and foreign (SVG/MathML) content, whose parsing rules differ from plain HTML.
+const SCENE_DROP_TAGS = new Set([
+  'script', 'style', 'noscript', 'template', 'iframe', 'frame', 'frameset', 'object', 'embed',
+  'applet', 'param', 'svg', 'math', 'canvas', 'audio', 'video', 'source', 'track', 'picture',
+  'link', 'meta', 'base', 'title', 'head', 'textarea', 'select', 'option', 'optgroup', 'input',
+  'button', 'marquee', 'xmp', 'plaintext', 'noembed', 'noframes', 'portal'
+]);
+function sceneTagAction(tag) {
+  tag = String(tag || '').toLowerCase();
+  if (SCENE_KEEP_TAGS.has(tag)) return 'keep';
+  if (SCENE_DROP_TAGS.has(tag)) return 'drop';
+  return 'unwrap';
+}
+const FONT_FAMILY_RE = /^[\p{L}\p{N} ,'"_-]{1,200}$/u;
+// Images stay only as inline raster data (pasted screenshots); remote or SVG sources go.
+const IMG_SRC_RE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$/i;
+/* The value an attribute keeps, or null to remove it. `style` is filtered property by
+   property (sceneStyleValueOk) by the DOM side, so it never passes here. */
+function sceneAttrValue(tag, name, value) {
+  tag = String(tag || '').toLowerCase();
+  name = String(name || '').toLowerCase();
+  value = String(value == null ? '' : value);
+  if (tag === 'font' && name === 'face') return FONT_FAMILY_RE.test(value) ? value : null;
+  if (tag === 'img' && name === 'src') return IMG_SRC_RE.test(value) ? value : null;
+  if (tag === 'img' && name === 'alt') return value;
+  return null;
+}
+// Inline styles keep only what per-selection formatting needs (contenteditable sometimes
+// writes these instead of <b>/<i>/<font>); nothing in this list can load a resource.
+const SCENE_STYLE_PROPS = {
+  'font-family': FONT_FAMILY_RE,
+  'font-weight': /^(?:normal|bold|bolder|lighter|[1-9]00)$/,
+  'font-style': /^(?:normal|italic|oblique)$/,
+  'text-decoration-line': /^(?:none|(?:underline|overline|line-through)(?: (?:underline|overline|line-through))*)$/
+};
+function sceneStyleValueOk(prop, value) {
+  const re = SCENE_STYLE_PROPS[prop];
+  return !!re && re.test(String(value == null ? '' : value).trim());
+}
+/* --- html-policy:end --- */
+
+/* Clean untrusted HTML in place (children of `parent`) according to the policy above.
+   Children are cleaned before their parent is unwrapped, so unwrapping only ever moves
+   already-clean nodes. */
+function sanitizeChildren(parent) {
+  for (const node of [...parent.childNodes]) {
+    if (node.nodeType === 3) continue;                          // text
+    if (node.nodeType !== 1) { node.remove(); continue; }       // comments, processing instructions
+    const tag = node.localName;
+    const action = sceneTagAction(tag);
+    if (action === 'drop') { node.remove(); continue; }
+    sanitizeChildren(node);
+    if (action === 'unwrap') { node.replaceWith(...node.childNodes); continue; }
+    let style = '';
+    if (node.hasAttribute('style') && node.style) {
+      style = Object.keys(SCENE_STYLE_PROPS)
+        .map(p => [p, node.style.getPropertyValue(p).trim()])
+        .filter(([p, v]) => v && sceneStyleValueOk(p, v))
+        .map(([p, v]) => `${p}: ${v};`).join(' ');
+    }
+    for (const a of [...node.attributes]) {
+      const v = sceneAttrValue(tag, a.name, a.value);
+      if (v === null) node.removeAttribute(a.name);
+    }
+    if (style) node.setAttribute('style', style);
+    if (tag === 'img' && !node.hasAttribute('src')) node.remove();
+  }
+}
+/* Scene HTML as it may safely enter the editor, previews and exports. Idempotent. */
+function sanitizeSceneHTML(html) {
+  if (!html) return '';
+  const root = parseInert(html);
+  sanitizeChildren(root);
+  return root.innerHTML;
+}
 
 /* ---------- state ---------- */
 /* --- migration-core:base:start --- */
@@ -222,7 +323,7 @@ function renderTree() {
     chLi.className = 'tree-chapter' + (c.collapsed ? ' collapsed' : '') + (c.id === currentChapterId ? ' active' : '');
     chLi.dataset.chapterId = c.id;
     chLi.innerHTML =
-      `<div class="tc-row" data-chapter-id="${c.id}">
+      `<div class="tc-row" data-chapter-id="${escAttr(String(c.id))}">
          <button class="tc-caret" title="Expand / collapse">▾</button>
          <span class="tc-folder">📁</span>
          <span class="tc-num">${ci + 1}.</span>
@@ -691,6 +792,9 @@ function serializeNovel(n) { return JSON.stringify(toFileObject(n), null, 2); }
    headlessly. The pieces are deliberately left where they belong rather than moved next
    to each other; the test concatenates the slices itself. countWords/stripHtml/toast are
    NOT inside any marker — the test injects Node stand-ins for those. --- */
+/* Colours from a file end up in style attributes and <style> rules; only #rrggbb gets there
+   (which is all <input type=color> ever produces). */
+function safeColor(c, fallback) { return /^#[0-9a-f]{6}$/i.test(String(c || '')) ? c : fallback; }
 function migrateNovel(d) {
   d = d || {};
   const base = newNovel(d.title);
@@ -700,7 +804,10 @@ function migrateNovel(d) {
   n.settings = { ...base.settings, ...(d.settings || {}) };
   if (!Array.isArray(n.settings.customNoteTypes)) n.settings.customNoteTypes = [];
   if (!n.settings.noteTypeColors || typeof n.settings.noteTypeColors !== 'object') n.settings.noteTypeColors = {};
-  n.settings.customNoteTypes.forEach(t => { if (!t.id) t.id = uuid(); });
+  n.settings.customNoteTypes.forEach(t => { if (!t.id) t.id = uuid(); t.color = safeColor(t.color, '#c9a96e'); });
+  Object.keys(n.settings.noteTypeColors).forEach(k => {
+    if (!safeColor(n.settings.noteTypeColors[k], null)) delete n.settings.noteTypeColors[k];
+  });
   // world map
   const wm = { ...blankWorldMap(), ...(n.settings.worldMap || {}) };
   if (typeof wm.locations !== 'object' || !wm.locations) wm.locations = {};
@@ -717,7 +824,7 @@ function migrateNovel(d) {
   wm.routes.forEach(r => {
     r.id = r.id || uuid();
     if (!Array.isArray(r.characterIds)) r.characterIds = [];
-    r.color = r.color || '#c9a96e';
+    r.color = safeColor(r.color, '#c9a96e');
     if (typeof r.bidirectional !== 'boolean') r.bidirectional = true;
   });
   n.settings.worldMap = wm;
@@ -748,7 +855,8 @@ function migrateNovel(d) {
     s.order = j;
     s.content = s.content || '';
     s.markdownContent = s.markdownContent || '';
-    s.wordCount = s.wordCount || countWords(stripHtml(s.content));
+    // a stored count is only a cache: anything but a positive integer is recounted
+    s.wordCount = Number.isInteger(s.wordCount) && s.wordCount > 0 ? s.wordCount : countWords(stripHtml(s.content));
     if (s.povCharacter === undefined) s.povCharacter = null;
     if (s.location === undefined) s.location = null;
     s.timeOfDay = s.timeOfDay || 'unknown';
@@ -805,14 +913,26 @@ function migrateNovel(d) {
     });
     if (!ch.graphPosition || typeof ch.graphPosition.x !== 'number') ch.graphPosition = null;
     if (ch.hiddenInGraph === undefined) ch.hiddenInGraph = false;
+    if (ch.color !== undefined && !safeColor(ch.color, null)) delete ch.color;
   });
   return n;
 }
 /* --- migration-core:migrate:end --- */
 
+/* Clean every scene's HTML (see sanitizeSceneHTML). This is the one gate all file content
+   passes on its way in — opening, recovery and library splits — so the editor, previews and
+   exports only ever see allowlisted markup. */
+function sanitizeNovelHTML(n) {
+  (n.chapters || []).forEach(c => (c.scenes || []).forEach(sc => {
+    const clean = sanitizeSceneHTML(sc.content);
+    if (clean !== sc.content) { sc.content = clean; sc.wordCount = countWords(stripHtml(clean)); }
+  }));
+  return n;
+}
+
 /* Put a loaded novel object into the UI as the current file. */
 function setCurrentNovel(n, path) {
-  novel = migrateNovel(n);
+  novel = sanitizeNovelHTML(migrateNovel(n));
   currentFilePath = path || null;
   // Compile state belongs to the previous novel (its order, title, author); openCompile()
   // rebuilds it for this one. Ctrl+O / the menu work while the dialog is up, so close it too.
@@ -825,7 +945,7 @@ function setCurrentNovel(n, path) {
 
 /* Handle an old multi-novel (library) file by splitting it into separate files. */
 async function handleLibraryFile(data, path) {
-  const novels = (data.novels || []).map(migrateNovel);
+  const novels = (data.novels || []).map(d => sanitizeNovelHTML(migrateNovel(d)));
   if (!novels.length) { setCurrentNovel(newNovel(), null); return; }
   const active = novels.find(n => n.id === data.activeNovelId) || novels[0];
   const others = novels.filter(n => n !== active);
@@ -1006,6 +1126,21 @@ editor.addEventListener('input', () => {
   // only mark dirty if the content really differs from the last saved snapshot (Bug 2B)
   if (normalizeHTML(s.content) !== (savedContent[s.id] || '')) markDirty();
 });
+/* Pasted HTML goes through the same allowlist as file content (sanitizeSceneHTML): pastes
+   from Word or the web otherwise bring their classes, styles, fonts and remote images into
+   the scene. Plain-text pastes, including Ctrl+Shift+V, are left to the browser. */
+let plainPasteRequested = false;
+editor.addEventListener('keydown', e => {
+  plainPasteRequested = (e.ctrlKey || e.metaKey) && e.shiftKey && shortcutKey(e) === 'v';
+});
+editor.addEventListener('paste', e => {
+  const plain = plainPasteRequested;
+  plainPasteRequested = false;
+  const html = !plain && e.clipboardData && e.clipboardData.getData('text/html');
+  if (!html) return;
+  e.preventDefault();
+  document.execCommand('insertHTML', false, sanitizeSceneHTML(html));
+});
 mdEditor.addEventListener('input', () => {
   if (isLoadingContent) return;
   const s = currentScene();
@@ -1019,12 +1154,12 @@ mdEditor.addEventListener('input', () => {
   if (s.markdownContent !== (savedMd[s.id] || '')) markDirty();
 });
 function refreshSceneWordCount(s) {
-  const el = chapterList.querySelector(`[data-scene-id="${s.id}"] .ts-words`);
+  const el = chapterList.querySelector(`[data-scene-id="${CSS.escape(String(s.id))}"] .ts-words`);
   if (el) el.textContent = s.wordCount || 0;
   const c = currentChapter();
   if (c) {
     c.wordCount = chapterWordCount(c);
-    const cw = chapterList.querySelector(`.tree-chapter[data-chapter-id="${c.id}"] .tc-words`);
+    const cw = chapterList.querySelector(`.tree-chapter[data-chapter-id="${CSS.escape(String(c.id))}"] .tc-words`);
     if (cw) cw.textContent = c.wordCount;
   }
 }
@@ -1143,8 +1278,7 @@ function inlineMd(s) {
 }
 /* --- mdtohtml:end --- */
 function htmlToMd(html) {
-  const d = document.createElement('div');
-  d.innerHTML = html || '';
+  const d = parseInert(html);
   let out = [];
   const inline = node => {
     let s = '';
@@ -1577,7 +1711,7 @@ function buildExport(kind, n) {
   if (kind === 'html') {
     const body = n.chapters
       .map(c => `<section><h1>${esc(c.title)}</h1>\n` +
-        scenesOf(c).map(s => `<article><h2>${esc(s.title)}</h2>\n${s.content}</article>`).join('\n') +
+        scenesOf(c).map(s => `<article><h2>${esc(s.title)}</h2>\n${sanitizeSceneHTML(s.content)}</article>`).join('\n') +
         `</section>`)
       .join('\n<hr/>\n');
     return `<!DOCTYPE html><html lang="${escAttr(resolveLanguage(n))}"><head><meta charset="utf-8"><title>${esc(n.title)}</title>
@@ -1980,7 +2114,7 @@ function showDotTooltip(dot, nt) {
   const ty = getNoteType(nt.typeId);
   dotTip = document.createElement('div');
   dotTip.className = 'note-tip';
-  dotTip.innerHTML = `<b style="color:${ty.color}">${ty.icon || ''} ${esc(ty.name)}</b>` +
+  dotTip.innerHTML = `<b style="color:${safeColor(ty.color, '#c9a96e')}">${esc(ty.icon || '')} ${esc(ty.name)}</b>` +
     `<div class="nt-content">${esc((nt.content || '(no text)').slice(0, 50))}</div>` +
     `<div class="nt-date">${fmtNoteDate(nt.createdAt)}</div>`;
   document.body.appendChild(dotTip);
@@ -1996,7 +2130,7 @@ function ensureHighlightStyles() {
   let st = document.getElementById('noteHiliteStyles');
   if (!st) { st = document.createElement('style'); st.id = 'noteHiliteStyles'; document.head.appendChild(st); }
   st.textContent = getNoteTypes().map(ty =>
-    `::highlight(${cssHlName(ty.id)}){text-decoration:underline;text-decoration-color:${ty.color};text-decoration-thickness:2px;text-underline-offset:3px;}`
+    `::highlight(${cssHlName(ty.id)}){text-decoration:underline;text-decoration-color:${safeColor(ty.color, '#c9a96e')};text-decoration-thickness:2px;text-underline-offset:3px;}`
   ).join('\n');
 }
 function updateActiveHighlightStyle(color) {
@@ -2087,7 +2221,7 @@ function renderNoteCard() {
     noteCard.innerHTML =
       `<div class="nc-arrow"></div>
        <div class="nc-head">
-         <span class="note-badge" style="--nc:${ty.color}">${ty.icon || '•'} ${esc(ty.name)}</span>
+         <span class="note-badge" style="--nc:${safeColor(ty.color, '#c9a96e')}">${esc(ty.icon || '•')} ${esc(ty.name)}</span>
          ${nt.positionLost ? '<span class="nc-warn" title="Position may be inaccurate">⚠️</span>' : ''}
        </div>
        <div class="nc-quote">“${esc(nt.selectedText || '')}”</div>
@@ -2161,7 +2295,7 @@ function renderFilterPills() {
     const b = document.createElement('button');
     b.className = 'filter-pill' + (noteTypeFilter.has(ty.id) ? ' active' : '');
     b.style.setProperty('--pc', ty.color);
-    b.innerHTML = `${ty.icon || '•'} ${esc(ty.name)} (${count})`;
+    b.innerHTML = `${esc(ty.icon || '•')} ${esc(ty.name)} (${count})`;
     b.onclick = () => { if (noteTypeFilter.has(ty.id)) noteTypeFilter.delete(ty.id); else noteTypeFilter.add(ty.id); renderNotes(); };
     host.appendChild(b);
   });
@@ -2185,7 +2319,7 @@ function renderNotesPanel() {
       `<div class="nl-strip"></div>
        <div class="nl-main">
          <div class="nl-top">
-           <span class="nl-type">${ty.icon || '•'} ${esc(ty.name)}</span>
+           <span class="nl-type">${esc(ty.icon || '•')} ${esc(ty.name)}</span>
            ${nt.positionLost ? '<span class="nl-warn" title="Position may be inaccurate">⚠️</span>' : ''}
            ${nt.resolved ? '<span class="nl-check">✓</span>' : ''}
          </div>
@@ -2241,8 +2375,8 @@ function renderNoteTypeSettings() {
     const row = document.createElement('div');
     row.className = 'nt-row';
     row.innerHTML =
-      `<input type="color" class="nt-color" value="${ty.color}" title="Color">
-       <span class="nt-icon">${ty.icon || '•'}</span>
+      `<input type="color" class="nt-color" value="${safeColor(ty.color, '#c9a96e')}" title="Color">
+       <span class="nt-icon">${esc(ty.icon || '•')}</span>
        <span class="nt-name">${esc(ty.name)}</span>
        ${ty.isDefault
         ? '<span class="nt-lock" title="Default type — recolour only">🔒</span>'
@@ -2260,7 +2394,7 @@ function showCustomTypeForm(existing, anchorRow) {
   if (!host) return;
   const form = document.createElement('div');
   form.className = 'nt-form';
-  const color = existing ? existing.color : '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0');
+  const color = safeColor(existing ? existing.color : '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0'), '#c9a96e');
   form.innerHTML =
     `<input type="text" class="control ntf-name" placeholder="Name" value="${existing ? escAttr(existing.name) : ''}">
      <div class="ntf-row">
@@ -2910,7 +3044,7 @@ function openCharPanel(ch) {
      <label class="field-label">Role</label>
      <select id="gcRole" class="control"></select>
      <label class="field-label">Node colour</label>
-     <input type="color" id="gcColor" class="nt-color" value="${ch.color || '#c9a96e'}" />
+     <input type="color" id="gcColor" class="nt-color" value="${safeColor(ch.color, '#c9a96e')}" />
      <div class="gp-rels"><div class="field-label">Relationships</div><ul>${rels}</ul></div>
      <div class="gp-actions">
        <button class="tbtn" id="gcAddRel">Add Relationship</button>
@@ -3396,7 +3530,7 @@ function renderMapLayerSelect() {
   if (!sel) return;
   const wm = worldMap();
   sel.innerHTML = '<option value="">— none (move/place) —</option>' +
-    wm.layers.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join('');
+    wm.layers.map(l => `<option value="${escAttr(String(l.id))}">${esc(l.name)}</option>`).join('');
   sel.value = mActiveLayerId;
 }
 function addMapLayer() {
@@ -3951,7 +4085,7 @@ function renderCompSettings() {
      <select class="control" data-cs="language">${[['', 'Auto-detect'], ...NOVEL_LANGUAGES].map(([v, t]) => opt(v, t, s.language || '')).join('')}</select>
      <label class="field-label">Font</label>
      <select class="control" data-cs="font">
-       ${['Georgia, serif|Georgia', "'Lora', serif|Lora", "'Merriweather', serif|Merriweather", "'Inter', sans-serif|Inter", 'Roboto, sans-serif|Roboto', 'Arial, sans-serif|Arial'].map(o => { const [v, t] = o.split('|'); return opt(v, t, s.font); }).join('')}
+       ${COMP_FONT_OPTIONS.map(([v, t]) => opt(v, t, s.font)).join('')}
      </select>
      <div class="rf-row">
        <div class="rf-col"><label class="field-label">Font size</label><select class="control" data-cs="fontSize">${[10, 11, 12, 14].map(v => opt(v, v + 'pt', s.fontSize)).join('')}</select></div>
@@ -4066,8 +4200,8 @@ function compFlow() {
   return buildFlow(comp.items, { ...comp.settings, language: resolveLanguage(novel) }, novel.chapters, findScene);
 }
 function normalizeSceneHTML(html, xhtml) {
-  const doc = new DOMParser().parseFromString('<div id="__c">' + (html || '') + '</div>', 'text/html');
-  const root = doc.getElementById('__c');
+  const root = parseInert(html);
+  sanitizeChildren(root);   // scenes are sanitized on load; this keeps previews and exports safe regardless
   if (!root.textContent.trim() && !root.querySelector('img')) return '';
   if (!xhtml) return root.innerHTML;
   const ser = new XMLSerializer();
@@ -4133,9 +4267,23 @@ function compDocClasses() {
   const s = comp.settings;
   return 'comp-doc' + (s.indent === 'indent' ? ' comp-indent' : '') + (s.paraSpacing === 'space' ? ' comp-paraspace' : '') + (s.align === 'justify' ? ' comp-justify' : '');
 }
+/* Font choices of the Compile dialog. Presets live in the .novel file, so the values that
+   reach CSS (compDocStyle, the EPUB stylesheet) go through compTypography() first. */
+const COMP_FONT_OPTIONS = [
+  ['Georgia, serif', 'Georgia'], ["'Lora', serif", 'Lora'], ["'Merriweather', serif", 'Merriweather'],
+  ["'Inter', sans-serif", 'Inter'], ['Roboto, sans-serif', 'Roboto'], ['Arial, sans-serif', 'Arial']
+];
+function compTypography(s) {
+  const num = (v, lo, hi, dflt) => { const n = parseFloat(v); return Number.isFinite(n) && n >= lo && n <= hi ? n : dflt; };
+  return {
+    font: COMP_FONT_OPTIONS.some(([v]) => v === s.font) ? s.font : COMP_FONT_OPTIONS[0][0],
+    fontSize: num(s.fontSize, 6, 72, 12),
+    lineSpacing: num(s.lineSpacing, 0.5, 4, 1.5)
+  };
+}
 function compDocStyle() {
-  const s = comp.settings;
-  return `font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};`;
+  const t = compTypography(comp.settings);
+  return `font-family:${t.font};font-size:${t.fontSize}pt;line-height:${t.lineSpacing};`;
 }
 /* Screen/HTML/EPUB stylesheet for the compiled document (no print rules). */
 function compileCSS() {
@@ -4312,17 +4460,14 @@ function makeZip(files) {
    extracts everything between these two markers and exercises it in isolation, so keep
    this block free of DOM, fetch and app state. --- */
 
-/* Typographic cleanup only: smart quotes, dashes and ellipses are folded to their ASCII
-   equivalents. Everything else is passed through untouched — the embedded font is
-   responsible for the glyphs, so there is no codepoint ceiling here. */
+/* Whitespace and control-character cleanup only. Typography — dashes, ellipses, curly and
+   angle quotes — passes through untouched: the embedded font draws all of it (the tests pin
+   that), and the em dash that opens every line of dialogue in Russian prose must stay an em
+   dash. There is no codepoint ceiling here; the embedded font is responsible for the glyphs. */
 function normalizeForPdf(str) {
   let o = '';
   for (const ch of (str || '')) {
     const code = ch.codePointAt(0);
-    if (code === 0x2018 || code === 0x2019 || code === 0x2032) { o += "'"; continue; }
-    if (code === 0x201C || code === 0x201D) { o += '"'; continue; }
-    if (code === 0x2013 || code === 0x2014) { o += '-'; continue; }
-    if (code === 0x2026) { o += '...'; continue; }
     if (code === 0x00A0) { o += ' '; continue; }
     if (code === 9) { o += '    '; continue; }
     if (code === 10 || code === 13) { o += ' '; continue; }
@@ -4864,7 +5009,8 @@ async function exportCompEPUB() {
   const navEntries = compTocEntries(flow, s);
   // A book with no parts/chapters still needs one nav target, so fall back to the book itself.
   const navItems = navEntries.length ? navEntries : [{ anchor: null, title }];
-  const css = `html,body{margin:0;padding:1em;font-family:${s.font};font-size:${s.fontSize}pt;line-height:${s.lineSpacing};}\n` + compileCSS();
+  const typo = compTypography(s);
+  const css = `html,body{margin:0;padding:1em;font-family:${typo.font};font-size:${typo.fontSize}pt;line-height:${typo.lineSpacing};}\n` + compileCSS();
   const bookXhtml = buildEpubBookXhtml({ title, lang, docClasses: compDocClasses(), innerHtml: inner });
   const navXhtml = buildEpubNavXhtml({ navItems, lang });
   const ncx = buildEpubNcxXml({ uid, title, navItems, lang });
@@ -4905,8 +5051,7 @@ function tocHTMLx(flow, lang) {
 function xmlEsc(s) { return esc(String(s == null ? '' : s)); }
 /* --- docx-strings:xmlesc:end --- */
 function htmlToBlocks(html) {
-  const d = document.createElement('div');
-  d.innerHTML = html || '';
+  const d = parseInert(html);
   const blocks = [];
   const runsOf = (node, b, i) => {
     let out = [];
@@ -5042,7 +5187,7 @@ function renderPresetSelect() {
   const sel = $('#compPreset');
   const presets = novel.settings.compilationPresets || [];
   sel.innerHTML = '<option value="__standard">Standard Manuscript</option>' +
-    presets.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    presets.map(p => `<option value="${escAttr(String(p.id))}">${esc(p.name)}</option>`).join('');
 }
 function loadPreset(id) {
   // The language is the novel's own setting, not part of a preset: keep showing the novel's.
@@ -5087,9 +5232,29 @@ function navigateNotes(dir) {
   idx = idx === -1 ? (dir > 0 ? 0 : notes.length - 1) : (idx + dir + notes.length) % notes.length;
   openNoteCard(notes[idx].id);
 }
+/* --- shortcut-key:start --- pure: test/shortcut-key.test.js lifts this block. The key a
+   shortcut is matched against. e.key follows the active layout, so on a Russian layout
+   Ctrl+S arrives as 'ы' and Ctrl+G as 'п'; for anything that is not plain ASCII the
+   physical key (e.code) is used instead. Latin layouts (QWERTY, AZERTY, Dvorak) keep
+   their own letters. The key that types '/' on US keyboards types '.' on a Russian one,
+   so an unshifted press of it counts as '/'. --- */
+function shortcutKey(e) {
+  const key = String(e.key || '');
+  if (/^[a-z]$/i.test(key)) return key.toLowerCase();
+  if (key.length === 1 && key.charCodeAt(0) < 128) {
+    return !e.shiftKey && e.code === 'Slash' ? '/' : key;
+  }
+  const m = /^Key([A-Z])$/.exec(e.code || '');
+  if (m) return m[1].toLowerCase();
+  if (e.code === 'Backslash') return '\\';
+  if (e.code === 'Slash') return '/';
+  return key;
+}
+/* --- shortcut-key:end --- */
 document.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && !e.shiftKey && (e.key === 'g' || e.key === 'G')) { e.preventDefault(); if (graphOpen) closeGraph(); else openGraph(); return; }
+  const key = shortcutKey(e);
+  if (mod && !e.shiftKey && key === 'g') { e.preventDefault(); if (graphOpen) closeGraph(); else openGraph(); return; }
   if (e.key === 'Escape' && graphOpen) { if (!$('#graphPanel').classList.contains('hidden')) { $('#graphPanel').classList.add('hidden'); } else closeGraph(); return; }
   if (e.key === 'Escape' && corkboardOpen) { closeCorkboard(); return; }
   if (e.key === 'Escape' && mapOpen) {
@@ -5099,19 +5264,19 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Escape' && compOpen && !$('#routeOverlay').classList.contains('hidden')) { return; }
   if (e.key === 'Escape' && compOpen) { closeCompile(); return; }
-  if (mod && e.shiftKey && (e.key === 'M' || e.key === 'm' || e.key === 'ь')) { e.preventDefault(); openAddNote(); return; }
+  if (mod && e.shiftKey && key === 'm') { e.preventDefault(); openAddNote(); return; }
   if (e.key === 'Escape' && openNoteId) { closeNoteCard(); return; }
   if (e.key === 'Escape' && notePopup && !notePopup.classList.contains('hidden')) { closeAddNote(); return; }
   if (mod && openNoteId && e.key === 'ArrowDown') { e.preventDefault(); navigateNotes(1); return; }
   if (mod && openNoteId && e.key === 'ArrowUp') { e.preventDefault(); navigateNotes(-1); return; }
-  if (mod && e.shiftKey && (e.key === 'F' || e.key === 'f')) { e.preventDefault(); setFocus(!focusMode); return; }
-  if (mod && e.shiftKey && (e.key === 'S' || e.key === 's')) { e.preventDefault(); doSave(true); return; }
-  if (mod && e.key === 's') { e.preventDefault(); doSave(false); return; }
-  if (mod && e.key === 'o') { e.preventDefault(); doOpen(); return; }
-  if (mod && e.key === '\\') { e.preventDefault(); $('#toggleLeft').click(); return; }
-  if (mod && e.key === '/') { e.preventDefault(); $('#toggleRight').click(); return; }
+  if (mod && e.shiftKey && key === 'f') { e.preventDefault(); setFocus(!focusMode); return; }
+  if (mod && e.shiftKey && key === 's') { e.preventDefault(); doSave(true); return; }
+  if (mod && key === 's') { e.preventDefault(); doSave(false); return; }
+  if (mod && !e.shiftKey && key === 'o') { e.preventDefault(); doOpen(); return; }
+  if (mod && key === '\\') { e.preventDefault(); $('#toggleLeft').click(); return; }
+  if (mod && key === '/') { e.preventDefault(); $('#toggleRight').click(); return; }
   if (e.key === 'Escape' && focusMode) { setFocus(false); return; }
-  if (mod && (e.key === 'b' || e.key === 'i')) { updateToolbarState(); } // let native handle, refresh state
+  if (mod && (key === 'b' || key === 'i')) { updateToolbarState(); } // let native handle, refresh state
 });
 
 /* ================= MENU EVENTS FROM RUST ================= */

@@ -43,7 +43,7 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
   transition:transform .2s ease, opacity .2s ease;
 }
 .topbar-left,.topbar-right{display:flex;align-items:center;gap:6px;}
-.topbar-center{flex:1;display:flex;align-items:center;justify-content:center;gap:10px;overflow:hidden;}
+.topbar-center{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:10px;overflow:hidden;}
 .app-title{color:var(--accent);font-weight:700;letter-spacing:.5px;font-size:15px;}
 .chapter-title{
   color:var(--text);font-size:13px;padding:2px 8px;border-radius:4px;
@@ -79,7 +79,7 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
 .empty-state .lp-action{flex:none;min-width:150px;}
 .rm-empty{color:var(--text-dim);font-style:italic;cursor:default;}
 .chapter-title[contenteditable="true"]{outline:1px solid var(--accent);user-select:text;}
-.save-indicator{color:var(--text-dim);font-size:11px;min-width:52px;}
+.save-indicator{color:var(--text-dim);font-size:11px;min-width:52px;flex-shrink:0;}
 .save-indicator.saving{color:var(--accent);}
 
 .tbtn{
@@ -218,8 +218,8 @@ body.native-titlebar .win-controls{display:none;}
 .tree-chapter.drop-into > .tc-row{background:rgba(201,169,110,.18);box-shadow:inset 0 0 0 1px var(--accent);}
 
 /* breadcrumb */
-.breadcrumb{display:flex;align-items:center;gap:4px;overflow:hidden;max-width:60vw;-webkit-app-region:no-drag;}
-.bc-part{background:none;border:none;color:var(--text);font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:.15s ease;}
+.breadcrumb{display:flex;align-items:center;gap:4px;overflow:hidden;min-width:0;max-width:60vw;-webkit-app-region:no-drag;}
+.bc-part{background:none;border:none;color:var(--text);font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:.15s ease;}
 .bc-part:hover{background:var(--editor-bg);color:var(--accent);}
 .bc-scene{color:var(--accent);font-weight:600;}
 .bc-sep{color:var(--text-dim);font-size:11px;}

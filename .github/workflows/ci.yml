@@ -1,8 +1,8 @@
 name: CI
 
-# Build-verification gate for pull requests into main.
-# There is no test suite in this repo yet — this workflow only proves that the
-# frontend parses and that the Tauri release bundle compiles on all three targets.
+# Build-verification gate for pull requests into main: the unit tests (node:test), the
+# browser e2e suite, the Rust type-check, a desktop e2e run of the real app on Linux, and a
+# release-bundle build on all three targets.
 on:
   pull_request:
     branches: [main]
@@ -53,9 +53,59 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # Chromium for the browser suite: the runner's preinstalled Google Chrome
+      # (playwright-core downloads no browsers).
+      - name: Run browser e2e tests
+        run: npm run test:e2e
+
       - name: Check Rust backend
         working-directory: src-tauri
         run: cargo check
+
+  # The real Tauri app (WebKitGTK + Rust backend) driven over WebDriver: checks what only
+  # the desktop build has — the CSP, the IPC, and the backend's file-access allowlist.
+  desktop-e2e:
+    name: Desktop e2e (ubuntu-22.04)
+    needs: quick-check
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils webkit2gtk-driver xvfb xdotool
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+
+      - name: Run Rust unit tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Build debug app
+        run: npx tauri build --debug --no-bundle
+
+      - name: Run desktop e2e tests
+        run: xvfb-run -a npm run test:desktop
 
   build-matrix:
     name: Build (${{ matrix.platform }})

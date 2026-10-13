@@ -174,10 +174,14 @@ test('wrap emits nothing for empty or whitespace-only text', () => {
   assert.deepStrictEqual(l.finish(), [[]]);
 });
 
-test('wrap normalizes typography before measuring', () => {
+test('wrap keeps typography and measures it per glyph', () => {
   const l = layoutOf();
   l.wrap('“quoted” — done…');
-  assert.deepStrictEqual(texts(l.finish()[0]), ['"quoted" - done...']);
+  assert.deepStrictEqual(texts(l.finish()[0]), ['“quoted” — done…']);
+  // one glyph each, so an ellipsis takes one column, not three
+  const m = layoutOf({ maxChars: 5 });
+  m.wrap('ab… cd');
+  assert.deepStrictEqual(texts(m.finish()[0]), ['ab…', 'cd']);
 });
 
 test('wrap passes font and align through to every line it emits', () => {
@@ -510,14 +514,14 @@ test('a <br> inside a styled run still breaks the line', () => {
   assert.deepStrictEqual(lines.map(x => x.font), ['F2', 'F1']);
 });
 
-test('wrapRuns normalizes each run\'s text and tolerates empty input', () => {
+test('wrapRuns keeps each run\'s typography and tolerates empty input', () => {
   const l = layoutOf();
   l.wrapRuns([{ text: '“quoted” — ' }, { text: 'done…', i: true }]);
   l.wrapRuns([]);
   l.wrapRuns(null);
   l.wrapRuns([{ text: '   ' }]);
   const [ln, ...rest] = l.finish()[0];
-  assert.deepStrictEqual(segsOf(ln), [['"quoted" - ', 'F1'], ['done...', 'F3']]);
+  assert.deepStrictEqual(segsOf(ln), [['“quoted” — ', 'F1'], ['done…', 'F3']]);
   assert.deepStrictEqual(rest, []);
 });
 

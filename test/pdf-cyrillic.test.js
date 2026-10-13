@@ -58,18 +58,22 @@ test('normalizeForPdf keeps Cyrillic instead of substituting "?"', () => {
   }
 });
 
-test('normalizeForPdf still folds smart punctuation to ASCII', () => {
-  assert.strictEqual(core.normalizeForPdf('“x” ‘y’ a—b c…d'), '"x" \'y\' a-b c...d');
+test('normalizeForPdf keeps typographic punctuation (dialogue dashes, ellipses, quotes)', () => {
+  // Russian prose opens every line of dialogue with an em dash; folding it to '-' made the
+  // PDF read "- Привет, - сказал он". The embedded font draws all of these (next test).
+  assert.strictEqual(core.normalizeForPdf('“x” ‘y’ a—b c…d «z» „w“ 1–2'), '“x” ‘y’ a—b c…d «z» „w“ 1–2');
+  assert.strictEqual(core.normalizeForPdf('— Привет, — сказал он…'), '— Привет, — сказал он…');
   assert.strictEqual(core.normalizeForPdf('a\u00A0b'), 'a b');           // nbsp -> space
   assert.strictEqual(core.normalizeForPdf('a\tb'), 'a    b');        // tab -> four spaces
   assert.strictEqual(core.normalizeForPdf('a\u0001b'), 'ab');            // control chars dropped
 });
 
 test('normalizeForPdf preserves the exact Russian sample', () => {
-  // « » are Latin-1 and pass through unchanged; the em dash folds to '-' by design.
+  // Nothing in it is whitespace or a control character, so it passes through byte for byte —
+  // the em dash included.
   assert.strictEqual(
     core.normalizeForPdf(SAMPLES.body),
-    'Привет, это тестовая сцена с кириллицей - проверка «ёлочек» и тире.'
+    'Привет, это тестовая сцена с кириллицей — проверка «ёлочек» и тире.'
   );
 });
 
@@ -94,6 +98,15 @@ for (const name of FONTS) {
     const alphabet = 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя';
     const missing = [...alphabet].filter(ch => f.cmap.get(ch.codePointAt(0)) == null);
     assert.deepStrictEqual(missing, [], 'font is missing Cyrillic glyphs');
+  });
+}
+
+const TYPOGRAPHY = '—–“”‘’…«»„′';
+for (const name of FONTS) {
+  test(`${name} draws the typography normalizeForPdf passes through`, () => {
+    const f = core.parseTrueType(fontBytes(name));
+    const missing = [...TYPOGRAPHY].filter(ch => f.cmap.get(ch.codePointAt(0)) == null);
+    assert.deepStrictEqual(missing, [], 'font is missing typographic glyphs — they would print as empty boxes');
   });
 }
 
