@@ -665,6 +665,11 @@ chapterList.addEventListener('dblclick', e => {
 });
 
 let treeDrag = null;
+/* A click on a chapter row toggles its collapse a beat later (like a corkboard card's click), and the
+   second press of a double-click (rename) cancels that. Toggling at once moved the row out from under
+   the pointer: the re-render detached it, and with the tree scrolled to its end the shorter list slid
+   another row in, so the dblclick never reached the chapter. */
+let chapterToggleTimer = null;
 function clearTreeDrop() { $$('.tree-scene,.tree-chapter').forEach(x => x.classList.remove('drop-before', 'drop-after', 'drop-into')); }
 chapterList.addEventListener('mousedown', e => {
   if (e.button !== 0) return;
@@ -672,7 +677,10 @@ chapterList.addEventListener('mousedown', e => {
   const sceneEl = e.target.closest('.tree-scene');
   const chapRow = e.target.closest('.tc-row');
   if (sceneEl) treeDrag = { type: 'scene', id: sceneEl.dataset.sceneId, el: sceneEl, startX: e.clientX, startY: e.clientY, started: false, target: null };
-  else if (chapRow) treeDrag = { type: 'chapter', id: chapRow.dataset.chapterId, el: chapRow.closest('.tree-chapter'), startX: e.clientX, startY: e.clientY, started: false, target: null };
+  else if (chapRow) {
+    if (e.detail > 1) clearTimeout(chapterToggleTimer);   // second press of a double-click: rename, don't collapse
+    treeDrag = { type: 'chapter', id: chapRow.dataset.chapterId, el: chapRow.closest('.tree-chapter'), startX: e.clientX, startY: e.clientY, started: false, target: null };
+  }
 });
 document.addEventListener('mousemove', e => {
   if (!treeDrag) return;
@@ -705,7 +713,7 @@ document.addEventListener('mousemove', e => {
     }
   }
 });
-document.addEventListener('mouseup', () => {
+document.addEventListener('mouseup', e => {
   if (!treeDrag) return;
   const d = treeDrag;
   treeDrag = null;
@@ -713,7 +721,7 @@ document.addEventListener('mouseup', () => {
   d.el.classList.remove('dragging');
   if (!d.started) {                                   // no movement -> click
     if (d.type === 'scene') { if (d.id !== currentSceneId) selectScene(d.id); }
-    else { const c = findChapter(d.id); if (c) { c.collapsed = !c.collapsed; renderTree(); } }
+    else if (e.detail < 2) chapterToggleTimer = setTimeout(() => { const c = findChapter(d.id); if (c) { c.collapsed = !c.collapsed; renderTree(); } }, 230);
     return;
   }
   if (!d.target) return;
@@ -1160,7 +1168,7 @@ function commitNovelTitle() {
   nvTitle.contentEditable = 'false';
   if (!novel) return;
   const v = nvTitle.textContent.trim();
-  if (v && v !== novel.title) { novel.title = v; updateWindowTitle(); markDirty(); }
+  if (v && v !== novel.title) { novel.title = v; updateWindowTitle(); updateBreadcrumb(); markDirty(); }
   else nvTitle.textContent = novel.title;
 }
 
@@ -1591,10 +1599,15 @@ $('#toggleRight').addEventListener('click', () => {
 function setFocus(on) {
   focusMode = on;
   document.body.classList.toggle('focus', on);
+  // focus mode hides the top bar (and its Focus button): the exit button is the mouse way out
+  const exit = $('#exitFocus');
+  exit.classList.toggle('hidden', !on);
+  exit.classList.remove('peek');
   if (on) editor.focus();
 }
 $('#btnFocus').addEventListener('click', () => setFocus(!focusMode));
 $('#exitFocus').addEventListener('click', () => setFocus(false));
+$('#exitFocus').addEventListener('mousedown', e => e.preventDefault());   // the caret stays where it was
 // peek exit button when hovering top edge
 document.addEventListener('mousemove', e => {
   if (focusMode) $('#exitFocus').classList.toggle('peek', e.clientY < 8);
@@ -1611,6 +1624,22 @@ function ctxItem(label, handler, cls) {
   if (cls) b.className = cls;
   b.addEventListener('click', () => { hideCtx(); handler(); });
   return b;
+}
+/* Show the menu at (x, y), or above y when it would run off the bottom of the window. A "▸"
+   submenu opens to the right of the menu, or to the left when it would run off the window
+   there, and moves up as far as it would run off the bottom. */
+function showCtx(x, y) {
+  ctx.style.left = x + 'px';
+  ctx.classList.remove('hidden');
+  const h = ctx.offsetHeight;
+  ctx.style.top = (y + h > innerHeight ? Math.max(0, y - h) : y) + 'px';
+  const right = ctx.getBoundingClientRect().right;
+  ctx.querySelectorAll('.ctx-sub-menu').forEach(list => {
+    list.style.display = 'flex';   // shown only on hover: lay it out once to measure it
+    list.parentElement.classList.toggle('ctx-sub-left', right + list.offsetWidth > innerWidth);
+    list.style.top = Math.min(0, innerHeight - list.getBoundingClientRect().bottom) + 'px';
+    list.style.display = '';
+  });
 }
 chapterList.addEventListener('contextmenu', e => {
   const sceneEl = e.target.closest('.tree-scene');
@@ -1643,11 +1672,10 @@ chapterList.addEventListener('contextmenu', e => {
     ctx.appendChild(ctxItem('Collapse All', () => setAllCollapsed(true)));
     ctx.appendChild(ctxItem('Expand All', () => setAllCollapsed(false)));
   }
-  ctx.style.left = Math.min(e.clientX, innerWidth - 190) + 'px';
-  ctx.style.top = e.clientY + 'px';
-  ctx.classList.remove('hidden');
+  showCtx(Math.min(e.clientX, innerWidth - 190), e.clientY);
 });
-document.addEventListener('click', hideCtx);
+// a click on a "▸" head opens nothing by itself (its submenu shows on hover): keep the menu up
+document.addEventListener('click', e => { if (!e.target.closest('#ctxMenu .ctx-sub-head')) hideCtx(); });
 
 /* ================= MODAL ================= */
 let modalCb = null;
@@ -2115,9 +2143,11 @@ function hexToRgba(hex, a) {
   if (!m) return `rgba(201,169,110,${a})`;
   return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})`;
 }
-/* clamp a floating element to the viewport near a client rect */
+/* clamp a floating element to the viewport near a client rect. Shown, measured and placed in
+   one task, so it never paints at the old spot. No visibility:hidden while measuring: the
+   controls inside transition `all`, so their inherited visibility would animate back from
+   hidden and stay hidden (unfocusable) until the next frame. */
 function positionFloat(el, rect) {
-  el.style.visibility = 'hidden';
   el.classList.remove('hidden');
   const w = el.offsetWidth, h = el.offsetHeight;
   let left = rect.left;
@@ -2127,7 +2157,6 @@ function positionFloat(el, rect) {
   if (top + h > innerHeight - 10) top = Math.max(10, rect.top - h - 8);
   el.style.left = left + 'px';
   el.style.top = top + 'px';
-  el.style.visibility = '';
 }
 
 /* ================= ADD-NOTE POPUP ================= */
@@ -2139,7 +2168,8 @@ function openAddNote(sel) {
   buildTypeOptions($('#npType'));
   $('#npContent').value = '';
   positionFloat(notePopup, s.rect);
-  setTimeout(() => $('#npContent').focus(), 30);
+  // focus now, not on a timer: a key typed in between would replace the selection in the scene
+  $('#npContent').focus();
 }
 function closeAddNote() { if (notePopup) { notePopup.classList.add('hidden'); } pendingSelection = null; }
 function confirmAddNote() {
@@ -3043,9 +3073,7 @@ function initGraphEvents() {
     ctx.appendChild(ctxItem('Edit Character', () => openCharPanel(node)));
     ctx.appendChild(ctxItem('Add Relationship', () => openRelPanel(null, node.id)));
     ctx.appendChild(ctxItem('Hide from Graph', () => { node.hiddenInGraph = true; markDirty(); drawGraph(); }));
-    ctx.style.left = Math.min(e.clientX, innerWidth - 190) + 'px';
-    ctx.style.top = e.clientY + 'px';
-    ctx.classList.remove('hidden');
+    showCtx(Math.min(e.clientX, innerWidth - 190), e.clientY);
   });
 }
 function onNodeClick(node) { gSelected = gSelected === node.id ? null : node.id; gHoverEdge = null; drawGraph(); }
@@ -3767,9 +3795,7 @@ function initMapEvents() {
         sub.appendChild(list); ctx.appendChild(sub);
       }
     }
-    ctx.style.left = Math.min(e.clientX, innerWidth - 200) + 'px';
-    ctx.style.top = e.clientY + 'px';
-    ctx.classList.remove('hidden');
+    showCtx(Math.min(e.clientX, innerWidth - 200), e.clientY);
   });
 }
 

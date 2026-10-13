@@ -398,7 +398,7 @@ flow('renaming the novel in the top bar updates the breadcrumb', async page => {
   await page.keyboard.press('Enter');
   await expectText(page, '#novelTitle', 'Сага');
   await eventually(() => breadcrumb(page), ['Сага', 'Глава 1', 'Сцена'], 'breadcrumb after novel rename');
-}, { todo: 'bug: commitNovelTitle() never calls updateBreadcrumb(), so the breadcrumb keeps the old novel title until the next scene switch' });
+});
 
 flow('double-clicking a chapter row renames the chapter', async page => {
   await openFixture(page, novelOf([ch('c1', 'Глава 1', sc('s1', 'Сцена'))]));
@@ -408,7 +408,31 @@ flow('double-clicking a chapter row renames the chapter', async page => {
   assert.deepEqual(await breadcrumb(page), ['Роман', 'Пролог', 'Сцена']);
   const { data } = await save(page);
   assert.equal(data.chapters[0].title, 'Пролог');
-}, { todo: 'bug: each click on a chapter row re-renders the tree (collapse toggle on mouseup), so the dblclick lands on a detached node and the rename prompt never opens' });
+});
+
+flow('a chapter row: a click collapses it, a double-click renames it with the tree scrolled to its end', async page => {
+  // a long novel, so the tree scrolls; at its end, collapsing a chapter shortens the list and the
+  // clamped scroll slides the rows under the pointer
+  await openFixture(page, novelOf(Array.from({ length: 15 }, (_, i) =>
+    ch(`c${i}`, `Глава ${i + 1}`, ...[1, 2, 3].map(j => sc(`s${i}_${j}`, `Сцена ${i + 1}.${j}`))))));
+  await chapterRow(page, 'Глава 1').hover();
+  await page.mouse.wheel(0, 10000);
+  await eventually(() => page.locator('#chapterList').evaluate(el => el.scrollTop > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 1),
+    true, 'tree scrolled to its end');
+
+  await chapterRow(page, 'Глава 15').dblclick();
+  await answerPrompt(page, 'Эпилог', 'Rename chapter');
+  await eventually(async () => (await treeOutline(page)).at(-1), ['Эпилог', ['Сцена 15.1', 'Сцена 15.2', 'Сцена 15.3']], 'last chapter renamed');
+  assert.equal(await activeScene(page), 'Сцена 1.1', 'the double-click opens no scene');
+  assert.equal(await page.locator('#chapterList .tree-scene:visible').count(), 45, 'the double-click leaves every chapter expanded');
+
+  await chapterRow(page, 'Глава 14').click();
+  await eventually(() => page.locator('#chapterList .tree-scene:visible').count(), 42, 'a click collapses Глава 14');
+  assert.equal(await activeScene(page), 'Сцена 1.1', 'a click on a chapter row opens no scene');
+  const { data } = await save(page);
+  assert.equal(data.chapters[14].title, 'Эпилог');
+  assert.deepEqual(data.chapters.map(c => c.collapsed), data.chapters.map((c, i) => i === 13));
+});
 
 flow('pointer drags reorder scenes and chapters in the tree', async page => {
   await openFixture(page, novelOf([
@@ -520,9 +544,7 @@ flow('tree context menu: Move to Chapter ▸ moves the scene to the end of the p
   await page.locator('#ctxMenu .ctx-sub-head').hover();
   // the submenu offers every other chapter
   assert.deepEqual(await page.locator('#ctxMenu .ctx-sub-menu button').allTextContents(), ['Два', 'Три']);
-  /* This exercises what the item does. The menu clips its submenu today (see the todo test
-     below), and Playwright reaches the item only by scrolling the clipped menu; the todo test
-     is the one that checks a user can actually see and hit it. */
+  // this exercises what the item does; the next test checks that a user can see and hit it
   await page.locator('#ctxMenu .ctx-sub-menu button', { hasText: 'Два' }).click();
   await eventually(() => treeOutline(page), [['Один', ['S1']], ['Два', ['T1', 'S2']], ['Три', ['U1']]], 'S2 moved to the end of Два');
   await expectShown(page, '#ctxMenu', false);
@@ -545,6 +567,9 @@ flow('tree context menu: the Move to Chapter ▸ submenu can be seen and clicked
   await sceneRow(page, 'S2').click({ button: 'right' });
   await expectShown(page, '#ctxMenu');
   await page.locator('#ctxMenu .ctx-sub-head').hover();
+  // clicking the ▸ head itself leaves the menu up (its submenu opens on hover)
+  await page.locator('#ctxMenu .ctx-sub-head').click();
+  assert.equal(await isShown(page, '#ctxMenu'), true, 'a click on the ▸ head closed the menu');
   const item = page.locator('#ctxMenu .ctx-sub-menu button', { hasText: 'Два' });
   // the submenu must be reachable: what is under its centre is the item itself
   const hit = await item.evaluate(b => { const r = b.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === b; });
@@ -553,7 +578,73 @@ flow('tree context menu: the Move to Chapter ▸ submenu can be seen and clicked
   await eventually(() => treeOutline(page), [['Один', ['S1']], ['Два', ['T1', 'S2']]], 'S2 moved to Два');
   const { data } = await save(page);
   assert.deepEqual(outline(data), [['Один', ['S1']], ['Два', ['T1', 'S2']]]);
-}, { todo: 'bug: .ctx-menu has overflow:hidden, which clips the absolutely positioned .ctx-sub-menu (left:100%) — the "Move to Chapter ▸" submenu is never visible or clickable' });
+});
+
+flow('context menu: a ▸ submenu at the right edge of the window opens to the left and can be reached with the mouse', async page => {
+  await openFixture(page, novelOf([ch('c1', 'Глава', sc('s1', 'Сцена'))], {
+    locations: [{ id: 'town', name: 'Город', type: 'city' }]
+  }));
+  await openAccordion(page, 'locs');
+  await page.click('#btnWorldMap');
+  await expectShown(page, '#mapOverlay');
+  // right-click the empty map at its right edge: no room left for the Place Location ▸ submenu on the right
+  const cv = await page.locator('#mapCanvas').boundingBox();
+  await page.mouse.click(cv.x + cv.width - 5, cv.y + 60, { button: 'right' });
+  await expectShown(page, '#ctxMenu');
+  const head = await page.locator('#ctxMenu .ctx-sub-head').boundingBox();
+  const y = head.y + head.height / 2;
+  await page.mouse.move(head.x + head.width / 2, y);
+  const sub = await page.locator('#ctxMenu .ctx-sub-menu').boundingBox();
+  assert.ok(sub.x >= 0 && sub.x + sub.width <= page.viewportSize().width, 'the submenu runs off the window');
+  const item = page.locator('#ctxMenu .ctx-sub-menu button', { hasText: 'Город' });
+  const box = await item.boundingBox();
+  // walk the pointer over into the submenu a pixel at a time: no gap on the way closes it
+  await page.mouse.move(box.x + box.width / 2, y, { steps: Math.ceil(Math.abs(box.x + box.width / 2 - head.x - head.width / 2)) });
+  assert.equal(await item.isVisible(), true, 'the submenu closed on the way in');
+  await item.click({ timeout: 3000 });
+  await expectShown(page, '#ctxMenu', false);
+  await eventually(() => page.locator('#mapLocList .map-loc-row .mlr-place').count(), 0, 'Город placed');
+  await page.keyboard.press('Escape');
+  await expectShown(page, '#mapOverlay', false);
+  const { data } = await save(page);
+  assert.deepEqual(Object.keys(data.settings.worldMap.locations), ['town']);
+});
+
+flow('tree context menu: near the bottom of the window the menu and its ▸ submenu move up into it', async page => {
+  const chapters = [];
+  for (let i = 1; i <= 15; i++) chapters.push(ch('c' + i, 'Глава ' + i, sc('a' + i, 'Сцена ' + i), sc('b' + i, 'Ещё ' + i)));
+  await openFixture(page, novelOf(chapters));
+  // right-click the lowest scene row the window shows
+  const vh = page.viewportSize().height;
+  const rows = page.locator('#chapterList .tree-scene');
+  const n = (await rows.evaluateAll(els => els.map(e => e.getBoundingClientRect().bottom <= innerHeight))).lastIndexOf(true);
+  const title = await rows.nth(n).locator('.ts-title').textContent();
+  const row = await rows.nth(n).boundingBox();
+  await page.mouse.click(row.x + row.width / 2, row.y + row.height / 2, { button: 'right' });
+  await expectShown(page, '#ctxMenu');
+  const menu = await page.locator('#ctxMenu').boundingBox();
+  assert.ok(menu.y + menu.height <= vh, 'the menu runs off the bottom of the window');
+  const head = await page.locator('#ctxMenu .ctx-sub-head').boundingBox();
+  const y = head.y + head.height / 2;
+  await page.mouse.move(head.x + head.width / 2, y);
+  const sub = await page.locator('#ctxMenu .ctx-sub-menu').boundingBox();
+  assert.ok(sub.y >= 0 && sub.y + sub.height <= vh, 'the submenu runs off the bottom of the window');
+  // into the submenu, scroll its 14 chapters to the end: the last one can be hit
+  await page.mouse.move(sub.x + sub.width / 2, y, { steps: 10 });
+  await page.mouse.wheel(0, 2000);
+  const last = page.locator('#ctxMenu .ctx-sub-menu button').last();
+  await eventually(() => last.evaluate(b => {   // once the (smooth) scroll has come to its end
+    const l = b.parentElement, r = b.getBoundingClientRect();
+    return l.scrollTop + l.clientHeight >= l.scrollHeight - 1 && r.bottom <= innerHeight &&
+      document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === b;
+  }), true, 'the last chapter in the submenu is out of reach');
+  assert.equal(await last.textContent(), 'Глава 15');
+  const box = await last.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expectShown(page, '#ctxMenu', false);
+  const { data } = await save(page);
+  assert.deepEqual(outline(data).at(-1), ['Глава 15', ['Сцена 15', 'Ещё 15', title]]);
+});
 
 flow('deleting a scene or chapter is immediate, and Undo brings it back where it was', async page => {
   const note = { id: 'n1', typeId: 'fix', content: 'Заметка', selectedText: 'Вторая', startOffset: 0, endOffset: 6, createdAt: '2024-01-15T10:00:00Z' };
@@ -838,8 +929,7 @@ flow('margin notes: add, filter, resolve, edit, delete', async page => {
   await selectInEditor(page, 'холме');
   await page.keyboard.press('Control+Shift+M');
   await expectShown(page, '#notePopup');
-  await page.click('#npContent');   // see the todo test on the popup's focus
-  await page.keyboard.type('Лишняя');
+  await page.keyboard.type('Лишняя');   // the shortcut puts the caret in the note box
   await page.click('#npAdd');
   await eventually(async () => (await cards()).length, 3, 'third note');
   await card('холме').click();
@@ -865,14 +955,15 @@ flow('Ctrl+Shift+M always puts the caret in the new note\'s text box', async pag
     await selectInEditor(page, w);
     await page.keyboard.press('Control+Shift+M');
     await expectShown(page, '#notePopup');
-    await eventually(() => page.evaluate(() => document.activeElement && document.activeElement.id), 'npContent', `focus after Ctrl+Shift+M #${i + 1} on "${w}"`, 1500);
+    // no waiting for the caret: whatever is typed next has to land in the note, not the scene
+    assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'npContent', `focus after Ctrl+Shift+M #${i + 1} on "${w}"`);
     await page.keyboard.type('заметка ' + i);
     await page.click('#npAdd');
     await expectShown(page, '#notePopup', false);
   }
   // nothing typed for a note leaked into the scene
   assert.equal(await editorText(page), 'Старый замок стоял на холме.\n\nВнизу текла река.');
-}, { todo: 'bug (intermittent): openAddNote() focuses #npContent on a fixed 30 ms timer while the popup\'s 180 ms notePop entry animation runs; Chromium sometimes refuses that focus(), so the caret stays in the editor with the text still selected and the note text typed next replaces it in the scene (≈2–3 of 16 presses once a note exists; 0 of 20 with the animation off or a 100 ms delay)' });
+});
 
 flow('corkboard: cards, status badge, filter, sort, open a scene', async page => {
   await openFixture(page, novelOf([
@@ -1089,7 +1180,7 @@ flow('the graph legend does not cover the relationship panel', async page => {
   assert.deepEqual(covered, [], 'panel controls hidden under the legend');
   await page.click('#relSave', { timeout: 3000 });
   await expectShown(page, '#graphPanel', false);
-}, { todo: 'bug: .graph-legend (absolute, bottom-right of .graph-stage, later in the DOM) paints over the bottom of .graph-panel; at 1400×900 the expanded legend covers the relationship panel\'s Save button and Notes field' });
+});
 
 /* Centres of map pins found by their fill colour on the canvas (pins are filled with the
    location-type colour: city #4a90d9, natural #5cb85c, other #8f887c). */
@@ -1294,13 +1385,20 @@ flow('focus mode hides the panels and Escape leaves it; panel toggles', async pa
 
 flow('focus mode can be left with the mouse (Exit Focus button)', async page => {
   await openFixture(page, novelOf([ch('c1', 'Глава', sc('s1', 'Сцена', '<p>Текст</p>'))]));
+  await expectShown(page, '#exitFocus', false);   // only focus mode has it
+  await page.click('#editor');
+  await page.keyboard.press('Control+End');
   await page.click('#btnFocus');
   await eventually(() => layoutOf(page), { left: 0, right: 0, top: false }, 'focus mode on');
   const area = await page.locator('#editorArea').boundingBox();
   await page.mouse.move(area.x + area.width / 2, area.y + 2);   // the top edge reveals the exit button
   await page.locator('#exitFocus').click({ timeout: 3000 });
   await eventually(() => layoutOf(page), { left: 250, right: 300, top: true }, 'focus mode off');
-}, { todo: 'bug: #exitFocus keeps its .hidden class forever (setFocus never removes it), so in focus mode — where the top bar and its Focus button are hidden too — there is no way out with the mouse' });
+  await expectShown(page, '#exitFocus', false);
+  // the caret is still in the scene (ASCII: real key events, which go to the focused element)
+  await page.keyboard.type(' more');
+  await eventually(() => editorText(page), 'Текст more', 'typing right after the mouse exit');
+});
 
 async function seedRecoverable(page, text) {
   await openFixture(page, novelOf([ch('c1', 'Глава', sc('a', 'Сцена A', '<p>Начало</p>'), sc('b', 'Сцена B'))]));
