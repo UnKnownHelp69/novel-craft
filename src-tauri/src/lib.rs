@@ -105,6 +105,10 @@ fn is_allowed(granted: &GrantedPaths, key: &Path, remembered: &[String]) -> bool
     granted.contains(key) || remembered.iter().any(|p| path_key(Path::new(p)) == key)
 }
 
+/// Returns the path that was authorised — the canonical `path_key` — and callers do their
+/// I/O on exactly that path. Writing through a symlinked `.novel` therefore updates the link's
+/// target and keeps the link (renaming over the literal link path would replace the link
+/// with a regular file whose key no longer matches, locking the user out of their own file).
 fn check_path(
     app: &tauri::AppHandle,
     granted: &GrantedPaths,
@@ -116,13 +120,13 @@ fn check_path(
     let p = PathBuf::from(path);
     let key = path_key(&p);
     if granted.contains(&key) {
-        return Ok(p);
+        return Ok(key);
     }
     let mut remembered = read_recent(app);
     remembered.extend(last_file(app));
     if is_allowed(granted, &key, &remembered) {
         granted.grant(&p);
-        return Ok(p);
+        return Ok(key);
     }
     Err(format!(
         "access denied: {path} was not chosen in a file dialog"

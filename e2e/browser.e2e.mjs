@@ -213,6 +213,30 @@ test('pasting a copied image keeps the bitmap; an empty paste keeps the selectio
   } finally { await close(); }
 });
 
+test('an HTML paste with nothing readable left falls back to its plain text', async () => {
+  const { page, close } = await appPage();
+  try {
+    await openNovel(page, await writeTempNovel('pplain.novel', plainNovel('<p>Формула: [здесь] конец.</p>')));
+    const pasteOver = (html, text) => page.evaluate(([html, text]) => {
+      const ed = document.getElementById('editor');
+      const t = ed.querySelector('p').firstChild, i = t.data.indexOf('[здесь]');
+      const r = document.createRange(); r.setStart(t, i); r.setEnd(t, i + 7);
+      ed.focus(); getSelection().removeAllRanges(); getSelection().addRange(r);
+      const dt = new DataTransfer();
+      dt.setData('text/html', html); dt.setData('text/plain', text);
+      ed.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      const out = ed.innerHTML;
+      ed.innerHTML = '<p>Формула: [здесь] конец.</p>';
+      return out;
+    }, [html, text]);
+    // an emoji rendered as a remote <img alt> (VK, Discord…): only text/plain carries it
+    assert.match(await pasteOver('<img src="https://cdn.example/1f602.png" alt="😂">', '😂'), /Формула: 😂 конец\./);
+    // a display formula from Wikipedia sanitizes to bare structure; its text must win
+    assert.match(await pasteOver('<dl><dd><span class="mwe-math-element"><img src="https://wiki.example/f.svg" alt="E=mc^2"></span></dd></dl><br class="Apple-interchange-newline">', 'E=mc^2'),
+      /Формула: E=mc\^2 конец\./);
+  } finally { await close(); }
+});
+
 test('word counts ignore a hyphen typed as a dash', async () => {
   const { page, close } = await appPage();
   try {

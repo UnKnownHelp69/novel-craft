@@ -120,3 +120,38 @@ fn b64_decode_round_trips_standard_base64() {
     assert_eq!(b64_decode("").unwrap(), b"");
     assert!(b64_decode("not*base64").is_none());
 }
+
+#[cfg(unix)]
+#[test]
+fn writing_through_a_granted_symlink_keeps_the_link_and_the_grant() {
+    let dir = scratch("symlink");
+    fs::create_dir_all(dir.join("real")).unwrap();
+    let target = dir.join("real/book.novel");
+    let link = dir.join("book.novel");
+    fs::write(&target, "old").unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let granted = GrantedPaths::default();
+    granted.grant(&link); // pick_save returned the link path
+
+    // check_path hands the commands the authorised (canonical) path
+    let key = path_key(&link);
+    assert!(is_allowed(&granted, &key, &[]));
+    atomic_write(&key, "new").unwrap();
+
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link must survive"
+    );
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "new",
+        "the target gets the data"
+    );
+    assert!(
+        is_allowed(&granted, &path_key(&link), &[]),
+        "the link stays granted for the next save"
+    );
+}

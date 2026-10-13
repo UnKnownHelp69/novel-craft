@@ -34,14 +34,18 @@ const PICKED = join(WORK, 'picked.novel');
 const STALE = join(WORK, 'stale.novel');      // in the recent list at launch, dropped from it later
 const ORPHAN = join(WORK, 'orphan.novel');    // where a recovery backup claims the novel lived
 const smallNovel = title => JSON.stringify({ title, chapters: [{ title: 'C', scenes: [{ title: 'S', content: `<p>${title}</p>` }] }] });
-const PORT = 4444 + Math.floor(Math.random() * 1000);
+// tauri-driver listens on PORT and starts WebKitWebDriver on NATIVE_PORT. Both are explicit
+// and disjoint (the native default, 4445, would collide with a PORT drawn near it).
+const PORT = 5000 + Math.floor(Math.random() * 1000);
+const NATIVE_PORT = PORT + 1000;
 
 let driver, session;
 
 /* Minimal WebDriver client (tauri-driver speaks plain W3C WebDriver). */
 async function wd(method, path, body) {
   const res = await fetch(`http://127.0.0.1:${PORT}${path}`, {
-    method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined
+    method, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(90000)   // a wedged driver fails the test instead of hanging the job
   });
   const json = await res.json();
   if (json.value && json.value.error) throw new Error(`${json.value.error}: ${json.value.message}`);
@@ -74,9 +78,9 @@ test.before(async () => {
   writeFileSync(join(APP_CONFIG, 'recent.json'), JSON.stringify([CRAFTED, STALE]));
   // A crash backup whose path the user never opened in the app (not recent, not last file).
   writeFileSync(join(APP_CONFIG, 'working.novel'), JSON.stringify({ ts: 1, path: ORPHAN, novel: JSON.parse(smallNovel('Recovered')) }));
-  driver = spawn('tauri-driver', ['--port', String(PORT)], { env: { ...process.env, XDG_CONFIG_HOME: CONFIG }, stdio: 'ignore' });
+  driver = spawn('tauri-driver', ['--port', String(PORT), '--native-port', String(NATIVE_PORT)], { env: { ...process.env, XDG_CONFIG_HOME: CONFIG }, stdio: 'ignore' });
   for (let i = 0; i < 50; i++) {
-    try { await fetch(`http://127.0.0.1:${PORT}/status`); break; } catch { await sleep(200); }
+    try { await fetch(`http://127.0.0.1:${PORT}/status`, { signal: AbortSignal.timeout(2000) }); break; } catch { await sleep(200); }
   }
   await startApp();
   await exec(`window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective));`);
@@ -176,14 +180,22 @@ test('while a file dialog is open the window is shielded and the work stays unsa
   await sleep(300);
   await exec(`window.__saveAs = doSave(true);`);   // opens the native Save dialog
   await sleep(2500);
-  const during = await exec(`return { shield: document.body.classList.contains('native-dialog'), dirty };`);
-  assert.deepStrictEqual(during, { shield: true, dirty: true }, 'shielded, and nothing counts as saved yet');
-  // keyboard and close attempts behind the dialog are ignored
-  await exec(`document.getElementById('editor').dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS', ctrlKey: true, bubbles: true, cancelable: true }));
+  const during = await exec(`const b = document.getElementById('toggleLeft').getBoundingClientRect();
+    return { shield: document.body.classList.contains('native-dialog'), dirty,
+      overlay: getComputedStyle(document.body, '::after').position,
+      hit: document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2).tagName };`);
+  assert.deepStrictEqual(during, { shield: true, dirty: true, overlay: 'fixed', hit: 'BODY' },
+    'shielded (clicks land on the overlay), and nothing counts as saved yet');
+  // keyboard and close attempts behind the dialog are ignored: the keystroke never reaches
+  // the shortcut handler (or any other listener), so no second save starts
+  await exec(`const orig = window.doSave; window.__saves = 0; window.doSave = (...a) => (window.__saves++, orig(...a));
+    window.__reached = false; document.addEventListener('keydown', () => { window.__reached = true; });
+    document.getElementById('editor').dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS', ctrlKey: true, bubbles: true, cancelable: true }));
     requestClose();`);
   await sleep(500);
-  const still = await exec(`return { closePrompt: !document.getElementById('closeOverlay').classList.contains('hidden'), dirty };`);
-  assert.deepStrictEqual(still, { closePrompt: false, dirty: true });
+  const still = await exec(`return { saves: window.__saves, reached: window.__reached,
+    closePrompt: !document.getElementById('closeOverlay').classList.contains('hidden'), dirty };`);
+  assert.deepStrictEqual(still, { saves: 0, reached: false, closePrompt: false, dirty: true });
   execFileSync('sh', ['-c', 'xdotool search --sync --onlyvisible --name "Save" windowfocus --sync key Escape'], { timeout: 20000 });
   await sleep(1000);
   const after = await exec(`return { shield: document.body.classList.contains('native-dialog'), dirty, indicator: document.getElementById('saveIndicator').textContent };`);

@@ -1187,6 +1187,10 @@ editor.addEventListener('paste', e => {
     reader.readAsDataURL(file);
     return;
   }
+  // Nothing readable survived (an emoji or a formula rendered as a remote <img alt>, say):
+  // the plain-text flavour of the same copy is the next best thing.
+  const plainText = cd.getData('text/plain');
+  if (plainText.trim()) { document.execCommand('insertText', false, plainText); return; }
   // Structure only (line breaks, empty paragraphs) still goes in; nothing at all must not
   // replace the selection with nothing.
   if (clean) document.execCommand('insertHTML', false, clean);
