@@ -652,35 +652,50 @@ function bindSceneMeta() {
 
 /* ---- tree interaction: caret / add / select / pointer drag ---- */
 chapterList.addEventListener('click', e => {
+  if (swallowTreeClicks) return;
   const caret = e.target.closest('.tc-caret');
   if (caret) { const c = findChapter(caret.closest('.tree-chapter').dataset.chapterId); if (c) { c.collapsed = !c.collapsed; renderTree(); } return; }
   const add = e.target.closest('.tc-add');
   if (add) { addScene(add.closest('.tree-chapter').dataset.chapterId); return; }
 });
-chapterList.addEventListener('dblclick', e => {
+chapterList.addEventListener('dblclick', e => {   // chapters are renamed on the second press (below)
+  if (swallowTreeClicks) { swallowTreeClicks = false; return; }
   const sc = e.target.closest('.tree-scene');
-  if (sc) { renameScene(sc.dataset.sceneId); return; }
-  const cr = e.target.closest('.tc-row');
-  if (cr) renameChapter(cr.dataset.chapterId);
+  if (sc) renameScene(sc.dataset.sceneId);
 });
 
 let treeDrag = null;
-/* A click on a chapter row toggles its collapse a beat later (like a corkboard card's click), and the
-   second press of a double-click (rename) cancels that. Toggling at once moved the row out from under
-   the pointer: the re-render detached it, and with the tree scrolled to its end the shorter list slid
-   another row in, so the dblclick never reached the chapter. */
-let chapterToggleTimer = null;
+/* A click on a chapter row collapses or expands it; a double-click renames it. The first click has
+   toggled the chapter by the time the second press comes (the OS allows ~500 ms), and with the tree
+   scrolled to its end the shorter list slides another row under the pointer. So the second press
+   undoes that click's toggle and renames the chapter that was clicked, whatever is under the
+   pointer now; the click/dblclick events that follow it are swallowed. */
+let chapterClick = null;        // { id, was, scrollTop } of the last click on a chapter row, until the next press
+let chapterRename = null;       // renamed on the mouseup of a double-click's second press
+let swallowTreeClicks = false;
+function setChapterCollapsed(c, v) {
+  c.collapsed = v;
+  // in place: rebuilding the tree would detach the row under the pointer
+  const li = chapterList.querySelector(`.tree-chapter[data-chapter-id="${CSS.escape(String(c.id))}"]`);
+  if (li) li.classList.toggle('collapsed', v); else renderTree();
+}
 function clearTreeDrop() { $$('.tree-scene,.tree-chapter').forEach(x => x.classList.remove('drop-before', 'drop-after', 'drop-into')); }
 chapterList.addEventListener('mousedown', e => {
   if (e.button !== 0) return;
+  const click = chapterClick;
+  chapterClick = null;
+  swallowTreeClicks = false;
+  if (e.detail > 1 && click) {                        // second press of a double-click on a chapter row
+    e.preventDefault();
+    const c = findChapter(click.id);
+    if (c) { setChapterCollapsed(c, click.was); chapterList.scrollTop = click.scrollTop; chapterRename = c.id; }
+    return;
+  }
   if (e.target.closest('.tc-caret') || e.target.closest('.tc-add')) return;   // buttons handled on click
   const sceneEl = e.target.closest('.tree-scene');
   const chapRow = e.target.closest('.tc-row');
   if (sceneEl) treeDrag = { type: 'scene', id: sceneEl.dataset.sceneId, el: sceneEl, startX: e.clientX, startY: e.clientY, started: false, target: null };
-  else if (chapRow) {
-    if (e.detail > 1) clearTimeout(chapterToggleTimer);   // second press of a double-click: rename, don't collapse
-    treeDrag = { type: 'chapter', id: chapRow.dataset.chapterId, el: chapRow.closest('.tree-chapter'), startX: e.clientX, startY: e.clientY, started: false, target: null };
-  }
+  else if (chapRow) treeDrag = { type: 'chapter', id: chapRow.dataset.chapterId, el: chapRow.closest('.tree-chapter'), startX: e.clientX, startY: e.clientY, started: false, target: null };
 });
 document.addEventListener('mousemove', e => {
   if (!treeDrag) return;
@@ -713,7 +728,14 @@ document.addEventListener('mousemove', e => {
     }
   }
 });
-document.addEventListener('mouseup', e => {
+document.addEventListener('mouseup', () => {
+  if (chapterRename) {
+    const id = chapterRename;
+    chapterRename = null;
+    swallowTreeClicks = true;
+    renameChapter(id);
+    return;
+  }
   if (!treeDrag) return;
   const d = treeDrag;
   treeDrag = null;
@@ -721,7 +743,10 @@ document.addEventListener('mouseup', e => {
   d.el.classList.remove('dragging');
   if (!d.started) {                                   // no movement -> click
     if (d.type === 'scene') { if (d.id !== currentSceneId) selectScene(d.id); }
-    else if (e.detail < 2) chapterToggleTimer = setTimeout(() => { const c = findChapter(d.id); if (c) { c.collapsed = !c.collapsed; renderTree(); } }, 230);
+    else {
+      const c = findChapter(d.id);
+      if (c) { chapterClick = { id: c.id, was: !!c.collapsed, scrollTop: chapterList.scrollTop }; setChapterCollapsed(c, !c.collapsed); }
+    }
     return;
   }
   if (!d.target) return;
@@ -1168,7 +1193,15 @@ function commitNovelTitle() {
   nvTitle.contentEditable = 'false';
   if (!novel) return;
   const v = nvTitle.textContent.trim();
-  if (v && v !== novel.title) { novel.title = v; updateWindowTitle(); updateBreadcrumb(); markDirty(); }
+  if (v && v !== novel.title) {
+    novel.title = v;
+    updateWindowTitle();
+    // in place, not updateBreadcrumb(): this runs on blur, often from a press on another breadcrumb
+    // part, and rebuilding the breadcrumb would detach that button before its click
+    const bcNovel = $('#breadcrumb .bc-novel');
+    if (bcNovel) bcNovel.textContent = v;
+    markDirty();
+  }
   else nvTitle.textContent = novel.title;
 }
 
@@ -1603,14 +1636,16 @@ function setFocus(on) {
   const exit = $('#exitFocus');
   exit.classList.toggle('hidden', !on);
   exit.classList.remove('peek');
-  if (on) editor.focus();
+  if (on && !corkboardOpen) (mdMode ? mdEditor : editor).focus();
 }
 $('#btnFocus').addEventListener('click', () => setFocus(!focusMode));
 $('#exitFocus').addEventListener('click', () => setFocus(false));
 $('#exitFocus').addEventListener('mousedown', e => e.preventDefault());   // the caret stays where it was
 // peek exit button when hovering top edge
 document.addEventListener('mousemove', e => {
-  if (focusMode) $('#exitFocus').classList.toggle('peek', e.clientY < 8);
+  if (!focusMode) return;
+  const exit = $('#exitFocus');   // revealed at the top edge; stays while the pointer is within its band
+  exit.classList.toggle('peek', e.clientY < (exit.classList.contains('peek') ? exit.offsetHeight + 8 : 8));
 });
 
 /* Scene/chapter titles are edited via the breadcrumb and the tree (double-click). */
@@ -1639,6 +1674,12 @@ function showCtx(x, y) {
     list.parentElement.classList.toggle('ctx-sub-left', right + list.offsetWidth > innerWidth);
     list.style.top = Math.min(0, innerHeight - list.getBoundingClientRect().bottom) + 'px';
     list.style.display = '';
+    // hover intent: a pointer heading for an item further down cuts across the menu for a moment,
+    // so the submenu closes a little after the pointer leaves it, not at once
+    const sub = list.parentElement;
+    let closing = null;
+    sub.addEventListener('pointerenter', () => { clearTimeout(closing); sub.classList.add('open'); });
+    sub.addEventListener('pointerleave', () => { closing = setTimeout(() => sub.classList.remove('open'), 300); });
   });
 }
 chapterList.addEventListener('contextmenu', e => {

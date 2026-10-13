@@ -398,6 +398,16 @@ flow('renaming the novel in the top bar updates the breadcrumb', async page => {
   await page.keyboard.press('Enter');
   await expectText(page, '#novelTitle', 'Сага');
   await eventually(() => breadcrumb(page), ['Сага', 'Глава 1', 'Сцена'], 'breadcrumb after novel rename');
+
+  // renamed again, and committed by the press on the breadcrumb's scene part: that click still lands
+  await page.dblclick('#novelTitle');
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('Эпопея');
+  await page.click('#breadcrumb .bc-scene');
+  await expectShown(page, '#modalOverlay');
+  await expectText(page, '#modalTitle', 'Rename scene');
+  await page.click('#modalCancel');
+  assert.deepEqual(await breadcrumb(page), ['Эпопея', 'Глава 1', 'Сцена']);
 });
 
 flow('double-clicking a chapter row renames the chapter', async page => {
@@ -426,11 +436,26 @@ flow('a chapter row: a click collapses it, a double-click renames it with the tr
   assert.equal(await activeScene(page), 'Сцена 1.1', 'the double-click opens no scene');
   assert.equal(await page.locator('#chapterList .tree-scene:visible').count(), 45, 'the double-click leaves every chapter expanded');
 
+  // a slow double-click (300 ms between the presses: still a double-click to the OS, but the first
+  // click has collapsed the chapter by then and slid another row under the pointer)
+  const row = await chapterRow(page, 'Глава 13').boundingBox();
+  await page.mouse.move(row.x + row.width / 2, row.y + row.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.up({ clickCount: 2 });
+  await answerPrompt(page, 'Предпоследняя', 'Rename chapter');
+  await eventually(async () => (await treeOutline(page)).at(-3)[0], 'Предпоследняя', 'slow double-click renamed Глава 13');
+  assert.equal(await activeScene(page), 'Сцена 1.1', 'the slow double-click opens no scene');
+  assert.equal(await page.locator('#chapterList .tree-scene:visible').count(), 45, 'the slow double-click leaves Глава 13 expanded');
+
   await chapterRow(page, 'Глава 14').click();
   await eventually(() => page.locator('#chapterList .tree-scene:visible').count(), 42, 'a click collapses Глава 14');
   assert.equal(await activeScene(page), 'Сцена 1.1', 'a click on a chapter row opens no scene');
   const { data } = await save(page);
   assert.equal(data.chapters[14].title, 'Эпилог');
+  assert.equal(data.chapters[12].title, 'Предпоследняя');
   assert.deepEqual(data.chapters.map(c => c.collapsed), data.chapters.map((c, i) => i === 13));
 });
 
@@ -578,6 +603,23 @@ flow('tree context menu: the Move to Chapter ▸ submenu can be seen and clicked
   await eventually(() => treeOutline(page), [['Один', ['S1']], ['Два', ['T1', 'S2']]], 'S2 moved to Два');
   const { data } = await save(page);
   assert.deepEqual(outline(data), [['Один', ['S1']], ['Два', ['T1', 'S2']]]);
+});
+
+flow('tree context menu: a straight line from Move to Chapter ▸ to a lower item keeps the submenu open', async page => {
+  const names = ['Один', 'Два', 'Три', 'Четыре', 'Пять', 'Шесть'];
+  await openFixture(page, novelOf(names.map((n, i) => i ? ch('c' + i, n, sc('s' + i, 'S' + i)) : ch('c0', n, sc('s0', 'S0'), sc('s0b', 'S0b')))));
+  await sceneRow(page, 'S0').click({ button: 'right' });
+  await expectShown(page, '#ctxMenu');
+  const head = await page.locator('#ctxMenu .ctx-sub-head').boundingBox();
+  await page.mouse.move(head.x + head.width / 2, head.y + head.height / 2);
+  const target = page.locator('#ctxMenu .ctx-sub-menu button', { hasText: 'Пять' });
+  const box = await target.boundingBox();
+  // the direct path leaves the head below the menu before it reaches the submenu
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 25 });
+  await page.mouse.down();
+  await page.mouse.up();
+  await eventually(() => treeOutline(page), [['Один', ['S0b']], ['Два', ['S1']], ['Три', ['S2']], ['Четыре', ['S3']], ['Пять', ['S4', 'S0']], ['Шесть', ['S5']]],
+    'S0 moved to Пять');
 });
 
 flow('context menu: a ▸ submenu at the right edge of the window opens to the left and can be reached with the mouse', async page => {
@@ -1391,6 +1433,11 @@ flow('focus mode can be left with the mouse (Exit Focus button)', async page => 
   await page.click('#btnFocus');
   await eventually(() => layoutOf(page), { left: 0, right: 0, top: false }, 'focus mode on');
   const area = await page.locator('#editorArea').boundingBox();
+  // over the text the button stays out of the way (above the window)
+  const exitBottom = () => page.locator('#exitFocus').evaluate(b => b.getBoundingClientRect().bottom);
+  await page.mouse.move(area.x + area.width / 2, area.y + area.height / 2);
+  await page.waitForTimeout(300);   // past the button's slide transition
+  assert.ok(await exitBottom() <= 0, 'the Exit Focus button covers the text');
   await page.mouse.move(area.x + area.width / 2, area.y + 2);   // the top edge reveals the exit button
   await page.locator('#exitFocus').click({ timeout: 3000 });
   await eventually(() => layoutOf(page), { left: 250, right: 300, top: true }, 'focus mode off');
@@ -1398,6 +1445,20 @@ flow('focus mode can be left with the mouse (Exit Focus button)', async page => 
   // the caret is still in the scene (ASCII: real key events, which go to the focused element)
   await page.keyboard.type(' more');
   await eventually(() => editorText(page), 'Текст more', 'typing right after the mouse exit');
+});
+
+flow('focus mode from the Markdown source view keeps typing in the source', async page => {
+  await openFixture(page, novelOf([ch('c1', 'Глава', sc('s1', 'Сцена', '<p>Текст</p>'))]));
+  await page.click('#btnMarkdownMode');
+  await expectShown(page, '#mdEditor');
+  await page.click('#mdEditor');
+  await page.keyboard.press('Control+End');
+  await page.click('#btnFocus');
+  await eventually(() => layoutOf(page), { left: 0, right: 0, top: false }, 'focus mode on');
+  await page.keyboard.type(' more');   // ASCII: real key events, which go to the focused element
+  await eventually(() => page.inputValue('#mdEditor'), 'Текст more', 'typing in focus mode');
+  await page.keyboard.press('Escape');
+  await eventually(() => layoutOf(page), { left: 250, right: 300, top: true }, 'focus mode off');
 });
 
 async function seedRecoverable(page, text) {
