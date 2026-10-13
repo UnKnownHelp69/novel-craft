@@ -335,6 +335,221 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/* ---------------- backups ---------------- */
+
+// Every save of a .novel file first copies the version on disk into
+// <app local data>/backups/<fnv64 of the canonical path>/<unix seconds>.novel, at most once
+// per BACKUP_INTERVAL_SECS per file (autosave runs every 30 s). The directory keeps the
+// newest BACKUP_KEEP_RECENT copies plus, for the last BACKUP_KEEP_DAYS days, the newest copy
+// of each day. "Restore from Backup…" in the app lists and loads them.
+const BACKUP_KEEP_RECENT: usize = 20;
+const BACKUP_KEEP_DAYS: u64 = 30;
+const BACKUP_INTERVAL_SECS: u64 = 600;
+
+/// The minimum time between two backups of one file. NOVELCRAFT_BACKUP_INTERVAL_SECS
+/// overrides it (the desktop e2e suite sets 0).
+fn backup_interval() -> u64 {
+    std::env::var("NOVELCRAFT_BACKUP_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(BACKUP_INTERVAL_SECS)
+}
+
+fn backups_root(app: &tauri::AppHandle) -> PathBuf {
+    app.path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| config_dir(app))
+        .join("backups")
+}
+
+/// FNV-1a, 64-bit: a stable, dependency-free name for a file's backup directory.
+fn fnv1a64(s: &str) -> u64 {
+    s.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+/// Backup directory of the file whose canonical path (see `path_key`) is `key`.
+fn backup_dir(root: &Path, key: &Path) -> PathBuf {
+    root.join(format!("{:016x}", fnv1a64(&key.to_string_lossy())))
+}
+
+/// The creation time encoded in a backup's file name, if it is one (`<unix seconds>.novel`).
+/// Anything else — including path tricks like `../x` — is not a backup name.
+fn backup_time(name: &str) -> Option<u64> {
+    let secs = name.strip_suffix(".novel")?;
+    if secs.is_empty() || secs.len() > 20 || !secs.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    secs.parse().ok()
+}
+
+/// Backup times found in `dir`, newest first.
+fn backup_times(dir: &Path) -> Vec<u64> {
+    let mut times: Vec<u64> = fs::read_dir(dir)
+        .map(|it| {
+            it.filter_map(|e| e.ok())
+                .filter_map(|e| backup_time(&e.file_name().to_string_lossy()))
+                .collect()
+        })
+        .unwrap_or_default();
+    times.sort_unstable_by(|a, b| b.cmp(a));
+    times
+}
+
+/// Which backups to delete: all but the newest `BACKUP_KEEP_RECENT`, except that the newest
+/// backup of each of the last `BACKUP_KEEP_DAYS` days (UTC) is kept too.
+fn backups_to_prune(times_newest_first: &[u64], now: u64) -> Vec<u64> {
+    let cutoff_day = (now / 86_400).saturating_sub(BACKUP_KEEP_DAYS);
+    let mut seen_days = HashSet::new();
+    let mut doomed = Vec::new();
+    for (i, &t) in times_newest_first.iter().enumerate() {
+        let day = t / 86_400;
+        let newest_of_day = seen_days.insert(day);
+        if i < BACKUP_KEEP_RECENT || (newest_of_day && day >= cutoff_day) {
+            continue;
+        }
+        doomed.push(t);
+    }
+    doomed
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
+}
+
+/// Copy the current on-disk version of `file` (a canonical path) into its backup directory,
+/// unless the newest backup is younger than `interval` (and `force` is off) or already holds
+/// the same bytes. Then prune. Returns whether a new backup was written.
+fn backup_file(
+    root: &Path,
+    file: &Path,
+    now: u64,
+    interval: u64,
+    force: bool,
+) -> std::io::Result<bool> {
+    if !file.is_file() {
+        return Ok(false);
+    }
+    let dir = backup_dir(root, file);
+    fs::create_dir_all(&dir)?;
+    let times = backup_times(&dir);
+    if let Some(&newest) = times.first() {
+        if !force && now.saturating_sub(newest) < interval {
+            return Ok(false);
+        }
+    }
+    if times.first() == Some(&now) {
+        return Ok(false); // one backup per second is plenty
+    }
+    let current = fs::read(file)?;
+    if let Some(&newest) = times.first() {
+        if fs::read(dir.join(format!("{newest}.novel"))).is_ok_and(|b| b == current) {
+            return Ok(false);
+        }
+    }
+    atomic_write(&dir.join(format!("{now}.novel")), current)?;
+    let _ = atomic_write(&dir.join("source.txt"), file.to_string_lossy().as_bytes());
+    let mut all = times;
+    all.insert(0, now);
+    for t in backups_to_prune(&all, now) {
+        let _ = fs::remove_file(dir.join(format!("{t}.novel")));
+    }
+    Ok(true)
+}
+
+#[derive(serde::Serialize)]
+struct BackupInfo {
+    name: String,
+    created: u64,
+    size: u64,
+}
+
+/// Save a .novel file: back up the version on disk first (see above), then write atomically.
+/// A failed backup never blocks the save itself.
+#[tauri::command]
+fn save_novel(
+    app: tauri::AppHandle,
+    granted: State<'_, GrantedPaths>,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    let path = check_path(&app, &granted, &path)?;
+    if fs::read(&path).is_ok_and(|old| old == content.as_bytes()) {
+        return Ok(()); // nothing changed (e.g. an autosave right after a save): no write, no backup
+    }
+    if let Err(e) = backup_file(
+        &backups_root(&app),
+        &path,
+        now_secs(),
+        backup_interval(),
+        false,
+    ) {
+        eprintln!("backup of {} failed: {e}", path.display());
+    }
+    atomic_write(&path, content).map_err(|e| e.to_string())
+}
+
+/// Back up the current on-disk version right now (ignoring the interval) — used before a
+/// restore replaces the editor content with an older version.
+#[tauri::command]
+fn backup_now(
+    app: tauri::AppHandle,
+    granted: State<'_, GrantedPaths>,
+    path: String,
+) -> Result<bool, String> {
+    let path = check_path(&app, &granted, &path)?;
+    backup_file(
+        &backups_root(&app),
+        &path,
+        now_secs(),
+        backup_interval(),
+        true,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The backups of a file the app may access, newest first.
+#[tauri::command]
+fn list_backups(
+    app: tauri::AppHandle,
+    granted: State<'_, GrantedPaths>,
+    path: String,
+) -> Result<Vec<BackupInfo>, String> {
+    let path = check_path(&app, &granted, &path)?;
+    let dir = backup_dir(&backups_root(&app), &path);
+    Ok(backup_times(&dir)
+        .into_iter()
+        .map(|t| {
+            let name = format!("{t}.novel");
+            let size = fs::metadata(dir.join(&name)).map(|m| m.len()).unwrap_or(0);
+            BackupInfo {
+                name,
+                created: t,
+                size,
+            }
+        })
+        .collect())
+}
+
+/// The content of one backup of a file the app may access.
+#[tauri::command]
+fn read_backup(
+    app: tauri::AppHandle,
+    granted: State<'_, GrantedPaths>,
+    path: String,
+    name: String,
+) -> Result<String, String> {
+    let path = check_path(&app, &granted, &path)?;
+    if backup_time(&name).is_none() {
+        return Err(format!("not a backup: {name}"));
+    }
+    fs::read_to_string(backup_dir(&backups_root(&app), &path).join(name)).map_err(|e| e.to_string())
+}
+
 /* ---------------- window controls ---------------- */
 
 #[tauri::command]
@@ -416,12 +631,20 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         recent
             .iter()
             .map(|p| {
-                MenuItem::with_id(app, format!("recent:{}", p), base_name(p), true, None::<&str>)
+                MenuItem::with_id(
+                    app,
+                    format!("recent:{}", p),
+                    base_name(p),
+                    true,
+                    None::<&str>,
+                )
             })
             .collect::<tauri::Result<Vec<_>>>()?
     };
-    let recent_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
-        recent_items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
+    let recent_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = recent_items
+        .iter()
+        .map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
+        .collect();
     let open_recent = Submenu::with_items(app, "Open Recent", true, &recent_refs)?;
 
     let file = Submenu::with_items(
@@ -434,6 +657,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &open_recent,
             &MenuItem::with_id(app, "save", "Save", true, Some("CmdOrCtrl+S"))?,
             &MenuItem::with_id(app, "save_as", "Save As…", true, Some("CmdOrCtrl+Shift+S"))?,
+            &MenuItem::with_id(
+                app,
+                "restore_backup",
+                "Restore from Backup…",
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "compile", "Compile Novel…", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
@@ -465,8 +695,20 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         "View",
         true,
         &[
-            &MenuItem::with_id(app, "toggle_focus", "Toggle Focus Mode", true, Some("CmdOrCtrl+Shift+F"))?,
-            &MenuItem::with_id(app, "toggle_panels", "Toggle Side Panels", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "toggle_focus",
+                "Toggle Focus Mode",
+                true,
+                Some("CmdOrCtrl+Shift+F"),
+            )?,
+            &MenuItem::with_id(
+                app,
+                "toggle_panels",
+                "Toggle Side Panels",
+                true,
+                None::<&str>,
+            )?,
         ],
     )?;
 
@@ -474,7 +716,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         app,
         "Help",
         true,
-        &[&MenuItem::with_id(app, "about", "About NovelCraft", true, None::<&str>)?],
+        &[&MenuItem::with_id(
+            app,
+            "about",
+            "About NovelCraft",
+            true,
+            None::<&str>,
+        )?],
     )?;
 
     Menu::with_items(app, &[&file, &edit, &view, &help])
@@ -510,6 +758,10 @@ pub fn run() {
             read_text,
             write_text,
             write_binary,
+            save_novel,
+            backup_now,
+            list_backups,
+            read_backup,
             get_last_file,
             set_last_file,
             autosave,

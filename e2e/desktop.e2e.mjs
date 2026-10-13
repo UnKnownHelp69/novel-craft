@@ -6,8 +6,9 @@
  * (package webkit2gtk-driver) and, for the file-dialog check, xdotool.
  * NOVELCRAFT_BIN overrides the app binary (default: src-tauri/target/debug/novelcraft).
  *
- * The app runs with XDG_CONFIG_HOME pointed at a temporary directory, so the developer's own
- * recent-files list and window state are never touched.
+ * The app runs with XDG_CONFIG_HOME and XDG_DATA_HOME pointed at a temporary directory, so the
+ * developer's own recent-files list, window state and backups are never touched. Backups are
+ * taken on every save (NOVELCRAFT_BACKUP_INTERVAL_SECS=0) instead of every ten minutes.
  */
 import test from 'node:test';
 import assert from 'node:assert';
@@ -29,6 +30,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const WORK = mkdtempSync(join(tmpdir(), 'novelcraft-desktop-'));
 const CONFIG = join(WORK, 'config');
 const APP_CONFIG = join(CONFIG, 'com.novelcraft.desktop');
+const DATA = join(WORK, 'data');
 const CRAFTED = join(WORK, 'crafted.novel');
 const PICKED = join(WORK, 'picked.novel');
 const STALE = join(WORK, 'stale.novel');      // in the recent list at launch, dropped from it later
@@ -78,7 +80,9 @@ test.before(async () => {
   writeFileSync(join(APP_CONFIG, 'recent.json'), JSON.stringify([CRAFTED, STALE]));
   // A crash backup whose path the user never opened in the app (not recent, not last file).
   writeFileSync(join(APP_CONFIG, 'working.novel'), JSON.stringify({ ts: 1, path: ORPHAN, novel: JSON.parse(smallNovel('Recovered')) }));
-  driver = spawn('tauri-driver', ['--port', String(PORT), '--native-port', String(NATIVE_PORT)], { env: { ...process.env, XDG_CONFIG_HOME: CONFIG }, stdio: 'ignore' });
+  driver = spawn('tauri-driver', ['--port', String(PORT), '--native-port', String(NATIVE_PORT)], {
+    env: { ...process.env, XDG_CONFIG_HOME: CONFIG, XDG_DATA_HOME: DATA, NOVELCRAFT_BACKUP_INTERVAL_SECS: '0' }, stdio: 'ignore'
+  });
   for (let i = 0; i < 50; i++) {
     try { await fetch(`http://127.0.0.1:${PORT}/status`, { signal: AbortSignal.timeout(2000) }); break; } catch { await sleep(200); }
   }
@@ -110,7 +114,11 @@ test('the backend refuses paths that were never chosen in a dialog', { skip }, a
     ['write_binary', { path: outside, base64: 'aGk=' }],
     ['read_text', { path: '/etc/hostname' }],
     ['add_recent_file', { path: outside }],
-    ['set_last_file', { path: outside }]
+    ['set_last_file', { path: outside }],
+    ['save_novel', { path: outside, content: 'x' }],
+    ['backup_now', { path: outside }],
+    ['list_backups', { path: '/etc/hostname' }],
+    ['read_backup', { path: outside, name: '1.novel' }]
   ]) {
     const r = await invoke(cmd, args);
     assert.strictEqual(r.ok, false, `${cmd} must be refused`);
@@ -169,6 +177,53 @@ test('Ctrl+S on a Russian layout saves to the open file', { skip }, async () => 
   assert.match(saved.chapters[0].scenes[0].content, /Добавлено/);
   assert.doesNotMatch(saved.chapters[0].scenes[0].content, /onerror/, 'the saved file is the sanitized one');
   assert.strictEqual(await exec(`return document.getElementById('saveIndicator').textContent`), 'Saved');
+});
+
+test('every save keeps the previous version, and Restore from Backup brings one back', { skip }, async () => {
+  // The Ctrl+S above saved CRAFTED: its original content is a backup now. (The 30 s autosave
+  // may write in between too; a save of unchanged content takes no backup, so counts hold.)
+  let list = (await invoke('list_backups', { path: CRAFTED })).v;
+  assert.ok(list.length >= 1, 'a backup after a save');
+  assert.match((await invoke('read_backup', { path: CRAFTED, name: list[list.length - 1].name })).v, /onerror/, 'the oldest is the file as it was');
+  const before = list.length;
+  await sleep(1100);   // backups are named by the second
+  await exec(`const ed = document.getElementById('editor'); ed.focus();
+    getSelection().selectAllChildren(ed); getSelection().collapseToEnd();
+    document.execCommand('insertText', false, ' Вторая правка');`);
+  await sleep(300);
+  assert.strictEqual(await execAsync(`const done = arguments[arguments.length - 1]; doSave().then(done);`), true);
+  assert.match(readFileSync(CRAFTED, 'utf8'), /Вторая правка/);
+  list = (await invoke('list_backups', { path: CRAFTED })).v;
+  assert.strictEqual(list.length, before + 1);
+  assert.ok(list[0].created >= list[1].created, 'newest first');
+  const newest = (await invoke('read_backup', { path: CRAFTED, name: list[0].name })).v;
+  assert.match(newest, /Добавлено/);
+  assert.doesNotMatch(newest, /Вторая правка/, 'a backup is the version before the save');
+
+  // the dialog lists both; restoring the newest loads it unsaved and backs up the file first
+  await sleep(1100);
+  await execAsync(`const done = arguments[arguments.length - 1]; openBackups().then(() => done(1));`);
+  const rows = await exec(`return document.querySelectorAll('#backupOverlay:not(.hidden) .backup-row').length;`);
+  assert.strictEqual(rows, before + 1);
+  await exec(`document.querySelector('#backupList .backup-row button').click();`);
+  await sleep(1500);
+  const st = await exec(`return { text: document.getElementById('editor').textContent, dirty, path: currentFilePath,
+    open: !document.getElementById('backupOverlay').classList.contains('hidden'), pwn: window.__pwn || null };`);
+  assert.match(st.text, /Добавлено/);
+  assert.doesNotMatch(st.text, /Вторая правка/);
+  assert.deepStrictEqual({ path: st.path, open: st.open, pwn: st.pwn }, { path: CRAFTED, open: false, pwn: null });
+  const disk = readFileSync(CRAFTED, 'utf8');
+  assert.ok(st.dirty ? /Вторая правка/.test(disk) : !/Вторая правка/.test(disk),
+    'the restored version is unsaved until a save (or the autosave) writes it');
+  list = (await invoke('list_backups', { path: CRAFTED })).v;
+  assert.strictEqual(list.length, before + 2, 'the version on disk was backed up before the restore');
+  assert.match((await invoke('read_backup', { path: CRAFTED, name: list[0].name })).v, /Вторая правка/);
+
+  // backup names are file names in the backup folder, nothing else
+  for (const name of ['../recent.json', '../../config/com.novelcraft.desktop/recent.json', '/etc/hostname', 'source.txt', `${list[0].name}/..`]) {
+    const r = await invoke('read_backup', { path: CRAFTED, name });
+    assert.strictEqual(r.ok, false, `read_backup must refuse ${name}`);
+  }
 });
 
 test('while a file dialog is open the window is shielded and the work stays unsaved', { skip: skip || (!has('xdotool') && 'xdotool is not installed') }, async () => {

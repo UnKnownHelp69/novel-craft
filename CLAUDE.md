@@ -72,6 +72,11 @@ gracefully in a plain browser (`hasTauri === false`) — file dialogs fall back 
 File I/O and dialogs (via `tauri-plugin-dialog`): `pick_open`, `pick_save`,
 `read_text`, `write_text`, `write_binary` (base64 → file, for EPUB/DOCX exports),
 `get_last_file`, `set_last_file`, `autosave`.
+Backups: `.novel` files are always saved with `save_novel` (not `write_text`), which first
+copies the version on disk to `<app local data>/backups/<hash of path>/<unix secs>.novel`
+(at most one copy per 10 minutes, none when nothing changed; the newest 20 are kept plus one
+per day for 30 days). `list_backups`, `read_backup` (name must be `<digits>.novel`) and
+`backup_now` (taken before a restore) back the File → Restore from Backup… dialog.
 Window controls (frameless window): `minimize_window`, `maximize_window`,
 `unmaximize_window`, `close_window`, `is_maximized`, `set_decorations`,
 `set_window_title`. Recent files (stored as `recent.json` in app config dir):
@@ -113,6 +118,8 @@ API — the latter is unreliable in the WebView2/Chromium webview with the globa
 - Theme colors live as CSS custom properties in `:root` (`styles.css`); reuse them
   (`--bg`, `--panel`, `--editor-bg`, `--text`, `--accent`, …) rather than hardcoding.
 - Keep the browser fallback working: guard Tauri-only calls behind `hasTauri`.
+- Deleting a scene or chapter is immediate and undoable from the toast (`toastAction`);
+  don't add "cannot be undone" confirmations back.
 - Full Unicode / Cyrillic support is a requirement — don't assume ASCII.
 - The window is **frameless** (`decorations: false`); custom controls live in the top
   bar and a "Use native title bar" toggle in Settings restores the OS frame.

@@ -489,6 +489,16 @@ body.focus #editorArea:hover .exit-focus,body.focus .exit-focus.peek{top:0;}
   opacity:0;transform:translateY(10px);transition:.2s ease;
 }
 .toast.show{opacity:1;transform:translateY(0);}
+.toast-action{display:flex;align-items:center;gap:14px;}
+.toast-btn{background:transparent;border:1px solid var(--accent-dim);color:var(--accent);border-radius:5px;padding:3px 10px;font-size:12px;cursor:pointer;}
+.toast-btn:hover{background:var(--accent);color:var(--bg);}
+
+/* backups dialog */
+.backup-modal{max-width:520px;width:520px;}
+.backup-list{display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;}
+.backup-row{display:flex;align-items:center;gap:10px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--editor-bg);}
+.backup-row .br-when{flex:1;font-size:12px;color:var(--text);}
+.backup-row .br-meta{font-size:11px;color:var(--text-dim);}
 
 /* ========= context submenu (Move to Chapter) ========= */
 .ctx-sub{position:relative;}

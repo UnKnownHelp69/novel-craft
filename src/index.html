@@ -276,6 +276,7 @@
             <input type="checkbox" id="typewriterToggle" />
             <span>Typewriter focus (dim &amp; center)</span>
           </label>
+          <button class="add-entity" id="btnRestoreBackup" title="Load an earlier version of this novel's file">⟲ Restore from Backup…</button>
         </div>
       </div>
     </aside>
@@ -331,6 +332,18 @@
         <button id="closeSaveBtn" class="tbtn accent">Save and Close</button>
         <button id="closeDiscardBtn" class="tbtn">Discard Changes</button>
         <button id="closeCancelBtn" class="tbtn subtle">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ BACKUPS ============ -->
+  <div id="backupOverlay" class="modal-overlay hidden">
+    <div class="modal backup-modal">
+      <h3>Restore from Backup</h3>
+      <p id="backupHint"></p>
+      <div id="backupList" class="backup-list"></div>
+      <div class="modal-actions">
+        <button id="backupClose" class="tbtn">Close</button>
       </div>
     </div>
   </div>
