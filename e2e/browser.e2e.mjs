@@ -84,6 +84,11 @@ test('the sanitizer keeps editor formatting, strips the rest, and is idempotent'
         ['<table><tr><td>c</td></tr></table>', '<table><tbody><tr><td>c</td></tr></tbody></table>'],
         ['<!-- c --><p>t</p>', '<p>t</p>'],
         ['<title>t</title><meta charset="x"><p>k</p>', '<p>k</p>'],
+        ['<p style="text-align: center;">* * *</p>', '<p style="text-align: center;">* * *</p>'],
+        ['<p align="center" dir="rtl">x</p><center>c</center>', '<p align="center" dir="rtl">x</p><center>c</center>'],
+        ['<p><ruby>漢字<rt>かんじ</rt></ruby>を読む</p>', '<p><ruby>漢字<rt>かんじ</rt></ruby>を読む</p>'],
+        ['<table><tr><td colspan="2" rowspan="x">c</td></tr></table>', '<table><tbody><tr><td colspan="2">c</td></tr></tbody></table>'],
+        ['<span style="white-space: pre; color: #000;">\t</span>', '<span style="white-space: pre;">\t</span>'],
         ['', ''], ['plain text', 'plain text'], ['a &lt;b&gt; c', 'a &lt;b&gt; c']
       ];
       const nasty = [
@@ -151,10 +156,70 @@ test('shortcuts work on a Russian keyboard layout', async () => {
   } finally { await close(); }
 });
 
+test('AltGr letters are typed, not taken as shortcuts; Ctrl+- is not Ctrl+/', async () => {
+  const { page, close } = await appPage();
+  try {
+    await openNovel(page, await writeTempNovel('altgr.novel', plainNovel('<p>Текст</p>')));
+    let downloads = 0, choosers = 0;
+    page.on('download', () => downloads++);
+    page.on('filechooser', () => choosers++);
+    // Windows reports AltGr as Ctrl+Alt; dispatch on the editor like a real keystroke would.
+    const prevented = await page.evaluate(() => [['ś', 'KeyS'], ['Ś', 'KeyS'], ['ó', 'KeyO'], ['ģ', 'KeyG'], ['ß', 'KeyS']].map(([key, code]) =>
+      !document.getElementById('editor').dispatchEvent(new KeyboardEvent('keydown',
+        { key, code, ctrlKey: true, altKey: true, shiftKey: key === 'Ś', bubbles: true, cancelable: true }))));
+    await page.waitForTimeout(500);
+    assert.deepStrictEqual(prevented, [false, false, false, false, false], 'AltGr keystrokes must not be swallowed');
+    assert.strictEqual(downloads + choosers, 0, 'AltGr+S/O must not save or open');
+    assert.strictEqual(await page.evaluate(() => document.getElementById('graphOverlay').classList.contains('hidden')), true, 'AltGr+G');
+    const toggled = await page.evaluate(() => ['-', '!'].map(key => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key, code: 'Slash', ctrlKey: true, bubbles: true }));
+      return document.getElementById('rightPanel').classList.contains('collapsed');
+    }));
+    assert.deepStrictEqual(toggled, [false, false], 'Ctrl+- / Ctrl+! must not toggle the tools panel');
+  } finally { await close(); }
+});
+
+test('pasting a copied image keeps the bitmap; an empty paste keeps the selection', async () => {
+  const { page, close } = await appPage();
+  try {
+    await openNovel(page, await writeTempNovel('pimg.novel', plainNovel('<p>Портрет: [сюда] конец.</p>')));
+    const selectMarker = () => page.evaluate(() => {
+      const ed = document.getElementById('editor');
+      const t = ed.querySelector('p').firstChild, i = t.data.indexOf('[сюда]');
+      const r = document.createRange(); r.setStart(t, i); r.setEnd(t, i + 6);
+      ed.focus(); getSelection().removeAllRanges(); getSelection().addRange(r);
+    });
+    // a clipboard with nothing usable must not delete the selected text
+    await selectMarker();
+    await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.setData('text/html', '<img src="https://example.com/x.png">');
+      document.getElementById('editor').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+    assert.match(await page.evaluate(() => document.getElementById('editor').innerHTML), /\[сюда\]/);
+    // "Copy image": remote <img> in the HTML plus the bitmap itself
+    await selectMarker();
+    await page.evaluate(async () => {
+      const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+      const dt = new DataTransfer();
+      dt.setData('text/html', '<img src="https://example.com/portrait.png">');
+      dt.items.add(new File([png], 'image.png', { type: 'image/png' }));
+      document.getElementById('editor').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+    await page.waitForFunction(() => document.getElementById('editor').querySelector('img'));
+    const html = await page.evaluate(() => document.getElementById('editor').innerHTML);
+    assert.match(html, /<img src="data:image\/png;base64,/);
+    assert.doesNotMatch(html, /example\.com|\[сюда\]/);
+  } finally { await close(); }
+});
+
 test('word counts ignore a hyphen typed as a dash', async () => {
   const { page, close } = await appPage();
   try {
-    await openNovel(page, await writeTempNovel('wc.novel', plainNovel('<p>Он сказал - нет - и ушёл.</p>')));
+    // wordCount 7 is what earlier versions stored for this text (they counted each " - ")
+    const n = plainNovel('<p>Он сказал - нет - и ушёл.</p>');
+    n.chapters[0].scenes[0].wordCount = 7;
+    await openNovel(page, await writeTempNovel('wc.novel', n));
     assert.strictEqual(await page.textContent('#statChapWords'), '5');
     assert.strictEqual(await page.textContent('.ts-words'), '5');
   } finally { await close(); }
@@ -214,5 +279,23 @@ test('the app runs under the desktop CSP without violations', async () => {
     assert.ok(state.highlightRules > 0, 'injected <style> rules must apply');
     assert.notStrictEqual(state.badgeColor, '', 'style attributes must apply');
     assert.deepStrictEqual(errors, []);
+  } finally { await close(); }
+});
+
+test('at the minimum window width the save indicator stays visible', async () => {
+  const { page, close } = await appPage();
+  try {
+    await page.setViewportSize({ width: 1100, height: 600 });
+    const m = await page.evaluate(() => {
+      document.getElementById('winControls').style.display = 'flex';   // as in the desktop app
+      setCurrentNovel({ title: 'Война и мир. Том первый', chapters: [{ title: 'Глава', scenes: [{ title: 'Сцена', content: '<p>x</p>' }] }] },
+        '/novels/Война и мир — черновик 3.novel');
+      const ind = document.getElementById('saveIndicator').getBoundingClientRect();
+      const center = document.querySelector('.topbar-center').getBoundingClientRect();
+      const tall = [...document.querySelectorAll('.topbar-right .tbtn')].filter(b => b.getBoundingClientRect().height > 32).length;
+      return { visible: Math.min(ind.right, center.right) - Math.max(ind.left, center.left), tall };
+    });
+    assert.ok(m.visible >= 40, `save indicator visible width ${m.visible}px`);
+    assert.strictEqual(m.tall, 0, 'top-bar buttons must not wrap');
   } finally { await close(); }
 });

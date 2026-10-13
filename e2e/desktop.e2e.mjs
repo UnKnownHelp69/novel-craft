@@ -31,6 +31,9 @@ const CONFIG = join(WORK, 'config');
 const APP_CONFIG = join(CONFIG, 'com.novelcraft.desktop');
 const CRAFTED = join(WORK, 'crafted.novel');
 const PICKED = join(WORK, 'picked.novel');
+const STALE = join(WORK, 'stale.novel');      // in the recent list at launch, dropped from it later
+const ORPHAN = join(WORK, 'orphan.novel');    // where a recovery backup claims the novel lived
+const smallNovel = title => JSON.stringify({ title, chapters: [{ title: 'C', scenes: [{ title: 'S', content: `<p>${title}</p>` }] }] });
 const PORT = 4444 + Math.floor(Math.random() * 1000);
 
 let driver, session;
@@ -49,26 +52,51 @@ const execAsync = (script, args = []) => wd('POST', `/session/${session}/execute
 const invoke = (cmd, args) => execAsync(`const done = arguments[arguments.length - 1];
   window.__TAURI__.core.invoke(arguments[0], arguments[1]).then(v => done({ ok: true, v }), e => done({ ok: false, e: String(e) }));`, [cmd, args]);
 
+/* (Re)start the app in a fresh WebDriver session. Each native file-dialog test gets its own
+   app process: under Xvfb (no window manager) GTK file dialogs opened one after another in
+   the same process are unreliable — the dialog plugin's own `open` command behaves the same
+   way — so a dialog is only ever the first one its process shows. */
+async function startApp() {
+  if (session) { await wd('DELETE', `/session/${session}`).catch(() => {}); session = null; }
+  const created = await wd('POST', '/session', { capabilities: { alwaysMatch: { 'tauri:options': { application: BIN } } } });
+  session = created.sessionId;
+  await sleep(2500);   // startup: recent menu, recovery check, last-file load
+}
+
 test.before(async () => {
   if (skip) return;
   mkdirSync(APP_CONFIG, { recursive: true });
   writeFileSync(CRAFTED, JSON.stringify(craftedNovel(), null, 2));
-  writeFileSync(PICKED, JSON.stringify({ title: 'Picked', chapters: [{ title: 'C', scenes: [{ title: 'S', content: '<p>picked</p>' }] }] }));
+  writeFileSync(PICKED, smallNovel('Picked'));
+  writeFileSync(STALE, smallNovel('Stale'));
+  writeFileSync(ORPHAN, smallNovel('Orphan on disk'));
   // The crafted file is a "recent" file: opened in an earlier session, so it may be read/written.
-  writeFileSync(join(APP_CONFIG, 'recent.json'), JSON.stringify([CRAFTED]));
+  writeFileSync(join(APP_CONFIG, 'recent.json'), JSON.stringify([CRAFTED, STALE]));
+  // A crash backup whose path the user never opened in the app (not recent, not last file).
+  writeFileSync(join(APP_CONFIG, 'working.novel'), JSON.stringify({ ts: 1, path: ORPHAN, novel: JSON.parse(smallNovel('Recovered')) }));
   driver = spawn('tauri-driver', ['--port', String(PORT)], { env: { ...process.env, XDG_CONFIG_HOME: CONFIG }, stdio: 'ignore' });
   for (let i = 0; i < 50; i++) {
     try { await fetch(`http://127.0.0.1:${PORT}/status`); break; } catch { await sleep(200); }
   }
-  const created = await wd('POST', '/session', { capabilities: { alwaysMatch: { 'tauri:options': { application: BIN } } } });
-  session = created.sessionId;
-  await sleep(2500);   // startup: recent menu, recovery check, last-file load
+  await startApp();
   await exec(`window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective));`);
 });
 
 test.after(async () => {
   if (session) await wd('DELETE', `/session/${session}`).catch(() => {});
   if (driver) driver.kill();
+});
+
+test('a backup whose file this session may not write is restored as unsaved', { skip }, async () => {
+  // startup shows the recovery prompt; accept it
+  await exec(`document.getElementById('modalOk').click();`);
+  await sleep(1500);
+  const st = await exec(`return { title: novel && novel.title, path: currentFilePath, indicator: document.getElementById('filePathIndicator').textContent, dirty };`);
+  assert.strictEqual(st.title, 'Recovered');
+  assert.strictEqual(st.path, null, 'the remembered path must be dropped, not kept as an unwritable target');
+  assert.strictEqual(st.indicator, '• Unsaved');
+  assert.strictEqual(st.dirty, true);
+  assert.match(readFileSync(ORPHAN, 'utf8'), /Orphan on disk/, 'the orphan file is untouched');
 });
 
 test('the backend refuses paths that were never chosen in a dialog', { skip }, async () => {
@@ -87,6 +115,13 @@ test('the backend refuses paths that were never chosen in a dialog', { skip }, a
   assert.strictEqual(existsSync(outside), false, 'nothing may be written');
   const recent = await invoke('read_text', { path: CRAFTED });
   assert.strictEqual(recent.ok, true, 'a recent file stays readable: ' + recent.e);
+});
+
+test('Open Recent entries from launch stay openable after the recent list moves on', { skip }, async () => {
+  // The native menu was built from [CRAFTED, STALE]; newer files push STALE out of recent.json.
+  writeFileSync(join(APP_CONFIG, 'recent.json'), JSON.stringify([CRAFTED]));
+  const r = await invoke('read_text', { path: STALE });
+  assert.strictEqual(r.ok, true, 'a path shown in the launch-time menu must stay readable: ' + r.e);
 });
 
 test('a crafted .novel opens without running its script', { skip }, async () => {
@@ -132,7 +167,31 @@ test('Ctrl+S on a Russian layout saves to the open file', { skip }, async () => 
   assert.strictEqual(await exec(`return document.getElementById('saveIndicator').textContent`), 'Saved');
 });
 
+test('while a file dialog is open the window is shielded and the work stays unsaved', { skip: skip || (!has('xdotool') && 'xdotool is not installed') }, async () => {
+  await startApp();
+  await exec(`if (!document.getElementById('modalOverlay').classList.contains('hidden')) document.getElementById('modalCancel').click();
+    setCurrentNovel(newNovel('Shield'), null);`);
+  await sleep(300);
+  await exec(`document.getElementById('editor').focus(); document.execCommand('insertText', false, ' правка');`);
+  await sleep(300);
+  await exec(`window.__saveAs = doSave(true);`);   // opens the native Save dialog
+  await sleep(2500);
+  const during = await exec(`return { shield: document.body.classList.contains('native-dialog'), dirty };`);
+  assert.deepStrictEqual(during, { shield: true, dirty: true }, 'shielded, and nothing counts as saved yet');
+  // keyboard and close attempts behind the dialog are ignored
+  await exec(`document.getElementById('editor').dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS', ctrlKey: true, bubbles: true, cancelable: true }));
+    requestClose();`);
+  await sleep(500);
+  const still = await exec(`return { closePrompt: !document.getElementById('closeOverlay').classList.contains('hidden'), dirty };`);
+  assert.deepStrictEqual(still, { closePrompt: false, dirty: true });
+  execFileSync('sh', ['-c', 'xdotool search --sync --onlyvisible --name "Save" windowfocus --sync key Escape'], { timeout: 20000 });
+  await sleep(1000);
+  const after = await exec(`return { shield: document.body.classList.contains('native-dialog'), dirty, indicator: document.getElementById('saveIndicator').textContent };`);
+  assert.deepStrictEqual(after, { shield: false, dirty: true, indicator: 'Unsaved' });
+});
+
 test('the Open dialog runs off the main thread and grants the picked file', { skip: skip || (!has('xdotool') && 'xdotool is not installed') }, async () => {
+  await startApp();
   const pending = invoke('pick_open');
   await sleep(2500);
   // GTK file chooser: Ctrl+L opens the location field; type the path and confirm.

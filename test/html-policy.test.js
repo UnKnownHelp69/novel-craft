@@ -31,6 +31,10 @@ test('everything the editor and mdToHtml produce is kept', () => {
   assert.strictEqual(P.sceneTagAction('P'), 'keep', 'tag names are case-insensitive');
 });
 
+test('harmless layout from older pastes is kept: ruby, centring, tables', () => {
+  for (const tag of ['ruby', 'rt', 'rp', 'center', 'table', 'td', 'th']) assert.strictEqual(P.sceneTagAction(tag), 'keep', tag);
+});
+
 test('active, raw-text and foreign content is dropped with its contents', () => {
   for (const tag of ['script', 'style', 'noscript', 'template', 'iframe', 'object', 'embed', 'svg', 'math',
     'link', 'meta', 'base', 'title', 'textarea', 'xmp', 'plaintext', 'noembed', 'noframes', 'button', 'marquee']) {
@@ -39,7 +43,7 @@ test('active, raw-text and foreign content is dropped with its contents', () => 
 });
 
 test('unknown and harmless wrappers are unwrapped to their text', () => {
-  for (const tag of ['a', 'o:p', 'x-custom', 'section', 'article', 'form', 'label', 'center', 'abbr', '']) {
+  for (const tag of ['a', 'o:p', 'x-custom', 'section', 'article', 'form', 'label', 'abbr', '']) {
     assert.strictEqual(P.sceneTagAction(tag), 'unwrap', tag);
   }
 });
@@ -56,6 +60,18 @@ test('event handlers and other attributes are removed', () => {
   ]) {
     assert.strictEqual(P.sceneAttrValue(tag, name, value), null, `${tag}[${name}]`);
   }
+});
+
+test('direction, alignment and cell spans survive with plain values only', () => {
+  assert.strictEqual(P.sceneAttrValue('p', 'dir', 'rtl'), 'rtl');
+  assert.strictEqual(P.sceneAttrValue('p', 'dir', 'rtl" onclick="x'), null);
+  assert.strictEqual(P.sceneAttrValue('p', 'align', 'center'), 'center');
+  assert.strictEqual(P.sceneAttrValue('div', 'align', 'middle;x'), null);
+  assert.strictEqual(P.sceneAttrValue('td', 'colspan', '2'), '2');
+  assert.strictEqual(P.sceneAttrValue('th', 'rowspan', '12'), '12');
+  assert.strictEqual(P.sceneAttrValue('td', 'colspan', '0'), null);
+  assert.strictEqual(P.sceneAttrValue('td', 'colspan', '99999'), null);
+  assert.strictEqual(P.sceneAttrValue('p', 'colspan', '2'), null, 'only on cells');
 });
 
 test('<font face> survives only as a plain font list', () => {
@@ -81,6 +97,11 @@ test('inline styles keep only formatting properties with plain values', () => {
   assert.ok(P.sceneStyleValueOk('font-style', 'italic'));
   assert.ok(P.sceneStyleValueOk('font-family', '"Lora", serif'));
   assert.ok(P.sceneStyleValueOk('text-decoration-line', 'underline line-through'));
+  assert.ok(P.sceneStyleValueOk('text-align', 'center'));
+  assert.ok(P.sceneStyleValueOk('white-space', 'pre'));
+  assert.ok(P.sceneStyleValueOk('font-family', "'Noto Serif.Display', serif"));
+  assert.ok(!P.sceneStyleValueOk('text-align', 'center; background:url(x)'));
+  assert.ok(!P.sceneStyleValueOk('background-color', '#fff'), 'colours are not kept (dark editor)');
   assert.ok(!P.sceneStyleValueOk('background-image', 'url(https://evil)'));
   assert.ok(!P.sceneStyleValueOk('color', 'red'));
   assert.ok(!P.sceneStyleValueOk('font-family', 'x, url(https://evil)'));

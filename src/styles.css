@@ -43,7 +43,13 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
   transition:transform .2s ease, opacity .2s ease;
 }
 .topbar-left,.topbar-right{display:flex;align-items:center;gap:6px;}
-.topbar-center{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:10px;overflow:hidden;}
+/* On narrow windows the novel title and file name give way first; the buttons never wrap
+   and the save indicator keeps its room. */
+.topbar-left{min-width:0;flex-shrink:1;overflow:hidden;}
+.topbar-left>*{flex-shrink:0;}
+.topbar-right{flex-shrink:0;}
+.tbtn{white-space:nowrap;}
+.topbar-center{flex:1;min-width:62px;display:flex;align-items:center;justify-content:center;gap:10px;overflow:hidden;}
 .app-title{color:var(--accent);font-weight:700;letter-spacing:.5px;font-size:15px;}
 .chapter-title{
   color:var(--text);font-size:13px;padding:2px 8px;border-radius:4px;
@@ -62,6 +68,7 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
   max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 .file-path.unsaved{color:var(--accent);font-style:italic;}
+.topbar-left .novel-title,.topbar-left .file-path{flex-shrink:1;min-width:24px;}
 
 /* left-panel actions & empty state */
 .lp-actions{display:flex;gap:6px;padding:8px;border-bottom:1px solid var(--border);}
@@ -109,6 +116,8 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
 .win-btn:hover{background:var(--editor-bg);color:var(--text);}
 .win-btn.win-close:hover{background:#c0392b;color:#fff;}
 body.native-titlebar .win-controls{display:none;}
+/* A native file dialog is open (pickPath): nothing behind it may be clicked. */
+body.native-dialog::after{content:'';position:fixed;inset:0;z-index:2147483647;cursor:progress;}
 
 /* settings toggles */
 .toggle-row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text);cursor:pointer;padding:4px 0;}

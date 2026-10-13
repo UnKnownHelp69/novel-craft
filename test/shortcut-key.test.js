@@ -22,7 +22,7 @@ function loadShortcutKey() {
 }
 
 const shortcutKey = loadShortcutKey();
-const ev = (key, code, shiftKey = false) => ({ key, code, shiftKey });
+const ev = (key, code, shiftKey = false, extra = {}) => ({ key, code, shiftKey, ...extra });
 
 test('US layout letters, with and without Shift', () => {
   assert.strictEqual(shortcutKey(ev('s', 'KeyS')), 's');
@@ -50,6 +50,24 @@ test('panel toggles: backslash and slash', () => {
   assert.strictEqual(shortcutKey(ev('/', 'Slash')), '/');         // US
   assert.strictEqual(shortcutKey(ev('.', 'Slash')), '/');         // Russian: that key types '.'
   assert.strictEqual(shortcutKey(ev('/', 'Digit7', true)), '/');  // German: Shift+7 types '/'
+});
+
+test('AltGr letters stay letters (Windows reports AltGr as Ctrl+Alt)', () => {
+  const altGr = { ctrlKey: true, altKey: true };
+  assert.strictEqual(shortcutKey(ev('ś', 'KeyS', false, altGr)), 'ś');   // Polish
+  assert.strictEqual(shortcutKey(ev('Ś', 'KeyS', true, altGr)), 'Ś');
+  assert.strictEqual(shortcutKey(ev('ó', 'KeyO', false, altGr)), 'ó');
+  assert.strictEqual(shortcutKey(ev('ģ', 'KeyG', false, altGr)), 'ģ');   // Latvian
+  assert.strictEqual(shortcutKey(ev('ß', 'KeyS', false, altGr)), 'ß');   // US-International
+  const modState = { getModifierState: m => m === 'AltGraph' };
+  assert.strictEqual(shortcutKey(ev('ș', 'KeyS', false, modState)), 'ș'); // Romanian, AltGraph state
+  // a plain Ctrl+Alt+S on a Latin layout behaves as before: the key itself
+  assert.strictEqual(shortcutKey(ev('s', 'KeyS', false, altGr)), 's');
+});
+
+test('the Slash key counts as "/" only where it types "."', () => {
+  assert.strictEqual(shortcutKey(ev('-', 'Slash')), '-');   // German/Spanish/Nordic: Ctrl+- is not Ctrl+/
+  assert.strictEqual(shortcutKey(ev('!', 'Slash')), '!');   // French AZERTY
 });
 
 test('shifted punctuation is not mistaken for the toggles', () => {

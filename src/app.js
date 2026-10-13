@@ -7,6 +7,21 @@ const hasTauri = !!TAURI;
 const invoke = hasTauri ? TAURI.core.invoke : async () => null;
 const listen = hasTauri ? TAURI.event.listen : async () => () => {};
 
+/* Native file dialogs (pick_open / pick_save). They run off the main thread, so the window
+   stays live behind them; on Linux they cannot even be made modal. While one is pending the
+   window is shielded (body.native-dialog blocks the mouse, the capture listener below the
+   keyboard), so nothing can edit, close or open behind a pending save or open. */
+let nativeDialogOpen = false;
+async function pickPath(cmd, args) {
+  nativeDialogOpen = true;
+  document.body.classList.add('native-dialog');
+  try { return await invoke(cmd, args); }
+  finally { nativeDialogOpen = false; document.body.classList.remove('native-dialog'); }
+}
+document.addEventListener('keydown', e => {
+  if (nativeDialogOpen) { e.preventDefault(); e.stopImmediatePropagation(); }
+}, true);
+
 /* ---------- helpers ---------- */
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -81,7 +96,7 @@ const stripHtml = html => textFromNode(parseInert(html));
 const SCENE_KEEP_TAGS = new Set([
   'p', 'br', 'div', 'span', 'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'sub', 'sup', 'font',
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'hr', 'ul', 'ol', 'li', 'img',
-  'table', 'caption', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th'
+  'table', 'caption', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'ruby', 'rt', 'rp', 'center'
 ]);
 // Dropped together with everything inside: active content, raw-text containers, form
 // controls and foreign (SVG/MathML) content, whose parsing rules differ from plain HTML.
@@ -97,7 +112,7 @@ function sceneTagAction(tag) {
   if (SCENE_DROP_TAGS.has(tag)) return 'drop';
   return 'unwrap';
 }
-const FONT_FAMILY_RE = /^[\p{L}\p{N} ,'"_-]{1,200}$/u;
+const FONT_FAMILY_RE = /^[\p{L}\p{N} ,.'"_-]{1,200}$/u;
 // Images stay only as inline raster data (pasted screenshots); remote or SVG sources go.
 const IMG_SRC_RE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$/i;
 /* The value an attribute keeps, or null to remove it. `style` is filtered property by
@@ -109,11 +124,19 @@ function sceneAttrValue(tag, name, value) {
   if (tag === 'font' && name === 'face') return FONT_FAMILY_RE.test(value) ? value : null;
   if (tag === 'img' && name === 'src') return IMG_SRC_RE.test(value) ? value : null;
   if (tag === 'img' && name === 'alt') return value;
+  // Layout that older pastes carry and that cannot load anything.
+  if (name === 'dir') return /^(?:ltr|rtl|auto)$/i.test(value) ? value : null;
+  if (name === 'align') return /^(?:left|right|center|justify)$/i.test(value) ? value : null;
+  if ((tag === 'td' || tag === 'th') && (name === 'colspan' || name === 'rowspan')) return /^[1-9]\d{0,2}$/.test(value) ? value : null;
   return null;
 }
 // Inline styles keep only what per-selection formatting needs (contenteditable sometimes
-// writes these instead of <b>/<i>/<font>); nothing in this list can load a resource.
+// writes these instead of <b>/<i>/<font>) plus alignment and tab spacing from older pastes;
+// nothing in this list can load a resource. Colours are deliberately not kept: pastes from
+// Word/Docs carry black text that would vanish on the dark editor.
 const SCENE_STYLE_PROPS = {
+  'text-align': /^(?:left|right|center|justify|start|end)$/,
+  'white-space': /^(?:normal|nowrap|pre|pre-wrap|pre-line|break-spaces)$/,
   'font-family': FONT_FAMILY_RE,
   'font-weight': /^(?:normal|bold|bolder|lighter|[1-9]00)$/,
   'font-style': /^(?:normal|italic|oblique)$/,
@@ -924,8 +947,12 @@ function migrateNovel(d) {
    exports only ever see allowlisted markup. */
 function sanitizeNovelHTML(n) {
   (n.chapters || []).forEach(c => (c.scenes || []).forEach(sc => {
-    const clean = sanitizeSceneHTML(sc.content);
-    if (clean !== sc.content) { sc.content = clean; sc.wordCount = countWords(stripHtml(clean)); }
+    const root = parseInert(sc.content);
+    sanitizeChildren(root);
+    sc.content = root.innerHTML;
+    // Every scene is recounted: a stored count is a cache that older versions computed by
+    // older rules (a lone " - " used to count as a word).
+    sc.wordCount = countWords(textFromNode(root));
   }));
   return n;
 }
@@ -964,7 +991,7 @@ async function handleLibraryFile(data, path) {
       for (const n of novels) {
         const content = serializeNovel(n);
         if (hasTauri) {
-          const p = await invoke('pick_save', { defaultName: (n.title || 'novel') + '.novel' });
+          const p = await pickPath('pick_save', { defaultName: (n.title || 'novel') + '.novel' });
           if (p) { 
             try {
               await invoke('write_text', { path: p, content }); 
@@ -1008,7 +1035,7 @@ function guardUnsaved(action, msg) {
 function openNovelFile() {
   guardUnsaved(async () => {
     if (hasTauri) {
-      const path = await invoke('pick_open');
+      const path = await pickPath('pick_open');
       if (path) await loadFromPath(path);
     } else {
       const inp = document.createElement('input');
@@ -1037,7 +1064,7 @@ function newNovelFile() {
     const n = newNovel();
     if (hasTauri) {
       // prompt for the file location up front and create the file
-      const path = await invoke('pick_save', { defaultName: 'Untitled Novel.novel' });
+      const path = await pickPath('pick_save', { defaultName: 'Untitled Novel.novel' });
       if (!path) return;               // cancelled -> keep current novel
       setCurrentNovel(n, path);
       await invoke('write_text', { path, content: serializeNovel(novel) });
@@ -1136,10 +1163,33 @@ editor.addEventListener('keydown', e => {
 editor.addEventListener('paste', e => {
   const plain = plainPasteRequested;
   plainPasteRequested = false;
-  const html = !plain && e.clipboardData && e.clipboardData.getData('text/html');
+  const cd = e.clipboardData;
+  const html = !plain && cd && cd.getData('text/html');
   if (!html) return;
   e.preventDefault();
-  document.execCommand('insertHTML', false, sanitizeSceneHTML(html));
+  const clean = sanitizeSceneHTML(html);
+  const root = parseInert(clean);
+  if (root.textContent.trim() || root.querySelector('img')) { document.execCommand('insertHTML', false, clean); return; }
+  // "Copy image" puts a remote <img> (dropped by the policy) next to the bitmap itself:
+  // paste the bitmap as inline data instead.
+  const file = [...(cd.files || [])].find(f => /^image\/(?:png|jpe?g|gif|webp)$/.test(f.type));
+  if (file) {
+    const sel = getSelection();
+    const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = sanitizeSceneHTML(`<img src="${escAttr(String(reader.result))}">`);
+      if (!img) return;
+      editor.focus();
+      if (range) { sel.removeAllRanges(); sel.addRange(range); }
+      document.execCommand('insertHTML', false, img);
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
+  // Structure only (line breaks, empty paragraphs) still goes in; nothing at all must not
+  // replace the selection with nothing.
+  if (clean) document.execCommand('insertHTML', false, clean);
 });
 mdEditor.addEventListener('input', () => {
   if (isLoadingContent) return;
@@ -1617,24 +1667,25 @@ function toast(msg) {
 /* ================= SAVE ================= */
 async function doSave(saveAs = false) {
   if (!novel) { toast('No novel to save'); return false; }
+  const target = novel;
+  const defaultName = (novel.title || 'novel') + '.novel';
+  let path = currentFilePath;
+  if (hasTauri && (!path || saveAs)) {
+    // Ask for the destination before taking the snapshot: until a path is chosen nothing
+    // is saved, so the novel stays dirty (close prompt and backups keep protecting it).
+    path = await pickPath('pick_save', { defaultName });
+    if (!path) return false;
+    if (novel !== target) { toast('Save cancelled — another novel was opened'); return false; }
+  }
   flushNovel();
   renumber();
   const content = serializeNovel(novel);
-  const defaultName = (novel.title || 'novel') + '.novel';
   const wasDirty = dirty;
   setSaving();
   snapshotSaved();
   dirty = false;
   try {
     if (hasTauri) {
-      let path = currentFilePath;
-      if (!path || saveAs) path = await invoke('pick_save', { defaultName });
-      if (!path) {
-        if (wasDirty) markDirty();
-        else if (!dirty) setSaved();
-        else $('#saveIndicator').classList.remove('saving');
-        return false;
-      }
       await invoke('write_text', { path, content });
       currentFilePath = path;
       await invoke('set_last_file', { path });
@@ -1650,9 +1701,15 @@ async function doSave(saveAs = false) {
     return true;
   } catch (e) {
     console.error(e);
-    toast('Save failed');
     if (wasDirty || dirty) markDirty();
     else setSaved();
+    // The remembered path is not one this session may write (the backend only writes files
+    // the user picked or opened): ask where to save instead of failing on every Ctrl+S.
+    if (hasTauri && !saveAs && /access denied/.test(String(e))) {
+      toast('Choose where to save this novel');
+      return doSave(true);
+    }
+    toast('Save failed');
     return false;
   }
 }
@@ -1724,7 +1781,7 @@ async function doExport(kind) {
   const content = buildExport(kind, novel);
   const name = (novel.title || 'novel') + '.' + kind;
   if (hasTauri) {
-    const path = await invoke('pick_save', { defaultName: name });
+    const path = await pickPath('pick_save', { defaultName: name });
     if (!path) return;
     try {
       await invoke('write_text', { path, content });
@@ -1846,9 +1903,18 @@ async function checkRecovery() {
     const onCancel = () => done('declined');   // keep the backup untouched; just go to the start menu
     confirmModal('Recover unsaved work',
       'Unsaved changes from a previous session were found. Restore them?',
-      () => {
+      async () => {
+        // The backup remembers where the novel lived, but this session may only write there
+        // if the user opened or saved that file before (the backend's allowlist). If it can't
+        // be read back, restore the novel as unsaved so Save asks where to put it.
+        let path = data.path || null;
+        if (path && hasTauri) {
+          try { await invoke('read_text', { path }); } catch (_) { path = null; }
+        }
         try {
-          setCurrentNovel(payload, data.path); markDirty(); toast('Recovered'); done('restored');
+          setCurrentNovel(payload, path); markDirty();
+          toast(path || !data.path ? 'Recovered' : 'Recovered as unsaved — use Save to choose where to keep it');
+          done('restored');
         } catch (e) {
           console.error('Recovery restore failed:', e);
           toast('Could not restore backup — the saved data appears corrupted');
@@ -2490,7 +2556,7 @@ async function doExportNotes(kind) {
   const content = buildNotesExport(kind);
   const name = (novel.title || 'novel') + '-notes.' + kind;
   if (hasTauri) {
-    const path = await invoke('pick_save', { defaultName: name });
+    const path = await pickPath('pick_save', { defaultName: name });
     if (!path) return;
     try {
       await invoke('write_text', { path, content });
@@ -4318,7 +4384,7 @@ function renderCompPreview() {
 function compFileName(ext) { return (comp.settings.titleText || novel.title || 'novel').replace(/[\\/:*?"<>|]+/g, '_') + '.' + ext; }
 async function saveTextFile(name, content) {
   if (hasTauri) {
-    const path = await invoke('pick_save', { defaultName: name });
+    const path = await pickPath('pick_save', { defaultName: name });
     if (!path) return;
     try {
       await invoke('write_text', { path, content });
@@ -4386,7 +4452,7 @@ function bytesToBase64(bytes) {
 }
 async function saveBinary(name, bytes, mime) {
   if (hasTauri) {
-    const path = await invoke('pick_save', { defaultName: name });
+    const path = await pickPath('pick_save', { defaultName: name });
     if (!path) return;
     try {
       await invoke('write_binary', { path, base64: bytesToBase64(bytes) });
@@ -5237,12 +5303,16 @@ function navigateNotes(dir) {
    Ctrl+S arrives as 'ы' and Ctrl+G as 'п'; for anything that is not plain ASCII the
    physical key (e.code) is used instead. Latin layouts (QWERTY, AZERTY, Dvorak) keep
    their own letters. The key that types '/' on US keyboards types '.' on a Russian one,
-   so an unshifted press of it counts as '/'. --- */
+   so that press counts as '/' (other layouts' characters on that key are left alone).
+   Alt/AltGr combinations always keep their own character. --- */
 function shortcutKey(e) {
   const key = String(e.key || '');
+  // No shortcut here uses Alt, and on Windows AltGr arrives as Ctrl+Alt: AltGr+S types 'ś'
+  // on a Polish layout and must stay a letter, not turn into Ctrl+S.
+  if (e.altKey || (e.getModifierState && e.getModifierState('AltGraph'))) return key;
   if (/^[a-z]$/i.test(key)) return key.toLowerCase();
   if (key.length === 1 && key.charCodeAt(0) < 128) {
-    return !e.shiftKey && e.code === 'Slash' ? '/' : key;
+    return !e.shiftKey && e.code === 'Slash' && key === '.' ? '/' : key;
   }
   const m = /^Key([A-Z])$/.exec(e.code || '');
   if (m) return m[1].toLowerCase();
@@ -5282,6 +5352,7 @@ document.addEventListener('keydown', e => {
 /* ================= MENU EVENTS FROM RUST ================= */
 if (hasTauri) {
   listen('menu', e => {
+    if (nativeDialogOpen) return;
     const p = e.payload;
     if (typeof p === 'string' && p.startsWith('recent:')) {
       const path = p.slice(7);
@@ -5324,6 +5395,7 @@ async function destroyWindow() {
 }
 /* Three-option close flow */
 function requestClose() {
+  if (nativeDialogOpen) return;   // finish (or cancel) the open file dialog first
   // Clean close: the open novel matches disk. With no novel open (start menu, e.g. after
   // declining recovery) the backup is left alone so it is offered again next launch.
   if (!dirty) { if (novel) clearBackup(); destroyWindow(); return; }

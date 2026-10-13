@@ -142,14 +142,25 @@ fn base_name(path: &str) -> String {
 // The dialogs are async commands: synchronous commands run on the main thread, where the
 // dialog plugin's blocking_* calls must not be used (they wait for the event loop that the
 // main thread is supposed to be running). The blocking call happens on a worker thread.
+// Each dialog is parented to the window, as the plugin's own commands do, so it stays modal
+// (Windows) or a sheet (macOS) instead of leaving the editor usable underneath; the
+// frontend additionally shields the window while a dialog is pending (pickPath in app.js).
 #[tauri::command]
 async fn pick_open(
     app: tauri::AppHandle,
+    window: tauri::Window,
     granted: State<'_, GrantedPaths>,
 ) -> Result<Option<String>, String> {
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .file()
+        #[allow(unused_mut)]
+        let mut dialog = app.dialog().file();
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            dialog = dialog.set_parent(&window);
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let _ = &window;
+        dialog
             .add_filter("NovelCraft project", &["novel"])
             .add_filter("All files", &["*"])
             .blocking_pick_file()
@@ -166,6 +177,7 @@ async fn pick_open(
 #[tauri::command]
 async fn pick_save(
     app: tauri::AppHandle,
+    window: tauri::Window,
     granted: State<'_, GrantedPaths>,
     default_name: String,
 ) -> Result<Option<String>, String> {
@@ -177,6 +189,7 @@ async fn pick_save(
             .to_string();
         app.dialog()
             .file()
+            .set_parent(&window)
             .set_file_name(&default_name)
             .add_filter("File", &[ext.as_str()])
             .add_filter("All files", &["*"])
@@ -473,6 +486,13 @@ pub fn run() {
         .manage(GrantedPaths::default())
         .setup(|app| {
             let handle = app.handle();
+            // The native "Open Recent" submenu is built once, from the recent list as it is
+            // now; its entries must stay openable even after newer files push them out of
+            // recent.json. (Menu event payloads themselves are never trusted for this.)
+            let granted = app.state::<GrantedPaths>();
+            for p in read_recent(handle).into_iter().chain(last_file(handle)) {
+                granted.grant(Path::new(&p));
+            }
             let menu = build_menu(handle)?;
             app.set_menu(menu)?;
             Ok(())
