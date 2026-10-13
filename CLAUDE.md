@@ -15,7 +15,7 @@ for Windows, macOS, and Linux.
 ```bash
 npm install        # install the Tauri CLI (@tauri-apps/cli)
 npm test           # node --test — the test/ suite (no test framework, node:test only)
-npm run test:e2e   # browser suite (e2e/browser.e2e.mjs): the real src/ in Chromium via playwright-core
+npm run test:e2e   # browser suites (e2e/browser.e2e.mjs, e2e/flows.e2e.mjs): the real src/ in Chromium via playwright-core
 npm run test:desktop  # desktop suite (e2e/desktop.e2e.mjs): the built app via tauri-driver (Linux)
 npm run dev        # tauri dev — run the app with a live-reloaded static frontend
 npm run build      # tauri build — produce native binary + installers
@@ -43,7 +43,7 @@ src/                     Frontend (served directly, no bundler)
   fonts/fonts.css        @font-face with system fallbacks
   fonts/pdf/*.ttf        IBM Plex Mono (OFL) — raw TrueType, embedded into PDF exports
 test/                    node:test suites (no framework)
-e2e/                     browser (playwright-core) and desktop (tauri-driver) regression suites
+e2e/                     browser + UI-flow (playwright-core) and desktop (tauri-driver) regression suites
 src-tauri/               Rust backend
   src/lib.rs             Commands, native menu, file I/O, window controls, recent files
   src/main.rs            Thin entry point -> novelcraft_lib::run()
@@ -72,6 +72,11 @@ gracefully in a plain browser (`hasTauri === false`) — file dialogs fall back 
 File I/O and dialogs (via `tauri-plugin-dialog`): `pick_open`, `pick_save`,
 `read_text`, `write_text`, `write_binary` (base64 → file, for EPUB/DOCX exports),
 `get_last_file`, `set_last_file`, `autosave`.
+Backups: `.novel` files are always saved with `save_novel` (not `write_text`), which first
+copies the version on disk to `<app local data>/backups/<hash of path>/<unix secs>.novel`
+(at most one copy per 10 minutes, none when nothing changed; the newest 20 are kept plus one
+per day for 30 days). `list_backups`, `read_backup` (name must be `<digits>.novel`) and
+`backup_now` (taken before a restore) back the File → Restore from Backup… dialog.
 Window controls (frameless window): `minimize_window`, `maximize_window`,
 `unmaximize_window`, `close_window`, `is_maximized`, `set_decorations`,
 `set_window_title`. Recent files (stored as `recent.json` in app config dir):
@@ -113,6 +118,8 @@ API — the latter is unreliable in the WebView2/Chromium webview with the globa
 - Theme colors live as CSS custom properties in `:root` (`styles.css`); reuse them
   (`--bg`, `--panel`, `--editor-bg`, `--text`, `--accent`, …) rather than hardcoding.
 - Keep the browser fallback working: guard Tauri-only calls behind `hasTauri`.
+- Deleting a scene or chapter is immediate and undoable from the toast (`toastAction`);
+  don't add "cannot be undone" confirmations back.
 - Full Unicode / Cyrillic support is a requirement — don't assume ASCII.
 - The window is **frameless** (`decorations: false`); custom controls live in the top
   bar and a "Use native title bar" toggle in Settings restores the OS frame.
@@ -149,3 +156,7 @@ CI runs `npm test` and `npm run test:e2e` in the `quick-check` job on every PR, 
 `cargo test` + `npm run test:desktop` against a debug build in the `desktop-e2e` job.
 Browser-level behavior (sanitizer, paste, shortcuts, the app under the CSP) belongs in
 `e2e/browser.e2e.mjs`; anything needing the real backend, IPC or CSP in `e2e/desktop.e2e.mjs`.
+`e2e/flows.e2e.mjs` drives whole user flows black-box (clicks, keys, drags; the downloaded
+`.novel` is the oracle) and never touches app globals, so it must pass unchanged across a
+refactor of `app.js`. Its `{ todo: 'bug: …' }` tests document known bugs: when you fix one,
+drop the `todo` so the test guards the fix.

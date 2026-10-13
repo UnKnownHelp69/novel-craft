@@ -411,6 +411,7 @@ function loadSceneIntoEditor() {
 function saveCurrentScene() {
   const s = currentScene();
   if (!s) return;
+  const before = s.content;
   if (mdMode) { 
     if (mdEditor.value !== htmlToMd(s.content)) {
       s.content = mdToHtml(mdEditor.value); 
@@ -419,7 +420,7 @@ function saveCurrentScene() {
   }
   else { s.content = editor.innerHTML; s.markdownContent = htmlToMd(s.content); }
   s.wordCount = countWords(stripHtml(s.content));
-  s.modifiedAt = new Date().toISOString();
+  if (s.content !== before) s.modifiedAt = new Date().toISOString();
   const c = currentChapter();
   if (c) c.wordCount = chapterWordCount(c);
 }
@@ -461,24 +462,45 @@ function duplicateScene(sceneId) {
   markDirty();
   toast('Scene duplicated');
 }
+/* Re-render everything a structural change (delete / undo) can affect. */
+function refreshAfterStructureChange() {
+  openNoteId = null;
+  loadSceneIntoEditor();
+  renderTree();
+  updateCounters();
+  renderNotes();
+  renderNoteCard();
+  if (corkboardOpen) renderCorkboard();
+}
+/* Deleting is immediate and undoable from the toast (no "cannot be undone" prompt). The
+   undo puts the very same object back where it was, so ids, notes and compile items stay
+   intact; it does nothing once another novel has been opened. Only the latest deletion can
+   be undone: a new one retires the previous Undo, so nothing comes back out of order or into
+   a chapter that is gone. */
+let dismissUndo = null;
+function offerUndo(msg, onUndo) {
+  if (dismissUndo) dismissUndo();
+  dismissUndo = toastAction(msg, 'Undo', onUndo);
+}
 function deleteScene(sceneId) {
   const f = findScene(sceneId);
   if (!f) return;
   const c = f.chapter;
   if (c.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
-  confirmModal('Delete scene', 'Delete this scene? This cannot be undone.', () => {
-    const idx = c.scenes.findIndex(s => s.id === sceneId);
-    c.scenes.splice(idx, 1);
-    if (currentSceneId === sceneId) { currentSceneId = c.scenes[Math.max(0, idx - 1)].id; currentChapterId = c.id; }
-    openNoteId = null;
-    loadSceneIntoEditor();
-    renderTree();
-    updateCounters();
-    renderNotes();
-    renderNoteCard();
+  const owner = novel;
+  const wasCurrent = currentSceneId === sceneId;
+  if (wasCurrent) saveCurrentScene();          // what Undo brings back includes the latest typing
+  const idx = c.scenes.findIndex(s => s.id === sceneId);
+  const [removed] = c.scenes.splice(idx, 1);
+  if (wasCurrent) { currentSceneId = c.scenes[Math.max(0, idx - 1)].id; currentChapterId = c.id; }
+  refreshAfterStructureChange();
+  markDirty();
+  offerUndo(`Scene “${removed.title}” deleted`, () => {
+    if (novel !== owner || findScene(removed.id) || !findChapter(c.id)) return;
+    c.scenes.splice(Math.min(idx, c.scenes.length), 0, removed);
+    if (wasCurrent) selectScene(removed.id); else refreshAfterStructureChange();
     if (corkboardOpen) renderCorkboard();
     markDirty();
-    toast('Scene deleted');
   });
 }
 function renameScene(sceneId) {
@@ -538,22 +560,26 @@ function duplicateChapter(id) {
 }
 function deleteChapter(id) {
   if (novel.chapters.length === 1) { toast('Cannot delete the last chapter'); return; }
-  confirmModal('Delete chapter', 'Delete this chapter and all its scenes? This cannot be undone.', () => {
-    const idx = novel.chapters.findIndex(c => c.id === id);
-    novel.chapters.splice(idx, 1);
-    if (currentChapterId === id) {
-      const nc = novel.chapters[Math.max(0, idx - 1)];
-      currentChapterId = nc.id;
-      currentSceneId = nc.scenes[0].id;
-    }
-    openNoteId = null;
-    loadSceneIntoEditor();
-    renderTree();
-    updateCounters();
-    renderNotes();
-    renderNoteCard();
+  const idx = novel.chapters.findIndex(c => c.id === id);
+  if (idx === -1) return;
+  const owner = novel;
+  const wasCurrent = currentChapterId === id;
+  const prevSceneId = currentSceneId;
+  if (wasCurrent) saveCurrentScene();
+  const [removed] = novel.chapters.splice(idx, 1);
+  if (wasCurrent) {
+    const nc = novel.chapters[Math.max(0, idx - 1)];
+    currentChapterId = nc.id;
+    currentSceneId = nc.scenes[0].id;
+  }
+  refreshAfterStructureChange();
+  markDirty();
+  offerUndo(`Chapter “${removed.title}” deleted`, () => {
+    if (novel !== owner || findChapter(removed.id)) return;
+    novel.chapters.splice(Math.min(idx, novel.chapters.length), 0, removed);
+    if (wasCurrent && findScene(prevSceneId)) selectScene(prevSceneId); else refreshAfterStructureChange();
+    if (corkboardOpen) renderCorkboard();
     markDirty();
-    toast('Chapter deleted');
   });
 }
 function renameChapter(id) {
@@ -994,7 +1020,7 @@ async function handleLibraryFile(data, path) {
           const p = await pickPath('pick_save', { defaultName: (n.title || 'novel') + '.novel' });
           if (p) { 
             try {
-              await invoke('write_text', { path: p, content }); 
+              await invoke('save_novel', { path: p, content }); 
               await addRecent(p); 
               if (n === active) {
                 currentFilePath = p;
@@ -1067,7 +1093,7 @@ function newNovelFile() {
       const path = await pickPath('pick_save', { defaultName: 'Untitled Novel.novel' });
       if (!path) return;               // cancelled -> keep current novel
       setCurrentNovel(n, path);
-      await invoke('write_text', { path, content: serializeNovel(novel) });
+      await invoke('save_novel', { path, content: serializeNovel(novel) });
       await invoke('set_last_file', { path });
       await addRecent(path);
       toast('Created ' + baseName(path));
@@ -1668,6 +1694,26 @@ function toast(msg) {
   }, 2200);
 }
 
+/* A toast with one action button (e.g. Undo). It stays longer than a plain toast, and the
+   action runs at most once, only while the toast is up. Returns a function that dismisses it. */
+function toastAction(msg, label, onAction, ms = 8000) {
+  const t = document.createElement('div');
+  t.className = 'toast toast-action';
+  const text = document.createElement('span');
+  text.textContent = msg;
+  const btn = document.createElement('button');
+  btn.className = 'toast-btn';
+  btn.textContent = label;
+  let live = true;
+  const dismiss = () => { live = false; t.classList.remove('show'); setTimeout(() => t.remove(), 250); };
+  btn.addEventListener('click', () => { if (!live) return; dismiss(); onAction(); });
+  t.append(text, btn);
+  $('#toastHost').appendChild(t);
+  requestAnimationFrame(() => t.classList.add('show'));
+  setTimeout(() => { if (live) dismiss(); }, ms);
+  return () => { if (live) dismiss(); };
+}
+
 /* ================= SAVE ================= */
 async function doSave(saveAs = false) {
   if (!novel) { toast('No novel to save'); return false; }
@@ -1690,7 +1736,7 @@ async function doSave(saveAs = false) {
   dirty = false;
   try {
     if (hasTauri) {
-      await invoke('write_text', { path, content });
+      await invoke('save_novel', { path, content });
       currentFilePath = path;
       await invoke('set_last_file', { path });
       await addRecent(path);
@@ -1867,7 +1913,7 @@ setInterval(async () => {
       const content = serializeNovel(novel);
       snapshotSaved();
       dirty = false;
-      await invoke('write_text', { path: currentFilePath, content });
+      await invoke('save_novel', { path: currentFilePath, content });
       if (!dirty) setSaved();
       else $('#saveIndicator').classList.remove('saving');
       clearBackup();
@@ -5294,6 +5340,73 @@ $('#compExportBtn').addEventListener('click', e => { e.stopPropagation(); $('#co
 document.addEventListener('click', () => $('#compExportMenu').classList.remove('open'));
 $('#compExportMenu').addEventListener('click', e => { const k = e.target.dataset.compExport; if (k) { $('#compExportMenu').classList.remove('open'); doCompExport(k); } });
 
+/* ================= BACKUPS ================= */
+/* Each save of a .novel keeps the previous version of the file (save_novel in lib.rs, at most
+   one copy per 10 minutes, pruned to the newest 20 plus one per day for 30 days). This lists
+   them for the open file and loads one into the editor as unsaved changes — saving keeps it,
+   and the version on disk is backed up first so the restore itself can be undone. */
+function fmtBytes(n) {
+  return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+}
+async function openBackups() {
+  if (!hasTauri) { toast('Backups are kept by the desktop app'); return; }
+  if (!novel || !currentFilePath) { toast('Save the novel to a file first — backups are kept per file'); return; }
+  let list;
+  try { list = await invoke('list_backups', { path: currentFilePath }); }
+  catch (e) { console.error(e); toast('Could not list backups'); return; }
+  const name = baseName(currentFilePath);
+  $('#backupHint').textContent = list.length
+    ? `Earlier versions of ${name}, newest first. Restoring replaces what is in the editor; the file as it is now is backed up first, so a restore can be undone from this list.`
+    : `No backups of ${name} yet. The previous version is kept each time you save (at most one copy per 10 minutes).`;
+  const host = $('#backupList');
+  host.innerHTML = '';
+  list.forEach(b => {
+    const at = new Date(b.created * 1000);
+    const row = document.createElement('div');
+    row.className = 'backup-row';
+    const when = document.createElement('span');
+    when.className = 'br-when';
+    when.textContent = at.toLocaleString();
+    const meta = document.createElement('span');
+    meta.className = 'br-meta';
+    meta.textContent = fmtNoteDate(at.toISOString()) + ' · ' + fmtBytes(b.size);
+    const btn = document.createElement('button');
+    btn.className = 'tbtn accent';
+    btn.textContent = 'Restore';
+    btn.addEventListener('click', () => restoreBackup(b));
+    row.append(when, meta, btn);
+    host.appendChild(row);
+  });
+  $('#backupOverlay').classList.remove('hidden');
+}
+function closeBackups() { $('#backupOverlay').classList.add('hidden'); }
+async function restoreBackup(b) {
+  const path = currentFilePath;
+  const at = new Date(b.created * 1000).toLocaleString();
+  closeBackups();
+  const go = async () => {
+    try {
+      let data = JSON.parse(await invoke('read_backup', { path, name: b.name }));
+      // a copy of a file from before one-novel-per-file holds a library: take its open novel
+      if (data && Array.isArray(data.novels)) data = data.novels.find(n => n && n.id === data.activeNovelId) || data.novels[0];
+      if (!data || typeof data !== 'object' || !Array.isArray(data.chapters)) { toast('This backup does not hold a novel'); return; }
+      await invoke('backup_now', { path });   // the version on disk survives the restore
+      setCurrentNovel(data, path);
+      markDirty();
+      toast(`Restored the version from ${at}`);
+    } catch (e) {
+      console.error(e);
+      toast('Could not restore this backup');
+    }
+  };
+  if (dirty) confirmModal('Unsaved changes', `Discard unsaved changes and load the version from ${at}?`, go);
+  else go();
+}
+$('#btnRestoreBackup').addEventListener('click', openBackups);
+$('#backupClose').addEventListener('click', closeBackups);
+$('#backupOverlay').addEventListener('mousedown', e => { if (e.target === $('#backupOverlay')) closeBackups(); });
+if (!hasTauri) $('#btnRestoreBackup').classList.add('hidden');
+
 /* ================= KEYBOARD SHORTCUTS ================= */
 function navigateNotes(dir) {
   const notes = filteredNotes();
@@ -5328,6 +5441,7 @@ function shortcutKey(e) {
 document.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey;
   const key = shortcutKey(e);
+  if (e.key === 'Escape' && !$('#backupOverlay').classList.contains('hidden')) { closeBackups(); return; }
   if (mod && !e.shiftKey && key === 'g') { e.preventDefault(); if (graphOpen) closeGraph(); else openGraph(); return; }
   if (e.key === 'Escape' && graphOpen) { if (!$('#graphPanel').classList.contains('hidden')) { $('#graphPanel').classList.add('hidden'); } else closeGraph(); return; }
   if (e.key === 'Escape' && corkboardOpen) { closeCorkboard(); return; }
@@ -5368,6 +5482,7 @@ if (hasTauri) {
       case 'open': doOpen(); break;
       case 'save': doSave(false); break;
       case 'save_as': doSave(true); break;
+      case 'restore_backup': openBackups(); break;
       case 'compile': openCompile(); break;
       case 'export_txt': doExport('txt'); break;
       case 'export_html': doExport('html'); break;

@@ -323,3 +323,85 @@ test('at the minimum window width the save indicator stays visible', async () =>
     assert.strictEqual(m.tall, 0, 'top-bar buttons must not wrap');
   } finally { await close(); }
 });
+
+test('a deleted scene or chapter comes back with Undo, in place and with its edits', async () => {
+  const { page, errors, close } = await appPage();
+  try {
+    const scene = (id, title, text, notes = []) => ({ id, title, content: `<p>${text}</p>`, notes });
+    const fixture = plainNovel('', {
+      chapters: [
+        { id: 'c1', title: 'Глава 1', scenes: [
+          scene('s1', 'Сцена 1', 'Первая.'),
+          scene('s2', 'Сцена 2', 'Вторая.', [{ id: 'n1', typeId: 'fix', content: 'заметка', selectedText: 'Вторая', startOffset: 0, endOffset: 6 }]),
+          scene('s3', 'Сцена 3', 'Третья.')] },
+        { id: 'c2', title: 'Глава 2', scenes: [scene('s4', 'Сцена 4', 'Четвёртая.')] }]
+    });
+    await openNovel(page, await writeTempNovel('undo.novel', fixture));
+    const titles = () => page.$$eval('.tree-scene .ts-title', els => els.map(e => e.textContent));
+    const chapters = () => page.$$eval('.tc-title', els => els.map(e => e.textContent));
+    const state = () => page.evaluate(() => ({ current: currentSceneId, dirty, text: document.getElementById('editor').textContent }));
+    const toastUndo = () => page.locator('.toast-action.show .toast-btn');   // a retired toast fades out without .show
+    const del = async sel => { await page.click(sel, { button: 'right' }); await page.click('#ctxMenu button.danger'); };
+    // Undo right after a save (Ctrl+S) must leave the novel unsaved again
+    const undo = async () => {
+      await page.evaluate(() => setSaved());
+      await toastUndo().click();
+      await toastUndo().waitFor({ state: 'detached' });   // Undo is spent: its toast goes away
+      assert.strictEqual((await state()).dirty, true, 'Undo marks the novel unsaved');
+    };
+
+    await page.click('.tree-scene[data-scene-id="s2"]');
+    await page.click('#editor p');
+    await page.keyboard.press('End');
+    await page.keyboard.type(' Правка.');
+
+    // delete the open scene: no confirmation, the previous scene opens, a toast offers Undo
+    await del('.tree-scene[data-scene-id="s2"]');
+    assert.deepStrictEqual(await titles(), ['Сцена 1', 'Сцена 3', 'Сцена 4']);
+    assert.strictEqual((await state()).current, 's1');
+    assert.match(await page.textContent('.toast-action'), /Сцена 2/);
+    await undo();
+    assert.deepStrictEqual(await titles(), ['Сцена 1', 'Сцена 2', 'Сцена 3', 'Сцена 4']);
+    let s = await state();
+    assert.strictEqual(s.current, 's2');
+    assert.strictEqual(s.text, 'Вторая. Правка.', 'the typing done just before the delete survives');
+    assert.strictEqual(await page.evaluate(() => findScene('s2').scene.notes.length), 1);
+
+    // a scene that is not open: the open one stays open
+    await del('.tree-scene[data-scene-id="s3"]');
+    assert.strictEqual((await state()).current, 's2');
+    await undo();
+    assert.deepStrictEqual(await titles(), ['Сцена 1', 'Сцена 2', 'Сцена 3', 'Сцена 4']);
+    assert.strictEqual((await state()).current, 's2');
+
+    // the open chapter: it goes, the remaining one opens; Undo restores it first, with its scenes
+    await del('.tc-row[data-chapter-id="c1"]');
+    assert.deepStrictEqual(await chapters(), ['Глава 2']);
+    assert.strictEqual((await state()).current, 's4');
+    await undo();
+    assert.deepStrictEqual(await chapters(), ['Глава 1', 'Глава 2']);
+    assert.deepStrictEqual(await titles(), ['Сцена 1', 'Сцена 2', 'Сцена 3', 'Сцена 4']);
+    s = await state();
+    assert.strictEqual(s.current, 's2');
+    assert.strictEqual(s.text, 'Вторая. Правка.');
+
+    // only the latest deletion can be undone, so nothing comes back out of order
+    await del('.tree-scene[data-scene-id="s1"]');
+    await del('.tree-scene[data-scene-id="s3"]');
+    await page.locator('.toast-action', { hasText: 'Сцена 1' }).waitFor({ state: 'detached' });
+    await undo();
+    assert.deepStrictEqual(await titles(), ['Сцена 2', 'Сцена 3', 'Сцена 4']);
+
+    // Undo after another novel was opened must not touch it, even one with the same ids
+    await del('.tree-scene[data-scene-id="s2"]');
+    await page.evaluate(() => setCurrentNovel({ title: 'Другой', chapters: [{ id: 'c1', title: 'Икс', scenes: [{ id: 'y', title: 'Игрек', content: '<p>y</p>' }, { id: 'z', title: 'Зет', content: '<p>z</p>' }] }] }, null));
+    await toastUndo().click();
+    assert.deepStrictEqual(await titles(), ['Игрек', 'Зет']);
+    await page.evaluate(n => setCurrentNovel(n, null), fixture);
+    await del('.tc-row[data-chapter-id="c2"]');
+    await page.evaluate(() => setCurrentNovel({ title: 'Третий', chapters: [{ id: 'b', title: 'Бэ', scenes: [{ id: 'b1', title: 'Бэ 1', content: '<p>b</p>' }] }] }, null));
+    await toastUndo().click();
+    assert.deepStrictEqual(await chapters(), ['Бэ']);
+    assert.deepStrictEqual(errors, []);
+  } finally { await close(); }
+});
