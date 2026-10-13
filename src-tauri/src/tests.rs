@@ -289,3 +289,67 @@ fn backup_file_prunes_old_copies() {
     );
     assert_eq!(times[0], t0 + 24 * 700);
 }
+
+#[test]
+fn backup_file_never_overwrites_a_kept_version() {
+    let dir = scratch("backup-same-second");
+    let root = dir.join("backups");
+    let novel = dir.join("book.novel");
+    let t0 = 1_000 * DAY;
+    fs::write(&novel, "v1").unwrap();
+    assert!(backup_file(&root, &novel, t0, 600, false).unwrap());
+    fs::write(&novel, "v2").unwrap();
+    // a restore right after a save, within the same second: both versions are kept
+    assert!(backup_file(&root, &novel, t0, 600, true).unwrap());
+    let bdir = backup_dir(&root, &novel);
+    assert_eq!(backup_times(&bdir), vec![t0 + 1, t0]);
+    assert_eq!(
+        fs::read_to_string(bdir.join(format!("{t0}.novel"))).unwrap(),
+        "v1"
+    );
+    assert_eq!(
+        fs::read_to_string(bdir.join(format!("{}.novel", t0 + 1))).unwrap(),
+        "v2"
+    );
+}
+
+#[test]
+fn backups_dated_in_the_future_do_not_hold_off_new_ones() {
+    let dir = scratch("backup-clock");
+    let root = dir.join("backups");
+    let novel = dir.join("book.novel");
+    let t0 = 1_000 * DAY;
+    fs::write(&novel, "ahead").unwrap();
+    assert!(backup_file(&root, &novel, t0 + 365 * DAY, 600, false).unwrap()); // clock a year ahead
+    fs::write(&novel, "v1").unwrap();
+    assert!(
+        backup_file(&root, &novel, t0, 600, false).unwrap(),
+        "the clock was set back"
+    );
+    fs::write(&novel, "v2").unwrap();
+    assert!(
+        !backup_file(&root, &novel, t0 + 60, 600, false).unwrap(),
+        "the interval still holds"
+    );
+    assert_eq!(
+        backup_times(&backup_dir(&root, &novel)),
+        vec![t0 + 365 * DAY, t0]
+    );
+}
+
+#[test]
+fn a_version_already_kept_is_not_copied_again() {
+    let dir = scratch("backup-dedupe");
+    let root = dir.join("backups");
+    let novel = dir.join("book.novel");
+    let t0 = 1_000 * DAY;
+    fs::write(&novel, "old").unwrap();
+    assert!(backup_file(&root, &novel, t0, 600, false).unwrap());
+    fs::write(&novel, "latest").unwrap();
+    assert!(backup_file(&root, &novel, t0 + 700, 600, true).unwrap());
+    // "old" was restored and saved: backing it up again would only push real versions out
+    fs::write(&novel, "old").unwrap();
+    assert!(!backup_file(&root, &novel, t0 + 800, 600, true).unwrap());
+    assert!(!backup_file(&root, &novel, t0 + 2000, 600, false).unwrap());
+    assert_eq!(backup_times(&backup_dir(&root, &novel)), vec![t0 + 700, t0]);
+}

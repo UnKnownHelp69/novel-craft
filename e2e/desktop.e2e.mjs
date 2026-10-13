@@ -7,13 +7,13 @@
  * NOVELCRAFT_BIN overrides the app binary (default: src-tauri/target/debug/novelcraft).
  *
  * The app runs with XDG_CONFIG_HOME and XDG_DATA_HOME pointed at a temporary directory, so the
- * developer's own recent-files list, window state and backups are never touched. Backups are
- * taken on every save (NOVELCRAFT_BACKUP_INTERVAL_SECS=0) instead of every ten minutes.
+ * developer's own recent-files list, window state and backups are never touched. The backup
+ * interval is an hour (NOVELCRAFT_BACKUP_INTERVAL_SECS) so no timing can sneak in a second one.
  */
 import test from 'node:test';
 import assert from 'node:assert';
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ROOT, craftedNovel } from './support.mjs';
@@ -32,6 +32,8 @@ const CONFIG = join(WORK, 'config');
 const APP_CONFIG = join(CONFIG, 'com.novelcraft.desktop');
 const DATA = join(WORK, 'data');
 const CRAFTED = join(WORK, 'crafted.novel');
+const CRAFTED_JSON = JSON.stringify(craftedNovel(), null, 2);
+const BACKUPS = join(DATA, 'com.novelcraft.desktop', 'backups');
 const PICKED = join(WORK, 'picked.novel');
 const STALE = join(WORK, 'stale.novel');      // in the recent list at launch, dropped from it later
 const ORPHAN = join(WORK, 'orphan.novel');    // where a recovery backup claims the novel lived
@@ -72,7 +74,7 @@ async function startApp() {
 test.before(async () => {
   if (skip) return;
   mkdirSync(APP_CONFIG, { recursive: true });
-  writeFileSync(CRAFTED, JSON.stringify(craftedNovel(), null, 2));
+  writeFileSync(CRAFTED, CRAFTED_JSON);
   writeFileSync(PICKED, smallNovel('Picked'));
   writeFileSync(STALE, smallNovel('Stale'));
   writeFileSync(ORPHAN, smallNovel('Orphan on disk'));
@@ -81,7 +83,7 @@ test.before(async () => {
   // A crash backup whose path the user never opened in the app (not recent, not last file).
   writeFileSync(join(APP_CONFIG, 'working.novel'), JSON.stringify({ ts: 1, path: ORPHAN, novel: JSON.parse(smallNovel('Recovered')) }));
   driver = spawn('tauri-driver', ['--port', String(PORT), '--native-port', String(NATIVE_PORT)], {
-    env: { ...process.env, XDG_CONFIG_HOME: CONFIG, XDG_DATA_HOME: DATA, NOVELCRAFT_BACKUP_INTERVAL_SECS: '0' }, stdio: 'ignore'
+    env: { ...process.env, XDG_CONFIG_HOME: CONFIG, XDG_DATA_HOME: DATA, NOVELCRAFT_BACKUP_INTERVAL_SECS: '3600' }, stdio: 'ignore'
   });
   for (let i = 0; i < 50; i++) {
     try { await fetch(`http://127.0.0.1:${PORT}/status`, { signal: AbortSignal.timeout(2000) }); break; } catch { await sleep(200); }
@@ -179,50 +181,50 @@ test('Ctrl+S on a Russian layout saves to the open file', { skip }, async () => 
   assert.strictEqual(await exec(`return document.getElementById('saveIndicator').textContent`), 'Saved');
 });
 
-test('every save keeps the previous version, and Restore from Backup brings one back', { skip }, async () => {
-  // The Ctrl+S above saved CRAFTED: its original content is a backup now. (The 30 s autosave
-  // may write in between too; a save of unchanged content takes no backup, so counts hold.)
+test('a save keeps the version it replaces; Restore from Backup brings one back, sanitized', { skip }, async () => {
+  // The Ctrl+S above (or an autosave before it) was the first save of CRAFTED: the file as it
+  // was is now a backup, byte for byte.
   let list = (await invoke('list_backups', { path: CRAFTED })).v;
-  assert.ok(list.length >= 1, 'a backup after a save');
-  assert.match((await invoke('read_backup', { path: CRAFTED, name: list[list.length - 1].name })).v, /onerror/, 'the oldest is the file as it was');
-  const before = list.length;
-  await sleep(1100);   // backups are named by the second
-  await exec(`const ed = document.getElementById('editor'); ed.focus();
+  assert.strictEqual(list.length, 1, JSON.stringify(list));
+  assert.strictEqual((await invoke('read_backup', { path: CRAFTED, name: list[0].name })).v, CRAFTED_JSON);
+  // Another save inside the interval takes none. The edit and the save run in one task, so the
+  // 30 s autosave cannot slip in between.
+  assert.strictEqual(await execAsync(`const done = arguments[arguments.length - 1];
+    const ed = document.getElementById('editor'); ed.focus();
     getSelection().selectAllChildren(ed); getSelection().collapseToEnd();
-    document.execCommand('insertText', false, ' Вторая правка');`);
-  await sleep(300);
-  assert.strictEqual(await execAsync(`const done = arguments[arguments.length - 1]; doSave().then(done);`), true);
+    document.execCommand('insertText', false, ' Вторая правка');
+    doSave().then(done);`), true);
   assert.match(readFileSync(CRAFTED, 'utf8'), /Вторая правка/);
-  list = (await invoke('list_backups', { path: CRAFTED })).v;
-  assert.strictEqual(list.length, before + 1);
-  assert.ok(list[0].created >= list[1].created, 'newest first');
-  const newest = (await invoke('read_backup', { path: CRAFTED, name: list[0].name })).v;
-  assert.match(newest, /Добавлено/);
-  assert.doesNotMatch(newest, /Вторая правка/, 'a backup is the version before the save');
+  assert.strictEqual((await invoke('list_backups', { path: CRAFTED })).v.length, 1, 'at most one backup per interval');
 
-  // the dialog lists both; restoring the newest loads it unsaved and backs up the file first
-  await sleep(1100);
+  // Restore the original through the dialog. It is the crafted file: it must load sanitized,
+  // and the file as it is now must be backed up first even inside the interval.
   await execAsync(`const done = arguments[arguments.length - 1]; openBackups().then(() => done(1));`);
-  const rows = await exec(`return document.querySelectorAll('#backupOverlay:not(.hidden) .backup-row').length;`);
-  assert.strictEqual(rows, before + 1);
+  assert.strictEqual(await exec(`return document.querySelectorAll('#backupOverlay:not(.hidden) .backup-row').length;`), 1);
   await exec(`document.querySelector('#backupList .backup-row button').click();`);
   await sleep(1500);
-  const st = await exec(`return { text: document.getElementById('editor').textContent, dirty, path: currentFilePath,
-    open: !document.getElementById('backupOverlay').classList.contains('hidden'), pwn: window.__pwn || null };`);
-  assert.match(st.text, /Добавлено/);
-  assert.doesNotMatch(st.text, /Вторая правка/);
+  const st = await exec(`return { text: document.getElementById('editor').textContent, html: document.getElementById('editor').innerHTML,
+    dirty, path: currentFilePath, open: !document.getElementById('backupOverlay').classList.contains('hidden'), pwn: window.__pwn || null };`);
+  assert.match(st.text, /Привет/);
+  assert.doesNotMatch(st.text, /Добавлено|Вторая правка/);
+  assert.doesNotMatch(st.html, /onerror|<svg|<script|<style|<iframe|javascript:/i);
   assert.deepStrictEqual({ path: st.path, open: st.open, pwn: st.pwn }, { path: CRAFTED, open: false, pwn: null });
   const disk = readFileSync(CRAFTED, 'utf8');
   assert.ok(st.dirty ? /Вторая правка/.test(disk) : !/Вторая правка/.test(disk),
     'the restored version is unsaved until a save (or the autosave) writes it');
   list = (await invoke('list_backups', { path: CRAFTED })).v;
-  assert.strictEqual(list.length, before + 2, 'the version on disk was backed up before the restore');
+  assert.strictEqual(list.length, 2, 'the version on disk was backed up before the restore');
   assert.match((await invoke('read_backup', { path: CRAFTED, name: list[0].name })).v, /Вторая правка/);
 
-  // backup names are file names in the backup folder, nothing else
-  for (const name of ['../recent.json', '../../config/com.novelcraft.desktop/recent.json', '/etc/hostname', 'source.txt', `${list[0].name}/..`]) {
+  // A backup name is a file name in that file's backup folder, nothing else. Each of these
+  // points at a real file the session was never given.
+  const [hash] = readdirSync(BACKUPS);
+  const names = [ORPHAN, '../../../../orphan.novel', '../../../../config/com.novelcraft.desktop/recent.json', 'source.txt'];
+  for (const name of names) {
+    assert.ok(existsSync(name.startsWith('/') ? name : join(BACKUPS, hash, name)), `fixture: ${name} exists`);
     const r = await invoke('read_backup', { path: CRAFTED, name });
     assert.strictEqual(r.ok, false, `read_backup must refuse ${name}`);
+    assert.match(r.e, /not a backup/, name);
   }
 });
 

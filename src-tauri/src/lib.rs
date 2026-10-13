@@ -422,8 +422,11 @@ fn now_secs() -> u64 {
 }
 
 /// Copy the current on-disk version of `file` (a canonical path) into its backup directory,
-/// unless the newest backup is younger than `interval` (and `force` is off) or already holds
+/// unless a backup younger than `interval` exists (and `force` is off) or one already holds
 /// the same bytes. Then prune. Returns whether a new backup was written.
+///
+/// Backups dated after `now` (the clock was set back) don't hold automatic backups off, and a
+/// name already taken moves on to the next free second: a kept version is never overwritten.
 fn backup_file(
     root: &Path,
     file: &Path,
@@ -436,26 +439,29 @@ fn backup_file(
     }
     let dir = backup_dir(root, file);
     fs::create_dir_all(&dir)?;
-    let times = backup_times(&dir);
-    if let Some(&newest) = times.first() {
-        if !force && now.saturating_sub(newest) < interval {
-            return Ok(false);
-        }
-    }
-    if times.first() == Some(&now) {
-        return Ok(false); // one backup per second is plenty
+    let mut times = backup_times(&dir);
+    if !force && times.iter().any(|&t| t <= now && now - t < interval) {
+        return Ok(false);
     }
     let current = fs::read(file)?;
-    if let Some(&newest) = times.first() {
-        if fs::read(dir.join(format!("{newest}.novel"))).is_ok_and(|b| b == current) {
-            return Ok(false);
-        }
+    // Any copy, not just the newest: a restored old version that was saved again is kept already.
+    let kept = times.iter().any(|t| {
+        let f = dir.join(format!("{t}.novel"));
+        fs::metadata(&f).is_ok_and(|m| m.len() == current.len() as u64)
+            && fs::read(&f).is_ok_and(|b| b == current)
+    });
+    if kept {
+        return Ok(false);
     }
-    atomic_write(&dir.join(format!("{now}.novel")), current)?;
+    let mut name = now;
+    while times.contains(&name) {
+        name += 1;
+    }
+    atomic_write(&dir.join(format!("{name}.novel")), current)?;
     let _ = atomic_write(&dir.join("source.txt"), file.to_string_lossy().as_bytes());
-    let mut all = times;
-    all.insert(0, now);
-    for t in backups_to_prune(&all, now) {
+    times.push(name);
+    times.sort_unstable_by(|a, b| b.cmp(a));
+    for t in backups_to_prune(&times, now) {
         let _ = fs::remove_file(dir.join(format!("{t}.novel")));
     }
     Ok(true)

@@ -411,6 +411,7 @@ function loadSceneIntoEditor() {
 function saveCurrentScene() {
   const s = currentScene();
   if (!s) return;
+  const before = s.content;
   if (mdMode) { 
     if (mdEditor.value !== htmlToMd(s.content)) {
       s.content = mdToHtml(mdEditor.value); 
@@ -419,7 +420,7 @@ function saveCurrentScene() {
   }
   else { s.content = editor.innerHTML; s.markdownContent = htmlToMd(s.content); }
   s.wordCount = countWords(stripHtml(s.content));
-  s.modifiedAt = new Date().toISOString();
+  if (s.content !== before) s.modifiedAt = new Date().toISOString();
   const c = currentChapter();
   if (c) c.wordCount = chapterWordCount(c);
 }
@@ -473,7 +474,14 @@ function refreshAfterStructureChange() {
 }
 /* Deleting is immediate and undoable from the toast (no "cannot be undone" prompt). The
    undo puts the very same object back where it was, so ids, notes and compile items stay
-   intact; it does nothing once another novel has been opened. */
+   intact; it does nothing once another novel has been opened. Only the latest deletion can
+   be undone: a new one retires the previous Undo, so nothing comes back out of order or into
+   a chapter that is gone. */
+let dismissUndo = null;
+function offerUndo(msg, onUndo) {
+  if (dismissUndo) dismissUndo();
+  dismissUndo = toastAction(msg, 'Undo', onUndo);
+}
 function deleteScene(sceneId) {
   const f = findScene(sceneId);
   if (!f) return;
@@ -487,7 +495,7 @@ function deleteScene(sceneId) {
   if (wasCurrent) { currentSceneId = c.scenes[Math.max(0, idx - 1)].id; currentChapterId = c.id; }
   refreshAfterStructureChange();
   markDirty();
-  toastAction(`Scene “${removed.title}” deleted`, 'Undo', () => {
+  offerUndo(`Scene “${removed.title}” deleted`, () => {
     if (novel !== owner || findScene(removed.id) || !findChapter(c.id)) return;
     c.scenes.splice(Math.min(idx, c.scenes.length), 0, removed);
     if (wasCurrent) selectScene(removed.id); else refreshAfterStructureChange();
@@ -566,7 +574,7 @@ function deleteChapter(id) {
   }
   refreshAfterStructureChange();
   markDirty();
-  toastAction(`Chapter “${removed.title}” deleted`, 'Undo', () => {
+  offerUndo(`Chapter “${removed.title}” deleted`, () => {
     if (novel !== owner || findChapter(removed.id)) return;
     novel.chapters.splice(Math.min(idx, novel.chapters.length), 0, removed);
     if (wasCurrent && findScene(prevSceneId)) selectScene(prevSceneId); else refreshAfterStructureChange();
@@ -1687,7 +1695,7 @@ function toast(msg) {
 }
 
 /* A toast with one action button (e.g. Undo). It stays longer than a plain toast, and the
-   action runs at most once, only while the toast is up. */
+   action runs at most once, only while the toast is up. Returns a function that dismisses it. */
 function toastAction(msg, label, onAction, ms = 8000) {
   const t = document.createElement('div');
   t.className = 'toast toast-action';
@@ -1703,6 +1711,7 @@ function toastAction(msg, label, onAction, ms = 8000) {
   $('#toastHost').appendChild(t);
   requestAnimationFrame(() => t.classList.add('show'));
   setTimeout(() => { if (live) dismiss(); }, ms);
+  return () => { if (live) dismiss(); };
 }
 
 /* ================= SAVE ================= */
@@ -5377,7 +5386,10 @@ async function restoreBackup(b) {
   closeBackups();
   const go = async () => {
     try {
-      const data = JSON.parse(await invoke('read_backup', { path, name: b.name }));
+      let data = JSON.parse(await invoke('read_backup', { path, name: b.name }));
+      // a copy of a file from before one-novel-per-file holds a library: take its open novel
+      if (data && Array.isArray(data.novels)) data = data.novels.find(n => n && n.id === data.activeNovelId) || data.novels[0];
+      if (!data || typeof data !== 'object' || !Array.isArray(data.chapters)) { toast('This backup does not hold a novel'); return; }
       await invoke('backup_now', { path });   // the version on disk survives the restore
       setCurrentNovel(data, path);
       markDirty();
