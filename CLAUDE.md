@@ -15,7 +15,7 @@ for Windows, macOS, and Linux.
 ```bash
 npm install        # install the Tauri CLI (@tauri-apps/cli)
 npm test           # node --test — the test/ suite (no test framework, node:test only)
-npm run test:e2e   # browser suite (e2e/browser.e2e.mjs): the real src/ in Chromium via playwright-core
+npm run test:e2e   # browser suites (e2e/browser.e2e.mjs, e2e/flows.e2e.mjs): the real src/ in Chromium via playwright-core
 npm run test:desktop  # desktop suite (e2e/desktop.e2e.mjs): the built app via tauri-driver (Linux)
 npm run dev        # tauri dev — run the app with a live-reloaded static frontend
 npm run build      # tauri build — produce native binary + installers
@@ -43,7 +43,7 @@ src/                     Frontend (served directly, no bundler)
   fonts/fonts.css        @font-face with system fallbacks
   fonts/pdf/*.ttf        IBM Plex Mono (OFL) — raw TrueType, embedded into PDF exports
 test/                    node:test suites (no framework)
-e2e/                     browser (playwright-core) and desktop (tauri-driver) regression suites
+e2e/                     browser + UI-flow (playwright-core) and desktop (tauri-driver) regression suites
 src-tauri/               Rust backend
   src/lib.rs             Commands, native menu, file I/O, window controls, recent files
   src/main.rs            Thin entry point -> novelcraft_lib::run()
@@ -156,3 +156,7 @@ CI runs `npm test` and `npm run test:e2e` in the `quick-check` job on every PR, 
 `cargo test` + `npm run test:desktop` against a debug build in the `desktop-e2e` job.
 Browser-level behavior (sanitizer, paste, shortcuts, the app under the CSP) belongs in
 `e2e/browser.e2e.mjs`; anything needing the real backend, IPC or CSP in `e2e/desktop.e2e.mjs`.
+`e2e/flows.e2e.mjs` drives whole user flows black-box (clicks, keys, drags; the downloaded
+`.novel` is the oracle) and never touches app globals, so it must pass unchanged across a
+refactor of `app.js`. Its `{ todo: 'bug: …' }` tests document known bugs: when you fix one,
+drop the `todo` so the test guards the fix.
