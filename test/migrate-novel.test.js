@@ -32,7 +32,7 @@ const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
    toast must exist because the legacy-chapter path schedules one 400ms later — without a
    stand-in that timer throws ReferenceError long after the assertions have finished. */
 const testCountWords = t => {
-  const m = (t || '').trim().match(/[\p{L}\p{N}'’-]+/gu);
+  const m = String(t || '').match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:['’-][\p{L}\p{N}][\p{L}\p{M}\p{N}]*)*/gu);
   return m ? m.length : 0;
 };
 const testStripHtml = html => String(html || '').replace(/<[^>]*>/g, ' ');
@@ -545,4 +545,38 @@ test('a saved preset using the removed "word" numbering is migrated to "arabic"'
 test('preset migration tolerates presets without settings', () => {
   const n = migrateNovel({ settings: { compilationPresets: [{ id: 'x', name: 'X' }, null] } });
   assert.strictEqual(n.settings.compilationPresets.length, 2);
+});
+
+/* ---------- values from the file that reach HTML/CSS ---------- */
+
+test('colours that reach style attributes and <style> rules must be #rrggbb', () => {
+  // A colour from a crafted file used to be pasted into innerHTML/<style> as-is.
+  const evil = 'red"><img src=x onerror=alert(1)>';
+  const n = migrateNovel({
+    settings: {
+      customNoteTypes: [{ id: 'a', name: 'A', color: evil }, { id: 'b', name: 'B', color: '#A1b2C3' }],
+      noteTypeColors: { fix: evil, idea: '#123456', expand: 42 },
+      worldMap: { routes: [{ id: 'r', color: 'url(https://evil)' }] }
+    },
+    characters: [{ id: 'c1', color: evil }, { id: 'c2', color: '#00ff00' }, { id: 'c3' }]
+  });
+  assert.deepStrictEqual(n.settings.customNoteTypes.map(t => t.color), ['#c9a96e', '#A1b2C3']);
+  assert.deepStrictEqual(n.settings.noteTypeColors, { idea: '#123456' });
+  assert.strictEqual(n.settings.worldMap.routes[0].color, '#c9a96e');
+  assert.strictEqual('color' in n.characters[0], false, 'an invalid character colour is dropped');
+  assert.strictEqual(n.characters[1].color, '#00ff00');
+  assert.strictEqual('color' in n.characters[2], false);
+});
+
+test('a scene wordCount that is not a positive integer is recounted from the content', () => {
+  // wordCount is rendered straight into the tree/corkboard markup, so a string from a
+  // crafted file must never survive; it is only a cache of countWords(content) anyway.
+  const n = migrateNovel({ chapters: [{ scenes: [
+    { content: '<p>one two three</p>', wordCount: '<img src=x onerror=alert(1)>' },
+    { content: '<p>four five</p>', wordCount: 2.5 },
+    { content: '<p>six</p>', wordCount: -4 },
+    { content: '<p>kept as cached</p>', wordCount: 7 }
+  ] }] });
+  assert.deepStrictEqual(n.chapters[0].scenes.map(s => s.wordCount), [3, 2, 1, 7]);
+  assert.strictEqual(n.chapters[0].wordCount, 13);
 });
