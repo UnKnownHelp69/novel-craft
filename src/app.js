@@ -523,7 +523,9 @@ function moveSceneToChapter(sceneId, chapterId) {
   const [moved] = f.chapter.scenes.splice(idx, 1);
   dest.scenes.push(moved);
   dest.collapsed = false;
-  renderTree(); updateBreadcrumb(); updateCounters(); markDirty();
+  renderTree(); updateBreadcrumb(); updateCounters();
+  if (corkboardOpen) renderCorkboard();
+  markDirty();
   toast('Scene moved to ' + dest.title);
 }
 
@@ -588,7 +590,9 @@ function renameChapter(id) {
   promptModal('Rename chapter', 'New title:', c.title, val => {
     if (!val || val === c.title) return;
     c.title = val;
-    renderTree(); updateBreadcrumb(); markDirty();
+    renderTree(); updateBreadcrumb();
+    if (corkboardOpen) renderCorkboard();
+    markDirty();
   });
 }
 function setAllCollapsed(v) { if (!novel) return; novel.chapters.forEach(c => (c.collapsed = v)); renderTree(); }
@@ -605,7 +609,7 @@ function updateBreadcrumb() {
     const b = document.createElement('button');
     b.className = 'bc-part ' + cls;
     b.textContent = text;
-    if (handler) b.onclick = handler;
+    if (handler) b.onclick = () => { if (document.activeElement === nvTitle) nvTitle.blur(); handler(); };
     return b;
   };
   bc.appendChild(part(novel.title || 'Untitled Novel', 'bc-novel', () => { if (novel) nvTitle.dispatchEvent(new MouseEvent('dblclick')); }));
@@ -667,11 +671,12 @@ chapterList.addEventListener('dblclick', e => {   // chapters are renamed on the
 let treeDrag = null;
 /* A click on a chapter row collapses or expands it; a double-click renames it. The first click has
    toggled the chapter by the time the second press comes (the OS allows ~500 ms), and with the tree
-   scrolled to its end the shorter list slides another row under the pointer. So the second press
-   undoes that click's toggle and renames the chapter that was clicked, whatever is under the
-   pointer now; the click/dblclick events that follow it are swallowed. */
+   scrolled to its end the shorter list slides another row under the pointer. So on the release of
+   the second press (unless it turned into a drag) that click's toggle is undone and the chapter
+   that was clicked is renamed, whatever is under the pointer now; the click/dblclick events that
+   follow are swallowed. */
 let chapterClick = null;        // { id, was, scrollTop } of the last click on a chapter row, until the next press
-let chapterRename = null;       // renamed on the mouseup of a double-click's second press
+let chapterRename = null;       // that click again, while the second press of its double-click is down
 let swallowTreeClicks = false;
 function setChapterCollapsed(c, v) {
   c.collapsed = v;
@@ -680,17 +685,16 @@ function setChapterCollapsed(c, v) {
   if (li) li.classList.toggle('collapsed', v); else renderTree();
 }
 function clearTreeDrop() { $$('.tree-scene,.tree-chapter').forEach(x => x.classList.remove('drop-before', 'drop-after', 'drop-into')); }
+// a press anywhere else ends a pending chapter click: a double-click that began elsewhere (say on a
+// context-menu item over the tree) is not a double-click on that chapter
+document.addEventListener('mousedown', e => { if (!chapterList.contains(e.target)) chapterClick = null; }, true);
 chapterList.addEventListener('mousedown', e => {
-  if (e.button !== 0) return;
   const click = chapterClick;
   chapterClick = null;
+  if (e.button !== 0) return;
   swallowTreeClicks = false;
-  if (e.detail > 1 && click) {                        // second press of a double-click on a chapter row
-    e.preventDefault();
-    const c = findChapter(click.id);
-    if (c) { setChapterCollapsed(c, click.was); chapterList.scrollTop = click.scrollTop; chapterRename = c.id; }
-    return;
-  }
+  chapterRename = e.detail > 1 && click ? click : null;   // second press of a double-click on a chapter row
+  if (chapterRename) e.preventDefault();
   if (e.target.closest('.tc-caret') || e.target.closest('.tc-add')) return;   // buttons handled on click
   const sceneEl = e.target.closest('.tree-scene');
   const chapRow = e.target.closest('.tc-row');
@@ -703,6 +707,7 @@ document.addEventListener('mousemove', e => {
     if (Math.abs(e.clientX - treeDrag.startX) < 5 && Math.abs(e.clientY - treeDrag.startY) < 5) return;
     treeDrag.started = true;
     treeDrag.el.classList.add('dragging');
+    chapterRename = null;   // a press that drags is a drag, double-click or not
   }
   e.preventDefault();
   clearTreeDrop();
@@ -729,18 +734,18 @@ document.addEventListener('mousemove', e => {
   }
 });
 document.addEventListener('mouseup', () => {
-  if (chapterRename) {
-    const id = chapterRename;
-    chapterRename = null;
-    swallowTreeClicks = true;
-    renameChapter(id);
-    return;
-  }
-  if (!treeDrag) return;
   const d = treeDrag;
   treeDrag = null;
-  clearTreeDrop();
-  d.el.classList.remove('dragging');
+  if (d) { clearTreeDrop(); d.el.classList.remove('dragging'); }
+  if (chapterRename) {
+    const click = chapterRename;
+    chapterRename = null;
+    swallowTreeClicks = true;
+    const c = findChapter(click.id);
+    if (c) { setChapterCollapsed(c, click.was); chapterList.scrollTop = click.scrollTop; renameChapter(c.id); }
+    return;
+  }
+  if (!d) return;
   if (!d.started) {                                   // no movement -> click
     if (d.type === 'scene') { if (d.id !== currentSceneId) selectScene(d.id); }
     else {
@@ -780,6 +785,7 @@ function applySceneDrop(sceneId, target) {
   renderTree();
   updateBreadcrumb();
   updateCounters();
+  if (corkboardOpen) renderCorkboard();
   markDirty();
 }
 function applyChapterDrop(chapterId, target) {
@@ -790,6 +796,7 @@ function applyChapterDrop(chapterId, target) {
   if (target.after) to += 1;
   novel.chapters.splice(to, 0, moved);
   renderTree();
+  if (corkboardOpen) renderCorkboard();
   markDirty();
 }
 
@@ -1186,6 +1193,10 @@ nvTitle.addEventListener('dblclick', () => {
   document.execCommand('selectAll', false, null);
 });
 nvTitle.addEventListener('blur', commitNovelTitle);
+// A press on a breadcrumb part while the title is being edited must not commit it right then: the
+// new title relabels the novel part and shifts the other parts out from under the pointer, so the
+// click would be lost. The part's click handler commits it instead.
+$('#breadcrumb').addEventListener('mousedown', e => { if (document.activeElement === nvTitle && e.target.closest('.bc-part')) e.preventDefault(); });
 nvTitle.addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); nvTitle.blur(); }
 });
@@ -1637,6 +1648,7 @@ function setFocus(on) {
   exit.classList.toggle('hidden', !on);
   exit.classList.remove('peek');
   if (on && !corkboardOpen) (mdMode ? mdEditor : editor).focus();
+  else if (on && document.activeElement && document.activeElement.closest('#topbar, #leftPanel, #rightPanel')) document.activeElement.blur();
 }
 $('#btnFocus').addEventListener('click', () => setFocus(!focusMode));
 $('#exitFocus').addEventListener('click', () => setFocus(false));
@@ -1746,6 +1758,7 @@ $('#modalCancel').addEventListener('click', () => {
   $('#modalOverlay').classList.add('hidden');
   modalCb = null;
 });
+$('#modalOverlay').addEventListener('mousedown', e => { if (e.target === e.currentTarget) e.preventDefault(); });   // keep focus in the field
 $('#modalInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') $('#modalOk').click();
 });

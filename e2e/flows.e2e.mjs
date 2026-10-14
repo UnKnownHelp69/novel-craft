@@ -391,23 +391,38 @@ flow('chapters and scenes: add, rename, numbering, breadcrumb, saved order', asy
 });
 
 flow('renaming the novel in the top bar updates the breadcrumb', async page => {
-  await openFixture(page, novelOf([ch('c1', 'Глава 1', sc('s1', 'Сцена'))]));
-  await page.dblclick('#novelTitle');
-  await page.keyboard.press('Control+A');
-  await page.keyboard.type('Сага');
+  await openFixture(page, novelOf([ch('c1', 'Глава 1', sc('s1', 'Сцена')), ch('c2', 'Глава вторая', sc('s2', 'Начало'), sc('s3', 'Вторая'))]));
+  const rename = async title => {
+    await page.dblclick('#novelTitle');
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type(title);
+  };
+  await rename('Сага');
   await page.keyboard.press('Enter');
   await expectText(page, '#novelTitle', 'Сага');
   await eventually(() => breadcrumb(page), ['Сага', 'Глава 1', 'Сцена'], 'breadcrumb after novel rename');
 
-  // renamed again, and committed by the press on the breadcrumb's scene part: that click still lands
-  await page.dblclick('#novelTitle');
-  await page.keyboard.press('Control+A');
-  await page.keyboard.type('Эпопея');
-  await page.click('#breadcrumb .bc-scene');
+  // a rename committed by the press on another breadcrumb part: that click still lands, even
+  // though the new title is much longer (or shorter) and the parts after it move
+  await openSceneFromTree(page, 'Вторая');
+  const press = async sel => {
+    const b = await page.locator(sel).boundingBox();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await page.mouse.down();
+    await page.mouse.up();
+  };
+  await rename('Очень длинное название романа о драконах');
+  await press('#breadcrumb .bc-chapter');   // selects the chapter: its first scene opens
+  await eventually(() => activeScene(page), 'Начало', 'the chapter part was clicked');
+  assert.deepEqual(await breadcrumb(page), ['Очень длинное название романа о драконах', 'Глава вторая', 'Начало']);
+  await rename('X');
+  await press('#breadcrumb .bc-scene');
   await expectShown(page, '#modalOverlay');
   await expectText(page, '#modalTitle', 'Rename scene');
   await page.click('#modalCancel');
-  assert.deepEqual(await breadcrumb(page), ['Эпопея', 'Глава 1', 'Сцена']);
+  assert.deepEqual(await breadcrumb(page), ['X', 'Глава вторая', 'Начало']);
+  const { data } = await save(page);
+  assert.equal(data.title, 'X');
 });
 
 flow('double-clicking a chapter row renames the chapter', async page => {
@@ -457,6 +472,69 @@ flow('a chapter row: a click collapses it, a double-click renames it with the tr
   assert.equal(data.chapters[14].title, 'Эпилог');
   assert.equal(data.chapters[12].title, 'Предпоследняя');
   assert.deepEqual(data.chapters.map(c => c.collapsed), data.chapters.map((c, i) => i === 13));
+});
+
+flow('a chapter row: a press right after a click still drags; a double-click elsewhere renames nothing', async page => {
+  await openFixture(page, novelOf([ch('c1', 'Один', sc('a1', 'A1'), sc('a2', 'A2')), ch('c2', 'Два', sc('b1', 'B1')), ch('c3', 'Три', sc('c1s', 'C1'))]));
+  const center = async loc => { const b = await loc.boundingBox(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+  // click Один (it collapses), then at once press it again - a double-click to the OS - and drag it below Три
+  const from = await center(chapterRow(page, 'Один'));
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+  await page.mouse.down({ clickCount: 2 });
+  const tri = await chapterRow(page, 'Три').boundingBox();
+  await page.mouse.move(from.x, from.y + 8, { steps: 2 });
+  await page.mouse.move(tri.x + tri.width / 2, tri.y + tri.height - 2, { steps: 10 });
+  await page.mouse.up({ clickCount: 2 });
+  await eventually(() => treeOutline(page), [['Два', ['B1']], ['Три', ['C1']], ['Один', ['A1', 'A2']]], 'Один dragged below Три');
+  assert.equal(await isShown(page, '#modalOverlay'), false, 'a drag opens no rename prompt');
+  const collapsed = () => page.locator('#chapterList .tree-chapter.collapsed .tc-title').allTextContents();
+  assert.deepEqual(await collapsed(), ['Один'], 'the click collapsed Один, the drag moved it');
+
+  // click Два (it collapses), then double-click a context-menu item over the tree: that is not a
+  // double-click on Два
+  await chapterRow(page, 'Два').click();
+  await eventually(collapsed, ['Два', 'Один'], 'Два collapsed');
+  await sceneRow(page, 'C1').click({ button: 'right' });
+  await expectShown(page, '#ctxMenu');
+  const dup = await center(page.locator('#ctxMenu > button', { hasText: /^Duplicate$/ }));
+  await page.mouse.move(dup.x, dup.y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(120);
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.up({ clickCount: 2 });
+  await eventually(() => page.locator('#chapterList .tree-scene .ts-title', { hasText: 'C1 (copy)' }).count(), 1, 'C1 duplicated');
+  assert.equal(await isShown(page, '#modalOverlay'), false, 'no rename prompt for Два');
+  assert.ok((await collapsed()).includes('Два'), 'Два stays collapsed');   // (the second press acts on whatever row it lands on)
+
+  // likewise when the first press of the double-click was anywhere else outside the tree
+  await chapterRow(page, 'Два').click();   // expands Два, and is a pending chapter click again
+  await page.click('#editor');
+  const b1 = await center(sceneRow(page, 'B1'));
+  await page.mouse.move(b1.x, b1.y);
+  await page.mouse.down({ clickCount: 2 });
+  await page.mouse.up({ clickCount: 2 });
+  await page.waitForTimeout(150);
+  assert.equal(await isShown(page, '#modalOverlay'), false, 'a press outside the tree ends the pending chapter click');
+
+  // a triple-click renames: the third press keeps the caret in the prompt
+  const dva = await center(chapterRow(page, 'Два'));
+  await page.mouse.move(dva.x, dva.y);
+  for (const n of [1, 2, 3]) {   // ~70 ms apart: the third press comes after the prompt has taken focus
+    await page.mouse.down({ clickCount: n });
+    await page.mouse.up({ clickCount: n });
+    await page.waitForTimeout(70);
+  }
+  await expectShown(page, '#modalOverlay');
+  await expectText(page, '#modalTitle', 'Rename chapter');
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'modalInput');
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('Второй');
+  await page.keyboard.press('Enter');
+  await eventually(() => treeOutline(page).then(o => o.map(c => c[0])), ['Второй', 'Три', 'Один'], 'renamed by a triple-click');
 });
 
 flow('pointer drags reorder scenes and chapters in the tree', async page => {
@@ -1066,6 +1144,34 @@ flow('corkboard: cards, status badge, filter, sort, open a scene', async page =>
   const { data } = await save(page);
   assert.deepEqual(scenesOf(data).map(s => s.status), ['review', 'review', 'done', 'draft']);
   assert.deepEqual(outline(data), [['Глава 1', ['Альфа', 'Бета', 'Гамма']], ['Глава 2', ['Дельта']]], 'sorting the board does not reorder the novel');
+});
+
+flow('the corkboard follows chapter renames and moves made in the tree; focus mode over it', async page => {
+  await openFixture(page, novelOf([ch('c1', 'Один', sc('a1', 'A1'), sc('a2', 'A2')), ch('c2', 'Два', sc('b1', 'B1'))]));
+  await page.click('#btnCorkboard');
+  await expectShown(page, '#corkboard');
+  const board = () => page.evaluate(() => [...document.querySelectorAll('#corkGrid .cork-group')].map(g => [
+    g.querySelector('.cork-chap').firstChild.textContent.replace('📁', '').trim(),
+    [...g.querySelectorAll('.cork-card:not(.cork-ghost) .cc-title')].map(t => t.textContent)
+  ]));
+  await eventually(board, [['Один', ['A1', 'A2']], ['Два', ['B1']]], 'cards');
+  await chapterRow(page, 'Два').dblclick();
+  await answerPrompt(page, 'Второй', 'Rename chapter');
+  await eventually(board, [['Один', ['A1', 'A2']], ['Второй', ['B1']]], 'the board shows the renamed chapter');
+  await sceneRow(page, 'A2').click({ button: 'right' });
+  await expectShown(page, '#ctxMenu');
+  await page.locator('#ctxMenu .ctx-sub-head').hover();
+  await page.locator('#ctxMenu .ctx-sub-menu button', { hasText: 'Второй' }).click();
+  await eventually(board, [['Один', ['A1']], ['Второй', ['B1', 'A2']]], 'the board shows the moved scene');
+
+  // focus mode entered over the board leaves no hidden control focused: Enter does not leave it
+  await page.click('#btnFocus');
+  await eventually(() => layoutOf(page), { left: 0, right: 0, top: false }, 'focus mode on');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(200);
+  assert.deepEqual(await layoutOf(page), { left: 0, right: 0, top: false }, 'Enter left focus mode');
+  await page.keyboard.press('Control+Shift+F');
+  await eventually(() => layoutOf(page), { left: 250, right: 300, top: true }, 'focus mode off');
 });
 
 flow('characters, locations and races: add, edit, delete', async page => {
