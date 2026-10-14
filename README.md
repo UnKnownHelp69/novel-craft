@@ -1,116 +1,111 @@
 # NovelCraft
 
-A distraction‑free desktop **novel‑writing studio** built with **Tauri v2** (Rust backend) and **vanilla HTML/CSS/JS** (no frameworks). Compiles to a single native binary for Windows, macOS and Linux.
+A desktop novel-writing app for Windows, macOS and Linux, built with **Tauri v2** (Rust
+backend) and plain HTML/CSS/JS (no framework, no bundler). One `.novel` file holds one novel.
 
 [![CI](https://github.com/UnKnownHelp69/novel-craft/actions/workflows/ci.yml/badge.svg)](https://github.com/UnKnownHelp69/novel-craft/actions/workflows/ci.yml)
-![theme](https://img.shields.io/badge/theme-dark%20amber-c9a96e)
 ![built with AI](https://img.shields.io/badge/built%20with-AI%20agent-8a7549)
 
-> 🤖 **Built with an AI agent.** This project was developed collaboratively with an AI coding agent (Claude Code / Claude Opus). See [CLAUDE.md](CLAUDE.md) for the architecture notes used during development.
+Built collaboratively with an AI coding agent (Claude Code / Claude Opus). Architecture notes
+and the invariants contributors must not break are in [CLAUDE.md](CLAUDE.md).
 
 ## Features
 
-- **Warm dark theme** (`#1a1a1f` / panels `#22222b` / cream text `#e8e0d5` / amber accent `#c9a96e`), thin themed scrollbars.
-- **Hybrid editor** — WYSIWYG *Visual Mode* (`contenteditable` + `execCommand`) with a toggleable raw **Markdown Mode**. Bold / Italic / H1–H3 / per‑selection font, live active‑state highlighting on the toolbar.
-- **Global font controls** — size slider (14–24 px) and default document font (Georgia, Lora, Merriweather, Inter, Roboto, Arial).
-- **Scenes & chapter tree** (left) — chapters are collapsible folders containing **scenes** (the writing unit the editor edits). 🎬 scenes show live word counts and a status dot (draft / review / done). Add, rename, duplicate, delete, **drag‑and‑drop** to reorder within a chapter, move between chapters, or reorder chapters; right‑click for a context menu (incl. *Move to Chapter*). Breadcrumb navigation (Novel › Chapter › Scene) and a per‑scene metadata bar (POV character, location, time of day, status).
-- **Corkboard view** — toggle the tree into a Scrivener‑style board of draggable scene cards grouped by chapter, with status badges, POV/location/time, zoom, status/POV filters, and sorting. Drag cards to reorder or move between chapters; click to open a scene; click a badge to cycle its status.
-- **Character relationship graph** (`Ctrl+G`) — an interactive HTML‑canvas network of characters (nodes) and relationships (edges). Drag nodes, pan/zoom, colour‑coded edge types with thickness by strength and style by status (active/past/secret/one‑sided), click a node to spotlight its connections, edit relationships in a side panel, auto‑arrange (force‑directed) / circular / manual layouts, filters, a legend, and **Export as PNG**. Positions persist in the `.novel` file.
-- **Interactive world map** — upload a background map image (PNG/JPG/WebP/SVG, stored inline in the `.novel`) and drop **location pins** (drag to move, colour‑coded by type, click for a details card, double‑click to edit). Draw **travel routes** between locations with names, travel time, distance, terrain, characters and colour. Toggleable **layers** (background / locations / routes / labels) plus custom **drawing layers** (pen / line / rectangle / circle / text / eraser, opacity). Pan/zoom, Fit to Screen, and **Export as PNG**.
-- **Compile Novel** — assemble all scenes into one document: drag to reorder, add **part dividers** and **section breaks**, rename items for the compilation only, live **preview**, and formatting/title‑page/**table‑of‑contents** settings with saveable presets. Export to **PDF** (print), **EPUB**, **HTML**, **TXT** and **DOCX**.
-- **Worldbuilding panels** (right accordion) — Characters, Locations, Races/Peoples with full editable field sets, plus a **Counters** section (chapter/total words, chars with & without spaces, configurable word‑goal progress bar).
-- **Margin notes** — attach colour‑coded comments to any text selection (right‑click ▸ *Add Note* or `Ctrl+Shift+M`). Notes appear as dots in the editor's right margin with hover tooltips and an expandable card (resolve / edit / delete), underline the annotated text via the CSS Custom Highlight API, and are tracked by character offset so they survive edits. A **Notes** panel filters by type and resolved state; five default types (Исправить / Проверить факт / Развить мысль / Перенести / Идея) plus user‑defined **custom types** (name, colour, emoji) managed in **Settings**. Export all notes to TXT / Markdown.
-- **Focus Mode** (`Ctrl+Shift+F`) — hides chrome, centers a 720 px column, hover‑top / `Esc` to exit.
-- **`.novel` JSON project format**, native open/save dialogs, TXT / HTML / Markdown export.
-- **Auto‑save & crash recovery** — `localStorage` backup every 10 s, backend working‑file auto‑save every 30 s, "Saving…/Saved" indicator, unsaved‑changes prompt on close, last‑file auto‑load on launch.
-- **Native menu bar** (File / Edit / View / Help) and window state (min size 1200×750, remembered position/size).
-- **Full Cyrillic / Unicode support**, optional offline‑bundled Google Fonts.
+- **Chapters and scenes.** Chapters are folders; the scene is what the editor edits. Each scene
+  has a status (draft / review / done), POV character, location and time of day. Reorder
+  scenes and chapters by dragging; right-click for rename, duplicate, delete and *Move to Chapter*.
+  Deleting is immediate: **Undo** is in the toast that appears (for 8 seconds, latest deletion only).
+- **Editor.** Visual (WYSIWYG) mode and a raw Markdown mode; headings, bold/italic,
+  per-selection font. Pasted HTML (from Word, the web) is reduced to the formatting the app
+  supports.
+- **Corkboard** — the scenes as cards grouped by chapter, with filters, sorting and drag-to-reorder.
+- **Character graph** (`Ctrl/Cmd+G`) — relationships as a network; node positions are saved in
+  the `.novel`. Exports PNG.
+- **World map** — a background image with location pins, routes and drawing layers. Exports PNG.
+  The image is stored inline (as a data URL) in the `.novel`, so it grows the file by roughly
+  its own size.
+- **Margin notes** (`Ctrl/Cmd+Shift+M` on a selection) — typed, colour-coded comments anchored by
+  character offset so they survive edits. Five built-in types plus custom ones (Settings).
+  Exportable to TXT / Markdown.
+- **Characters, locations, races** panels, word/character counters and a word goal.
+- **Focus mode** (`Ctrl/Cmd+Shift+F`, `Esc` to leave) and an optional typewriter mode (Settings).
+- **Compile Novel** — order scenes, add part dividers and section breaks, title page and table of
+  contents, presets, then export **PDF, EPUB, DOCX, HTML or TXT**. All of these are generated by
+  the app itself, without external tools. The PDF always uses the bundled IBM Plex Mono (the only
+  embedded font, chosen because it covers Cyrillic); characters it lacks come out blank and are
+  listed in a warning. Chapter headings and the TOC title follow the novel's export language
+  (English or Russian, auto-detected unless set in the Compile settings).
+- **Quick exports** of the whole novel as TXT, HTML or Markdown (top-bar *Export* menu).
+- **Full Unicode support**, Cyrillic included — in word counts, shortcuts and every export format.
 
-## Project structure
+## Where your data lives
 
-```
-redactor-for-novels/
-├─ package.json                 # npm scripts (dev/build/icons/fonts) + Tauri CLI
-├─ assets/
-│  └─ app-icon.png              # source icon (regen: node scripts/make-icon.mjs)
-├─ scripts/
-│  ├─ make-icon.mjs             # generates the source PNG (no deps)
-│  └─ fetch-fonts.mjs           # downloads woff2 fonts for offline use
-├─ src/                         # ← frontend (frontendDist)
-│  ├─ index.html
-│  ├─ styles.css
-│  ├─ app.js                    # all app logic
-│  └─ fonts/
-│     └─ fonts.css              # @font-face (local, with system fallbacks)
-└─ src-tauri/                   # ← Rust backend
-   ├─ Cargo.toml
-   ├─ build.rs
-   ├─ tauri.conf.json
-   ├─ capabilities/default.json
-   ├─ icons/                    # generated by `npm run icons`
-   └─ src/
-      ├─ main.rs
-      └─ lib.rs                 # commands, native menu, file I/O, autosave
-```
+The desktop app keeps everything outside the `.novel` file in two per-user directories named
+after the app identifier `com.novelcraft.desktop`:
 
-## Prerequisites
+| | App config dir | App local data dir |
+|---|---|---|
+| Linux | `~/.config/com.novelcraft.desktop/` | `~/.local/share/com.novelcraft.desktop/` |
+| macOS | `~/Library/Application Support/com.novelcraft.desktop/` | same as config |
+| Windows | `%APPDATA%\com.novelcraft.desktop\` | `%LOCALAPPDATA%\com.novelcraft.desktop\` |
 
-- **Rust** (stable) + Cargo — https://rustup.rs
-- **Node.js 18+** (only for the Tauri CLI and the optional font/icon scripts)
-- Platform Webview / build deps per the Tauri guide:
-  - **Windows:** WebView2 runtime (preinstalled on Win 11) + MSVC build tools
-  - **macOS:** Xcode command‑line tools
-  - **Linux:** `webkit2gtk`, `libgtk-3-dev`, `librsvg2-dev`, `patchelf`, `build-essential` (see Tauri docs)
+- **The novel itself** is the `.novel` file you chose. While there are unsaved changes, the app
+  **writes them to that file every 30 seconds** on its own; `Ctrl/Cmd+S` just does it now.
+- **Crash recovery**: every 10 seconds while there are unsaved changes, a copy goes to
+  `working.novel` in the config dir. If one is left over at the next launch (after a crash, say),
+  the app offers to restore it. If the file it came from can no longer be written (see *Security*
+  below), it is restored as an unsaved novel and Save asks where to put it. The copy is deleted
+  once the novel is saved, or when you close and choose not to save.
+- **Backups**: each time a save overwrites a `.novel`, the previous version is first copied to
+  `backups/<hash of the file's path>/<unix seconds>.novel` in the local data dir — at most one
+  copy per 10 minutes per file, none if an identical copy exists. The newest 20 are kept, plus the
+  newest of each day for 30 days. Restore with **File ▸ Restore from Backup…** (or the button in
+  Settings); the current file is backed up first, so a restore can itself be undone. Backups are
+  keyed by path: after moving or renaming a `.novel` its old backups are no longer listed (they
+  are still on disk; `source.txt` in each folder names the original file).
+- **Recent files** (the last 5) in `recent.json`, the file to reopen at launch in
+  `last_file.txt`, window size and position in `.window-state.json` — all in the config dir.
+- **UI preferences** (native title bar, typewriter mode, note display) are stored in the webview's
+  local storage, not in the `.novel`. Per-novel settings (font, word goal, note types, compile
+  presets, export language) are in the `.novel`.
 
-## Setup
+In browser mode (see *Development*) there are no backups or recent files, the recovery copy goes to
+the browser's `localStorage` (a novel with a large map image can exceed its quota — the app then
+says so), and Save downloads the file.
 
-```bash
-npm install                 # installs @tauri-apps/cli
-npm run icons               # (already run) regenerate icons from assets/app-icon.png
-npm run fonts               # OPTIONAL: download woff2 fonts for full offline use
-```
+## Keyboard shortcuts
 
-Fonts are optional — if the `.woff2` files are absent the app falls back to locally installed / system fonts, so it still works entirely offline.
+`Ctrl` on Windows/Linux, `Cmd` on macOS.
 
-## Run in development
+| Action | Shortcut |
+|--------|----------|
+| Save / Save As | `Ctrl+S` / `Ctrl+Shift+S` |
+| Open | `Ctrl+O` |
+| Bold / Italic | `Ctrl+B` / `Ctrl+I` |
+| Undo / Redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
+| Focus mode | `Ctrl+Shift+F` (`Esc` to leave) |
+| Add margin note | `Ctrl+Shift+M` |
+| Previous / next note (while a note card is open) | `Ctrl+↑` / `Ctrl+↓` |
+| Character graph | `Ctrl+G` |
+| Toggle left / right panel | `Ctrl+\` / `Ctrl+/` |
+| Close the open overlay (graph, map, corkboard, compile, note card) | `Esc` |
 
-```bash
-npm run dev        # = tauri dev  (hot-reloads the static frontend)
-```
+Shortcuts are matched by the **physical key** when the layout produces a non-Latin character, so
+they work on Cyrillic and other non-Latin layouts (`Ctrl+S` is the same key as `Ctrl+Ы`). Latin
+layouts such as AZERTY or Dvorak keep their own letters, and `AltGr` combinations are never treated
+as shortcuts, so characters like Polish `ś` still type.
 
-## Build a native binary (single command)
+## The `.novel` format
 
-```bash
-npm run build      # = tauri build
-```
-
-Outputs land in `src-tauri/target/release/`:
-
-| Platform | Executable | Installers (`.../bundle/`) |
-|----------|------------|-----------------------------|
-| Windows  | `novelcraft.exe` | `msi/`, `nsis/` (`.msi`, `-setup.exe`) |
-| macOS    | `NovelCraft.app` | `dmg/` (`.dmg`) |
-| Linux    | `novelcraft` (rename to `.bin` if desired) | `deb/`, `appimage/`, `rpm/` |
-
-### Cross‑platform note
-Tauri builds **natively per host OS** (it does not cross‑compile GUI binaries out of the box). To produce all three, run `npm run build` on each of Windows, macOS and Linux (e.g. via CI matrix). Target a single current platform with:
-
-```bash
-npm run build -- --bundles app        # macOS .app only
-npm run build -- --bundles nsis       # Windows installer only
-npm run build -- --bundles appimage   # Linux AppImage only
-```
-
-## `.novel` file format
-
-Plain JSON. **One `.novel` file = one novel:**
+Plain JSON, one novel per file:
 
 ```jsonc
 {
   "version": "1.0",
   "title": "My Novel",
   "settings": {
-    "fontSize": 18, "defaultFont": "Georgia, serif", "wordGoal": 80000, "customNoteTypes": [],
+    "fontSize": 18, "defaultFont": "Georgia, serif", "wordGoal": 80000,
+    "customNoteTypes": [], "noteTypeColors": {}, "language": null,   // null = auto-detect
     "worldMap": { "backgroundImage": "", "locations": {}, "routes": [], "layers": [], "baseLayers": {} },
     "compilationPresets": []
   },
@@ -122,29 +117,125 @@ Plain JSON. **One `.novel` file = one novel:**
       "status": "draft", "notes": [], "createdAt": "…", "modifiedAt": "…"
     } ]
   } ],
-  "characters": [ /* …, relationshipNotes, notes, relationships:[{targetCharacterId,type,subtype,strength,status,…}], graphPosition:{x,y} */ ],
+  "characters": [ /* …, relationships: [{ targetCharacterId, type, strength, status, … }], graphPosition: { x, y } */ ],
   "locations":  [ /* name, type, description, history, atmosphere, notes */ ],
   "races":      [ /* name, description, appearance, culture, history, traits */ ]
 }
 ```
 
-Each **scene** stores both `content` (HTML) and `markdownContent`. The current file path is shown next to the novel title in the top bar (or "• Unsaved" for a new novel). The last 5 opened files are kept in **Recent** (top bar) and the native **File ▸ Open Recent** menu.
+Scenes store their text twice: `content` (HTML, what the visual editor and the exports use) and
+`markdownContent`.
 
-**Backward compatible:** older files are migrated on open — a multi-novel *library* file (top-level `novels` array) offers to split into one‑novel files, and a pre‑scenes chapter (with its own `content`) is wrapped into a single default "Scene 1". Characters' former free‑text `relationships` field is preserved as `relationshipNotes`.
+**Older files open in newer builds** (`migrateNovel` in `src/app.js`). A pre-scenes chapter with its
+own `content` becomes a chapter with one scene; a character's old free-text `relationships` field is
+kept as `relationshipNotes`. A multi-novel *library* file (top-level `novels` array) opens its active
+novel **as unsaved**, so it can't be overwritten with a single novel, and offers to split the
+library into one file per novel.
 
-## Keyboard shortcuts
+**Security.** A `.novel` from someone else is treated as untrusted: scene HTML is sanitized against
+an allowlist on load, the webview runs under a strict CSP, and the backend only reads or writes
+paths you picked in a file dialog (or opened in an earlier session, via the recent list / last
+file). The details, which contributors must preserve, are in [CLAUDE.md](CLAUDE.md#security-invariants-dont-regress-these).
 
-| Action | Shortcut |
-|--------|----------|
-| Save | `Ctrl/Cmd+S` |
-| Save As | `Ctrl/Cmd+Shift+S` |
-| Open | `Ctrl/Cmd+O` |
-| Bold / Italic | `Ctrl/Cmd+B` / `Ctrl/Cmd+I` |
-| Focus Mode | `Ctrl/Cmd+Shift+F` (`Esc` to exit) |
-| Add margin note | `Ctrl/Cmd+Shift+M` |
-| Character graph | `Ctrl/Cmd+G` |
-| Toggle chapters / tools | `Ctrl/Cmd+\` / `Ctrl/Cmd+/` |
-| Undo / Redo | `Ctrl/Cmd+Z` / `Ctrl/Cmd+Shift+Z` |
+## Building from source
+
+### Prerequisites
+
+- **Rust** stable (via <https://rustup.rs>).
+- **Node.js 20.11 or newer.** The Tauri CLI alone runs on Node 18, but the test suites use
+  `import.meta.dirname`. CI uses the current LTS.
+- The system packages Tauri v2 needs ([Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)):
+  - **Linux (Debian/Ubuntu)** — exactly what CI installs:
+    ```bash
+    sudo apt-get install -y build-essential libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+    ```
+    Tauri v2 needs **webkit2gtk 4.1** (Ubuntu 22.04 / Debian 12 or newer); the 4.0 package of older
+    distributions does not work. These are required even for `cargo check`, because the
+    `webkit2gtk-sys` build script probes them with `pkg-config`.
+  - **macOS** — Xcode Command Line Tools (`xcode-select --install`).
+  - **Windows** — Microsoft C++ Build Tools ("Desktop development with C++") and the WebView2
+    runtime (preinstalled on Windows 11). The MSI and NSIS installer tools are downloaded by the
+    Tauri CLI on first build.
+
+### Build
+
+```bash
+npm install
+npm run build        # = tauri build: release binary + installers
+```
+
+The bare executable is `src-tauri/target/release/novelcraft` (`.exe` on Windows); the installers
+are under `src-tauri/target/release/bundle/`: `msi/` and `nsis/` on Windows, `macos/` (the `.app`)
+and `dmg/` on macOS, `deb/`, `rpm/` and `appimage/` on Linux. Tauri cannot cross-compile desktop
+bundles, so each platform has to be built on that platform — the [release workflow](RELEASING.md)
+does this on GitHub's runners. To build only one bundle type:
+`npm run build -- --bundles appimage` (or `deb`, `nsis`, `msi`, `app`, `dmg`, …).
+
+Builds are not code-signed; see [RELEASING.md](RELEASING.md#known-limitations-not-bugs).
+
+**Optional fonts.** The editor offers Lora, Merriweather, Inter and Roboto (and the Markdown mode
+uses Roboto Mono). Each is taken from the system if installed, otherwise from
+`src/fonts/<name>.woff2`, otherwise a generic fallback is shown. Those `.woff2` files are not in the
+repository (they are git-ignored); `npm run fonts` is meant to download them before a build, but
+currently saves nothing — see the note in [`scripts/fetch-fonts.mjs`](scripts/fetch-fonts.mjs).
+Release builds therefore ship without them. (The PDF fonts in `src/fonts/pdf/` are committed and
+always bundled.)
+
+**Icons.** `src-tauri/icons/` is generated from `assets/app-icon.png` by `npm run icons`, and
+`assets/app-icon.png` itself is drawn by `node scripts/make-icon.mjs`. Both outputs are committed;
+rerun them only when changing the icon.
+
+## Development
+
+```bash
+npm run dev          # = tauri dev: the app with the frontend in src/ served as-is and reloaded on change
+```
+
+There is no frontend build step: `src/` is what the app loads. For UI work without Rust you can also
+run the frontend in a browser — the app detects that Tauri is missing and falls back to file inputs
+and downloads. Serve it over http (e.g. `python3 -m http.server -d src`) rather than opening
+`src/index.html` from disk: under `file://` the browser refuses the `fetch()` that loads the PDF
+fonts, so PDF export fails.
+
+### Tests
+
+| Command | What it runs | Needs |
+|---|---|---|
+| `npm test` | `node:test` unit tests in `test/` (pure logic lifted out of `src/app.js`) | Node only |
+| `npm run test:e2e` | `e2e/browser.e2e.mjs` and `e2e/flows.e2e.mjs`: the real `src/` in Chromium via `playwright-core`, under the desktop CSP | a Chromium (below) |
+| `npm run test:desktop` | `e2e/desktop.e2e.mjs`: the built app over WebDriver | Linux, a debug build, `tauri-driver`, `WebKitWebDriver`, a display |
+| `cd src-tauri && cargo test` | backend unit tests (file-access allowlist, atomic writes, backups) | Rust (+ the system packages above on Linux) |
+
+**Chromium for `test:e2e`.** `playwright-core` never downloads a browser. The harness tries, in order:
+`$CHROME_PATH`; Playwright's own Chromium (from `$PLAYWRIGHT_BROWSERS_PATH`, or the default cache
+after `npx playwright-core install chromium`); an installed Google Chrome. A Playwright Chromium only
+works with the `playwright-core` version it was made for, which is why that dependency is pinned to
+an exact version in `package.json`. `flows.e2e.mjs` switches to a UTF-8 locale by itself if yours
+isn't one (Chromium on Linux otherwise saves a download named `Роман.novel` as `download`). A test
+there marked `{ todo: 'bug: …' }` documents a known bug without failing the run; drop the `todo`
+when the bug is fixed.
+
+**Desktop suite (Linux only).**
+
+```bash
+sudo apt-get install -y webkit2gtk-driver xvfb xdotool   # WebKitWebDriver, a virtual display, dialog driving
+cargo install tauri-driver --locked
+npx tauri build --debug --no-bundle                      # the suite runs src-tauri/target/debug/novelcraft
+xvfb-run -a npm run test:desktop                          # or plain `npm run test:desktop` inside a desktop session
+```
+
+If the binary, `tauri-driver` or a `DISPLAY` is missing, the whole suite is **skipped, not failed** —
+check the summary for skipped tests. The two native file-dialog tests additionally need `xdotool`.
+`NOVELCRAFT_BIN` points the suite at another binary. It runs the app with temporary
+`XDG_CONFIG_HOME`/`XDG_DATA_HOME`, so your own recent files and backups are not touched.
+
+**CI** ([`ci.yml`](.github/workflows/ci.yml)) runs on every pull request to `main`: syntax check,
+`npm test`, `npm run test:e2e` and `cargo check` first (the required *Quick check* job), then
+`cargo test` plus the desktop suite, and a release build on all three platforms.
+
+## Releasing
+
+See [RELEASING.md](RELEASING.md).
 
 ## License
 

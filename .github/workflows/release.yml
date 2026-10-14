@@ -1,17 +1,12 @@
 name: Release
 
 # Builds installers for all three desktop platforms and attaches them to a DRAFT
-# GitHub Release. Separate from ci.yml on purpose: ci.yml gates pull requests, this
-# ships artifacts. Nothing here is ever published automatically — a human reviews the
-# draft and presses publish.
+# GitHub Release; a human reviews the draft and publishes it. No tests run here (that is
+# ci.yml, on pull requests). The checklist, including why a version must be triggered by
+# a tag push OR "Run workflow" but never both, is RELEASING.md.
 #
-# Phase 1: unsigned builds. No code signing, no notarization, no auto-updater.
-# Windows will show a SmartScreen warning and macOS a Gatekeeper warning until
-# signing certificates are in place; that is expected and tracked separately.
-#
-# To cut a release: bump `version` in src-tauri/tauri.conf.json (and package.json),
-# commit that, then `git tag vX.Y.Z && git push origin vX.Y.Z` — or use the
-# "Run workflow" button on the Actions tab.
+# Unsigned: no code signing, notarization or updater, so Windows SmartScreen and macOS
+# Gatekeeper warn on first launch until signing is set up.
 on:
   push:
     tags: ['v*.*.*']
@@ -23,6 +18,8 @@ on:
         type: string
 
 # Never cancel a release mid-flight: a half-uploaded draft is worse than a slow one.
+# The group is per ref, so a tag push (refs/tags/vX.Y.Z) and a manual run (refs/heads/main)
+# for the same version do not queue behind each other — they run side by side.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false

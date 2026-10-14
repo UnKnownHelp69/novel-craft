@@ -22,8 +22,11 @@ const TYPES = {
   '.ttf': 'font/ttf', '.woff2': 'font/woff2', '.png': 'image/png', '.txt': 'text/plain; charset=utf-8'
 };
 
-/* Serve src/ over http (Playwright cannot attach headers to file:// pages), optionally with
-   the desktop CSP header. Resolves to { url, close }. */
+/* Serve src/ over http on a free loopback port, optionally with the desktop CSP header.
+   Not file://, for two reasons: the policy is sent as a response header, and Playwright
+   cannot attach headers to file:// pages; and Chromium refuses fetch() of file:// URLs,
+   which the PDF export uses to load src/fonts/pdf/*.ttf.
+   Resolves to { url, close }. */
 export async function serveApp({ csp = false } = {}) {
   const policy = csp ? desktopCsp() : null;
   const server = createServer(async (req, res) => {
@@ -44,8 +47,11 @@ export async function serveApp({ csp = false } = {}) {
   return { url: `http://127.0.0.1:${port}/index.html`, close: () => new Promise(r => server.close(r)) };
 }
 
-/* A Chromium to drive: $CHROME_PATH if set, else Playwright's own build (when
-   PLAYWRIGHT_BROWSERS_PATH has one), else the system Google Chrome (GitHub runners). */
+/* A Chromium to drive; playwright-core never downloads one. Tried in order: $CHROME_PATH;
+   Playwright's own build (in $PLAYWRIGHT_BROWSERS_PATH or the default cache) — it is looked
+   up by the revision this playwright-core expects, which is why package.json pins
+   playwright-core to an exact version; the installed Google Chrome (what GitHub runners
+   have). */
 export async function launchChromium() {
   const { chromium } = await import('playwright-core');
   const attempts = [];
@@ -65,7 +71,8 @@ export async function writeTempNovel(name, novel) {
   return file;
 }
 
-/* Open a .novel through the app's own browser-mode Open flow (the file input it creates). */
+/* Open a .novel through the app's own browser-mode Open flow: #esOpen creates a hidden
+   <input type=file>, which Playwright answers through the filechooser event. */
 export async function openNovel(page, file) {
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#esOpen')]);
   await chooser.setFiles(file);

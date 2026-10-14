@@ -1,8 +1,8 @@
 name: CI
 
-# Build-verification gate for pull requests into main: the unit tests (node:test), the
-# browser e2e suite, the Rust type-check, a desktop e2e run of the real app on Linux, and a
-# release-bundle build on all three targets.
+# Gate for pull requests into main. quick-check (unit tests, browser e2e suites, cargo check)
+# runs first; desktop-e2e and build-matrix only start once it passes. Nothing here signs or
+# publishes anything — releases are release.yml. Tag pushes do not run this workflow.
 on:
   pull_request:
     branches: [main]
@@ -53,8 +53,8 @@ jobs:
       - name: Run tests
         run: npm test
 
-      # Chromium for the browser suite: the runner's preinstalled Google Chrome
-      # (playwright-core downloads no browsers).
+      # Chromium for the browser suites: the runner's preinstalled Google Chrome
+      # (playwright-core downloads no browsers; see launchChromium in e2e/support.mjs).
       - name: Run browser e2e tests
         run: npm run test:e2e
 
@@ -64,6 +64,12 @@ jobs:
 
   # The real Tauri app (WebKitGTK + Rust backend) driven over WebDriver: checks what only
   # the desktop build has — the CSP, the IPC, and the backend's file-access allowlist.
+  # webkit2gtk-driver provides WebKitWebDriver, which tauri-driver launches; xvfb-run gives
+  # the app a display; xdotool drives the native GTK file dialogs, which WebDriver cannot
+  # reach (each dialog test starts its own app process — startApp in e2e/desktop.e2e.mjs
+  # explains why). A debug build without bundling is enough (the suite runs target/debug/novelcraft).
+  # Beware: the suite *skips* rather than fails when the binary, tauri-driver or DISPLAY is
+  # missing, so a broken setup step here shows up as skipped tests in a green job.
   desktop-e2e:
     name: Desktop e2e (ubuntu-22.04)
     needs: quick-check
@@ -143,7 +149,7 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # `npm run build` === `tauri build`. Unsigned, no publishing — this only
-      # confirms the release bundle compiles.
+      # Unsigned, nothing uploaded: this only proves the release bundles still build on
+      # every platform before a PR merges, so release.yml doesn't find out first.
       - name: Build release bundle
         run: npm run build
