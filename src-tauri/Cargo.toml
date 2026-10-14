@@ -1,6 +1,6 @@
 [package]
 name = "novelcraft"
-version = "1.0.0"
+version = "1.1.0"
 description = "NovelCraft — a distraction-free novel writing studio"
 authors = ["NovelCraft"]
 edition = "2021"
