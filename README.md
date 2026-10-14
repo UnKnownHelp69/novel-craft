@@ -239,4 +239,15 @@ See [RELEASING.md](RELEASING.md).
 
 ## License
 
-Released under the [MIT License](LICENSE). © 2026 UnKnownHelp69.
+[MIT License with the Commons Clause](LICENSE). © 2026 UnKnownHelp69.
+
+- **Free to use** — personally or professionally — and free to copy, modify and share, as long
+  as nothing is charged for it.
+- **Not for sale:** you may not sell NovelCraft, a modified version of it, or a paid service or
+  support whose value comes mainly from it. Copies and modified versions must keep the license,
+  Commons Clause included.
+- **Your writing is yours.** The license covers the program only. What you write and export with
+  it — texts, books, PDF/EPUB/DOCX files — belongs to you, and you may publish and sell it freely.
+
+Because of the selling restriction this is a *source-available* license, not an OSI open-source
+one. Versions published before this change remain available under the plain MIT License.
