@@ -110,6 +110,10 @@ characters[], locations[], races[]`). In `app.js`:
 Reordering uses **pointer events** (mousedown/mousemove/mouseup), NOT the HTML5 Drag
 API — the latter is unreliable in the WebView2/Chromium webview with the global
 `user-select: none`. A 5px movement threshold distinguishes click (select) from drag.
+A click on a chapter row collapses it **in place** (`setChapterCollapsed`, no re-render — a
+re-render detaches the row under the pointer and the double-click is lost). The second press
+of a double-click renames the chapter that was clicked (`chapterClick`), not whatever row is
+under the pointer by then, unless that press turns into a drag.
 
 ## Conventions
 
