@@ -149,6 +149,15 @@ backend. Three layers keep a crafted file from running code:
   `pick_save` in this session or from the recent list / last file (`GrantedPaths`). New
   file-taking commands must call `check_path` too.
 
+## Commits and pull requests
+
+- **Never put a link to the agent's session or chat** (`Claude-Session: https://claude.ai/code/session_…`
+  or any other conversation URL) in a commit message, PR title or body, or a review comment.
+- **`Co-Authored-By: Claude …` appears once per PR, at the very end.** Only the PR's last
+  commit carries the trailer; earlier commits don't. PRs are squash-merged, and GitHub joins
+  every commit message into the squash commit, so a trailer on each commit would repeat it there.
+  Don't add it to the PR body.
+
 ## Verifying changes
 
 Prefer `node --check` + `npm test` + `cargo check` for fast feedback; run `npm run build`
