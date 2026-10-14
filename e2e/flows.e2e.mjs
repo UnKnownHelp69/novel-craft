@@ -484,9 +484,10 @@ flow('a chapter row: a press right after a click still drags; a double-click els
   await page.mouse.up();
   await page.waitForTimeout(150);
   await page.mouse.down({ clickCount: 2 });
-  const tri = await chapterRow(page, 'Три').boundingBox();
+  // the drop goes after a chapter in the lower half of its whole block (row + scenes)
+  const tri = await page.locator('#chapterList .tree-chapter:has(> .tc-row .tc-title:text-is("Три"))').boundingBox();
   await page.mouse.move(from.x, from.y + 8, { steps: 2 });
-  await page.mouse.move(tri.x + tri.width / 2, tri.y + tri.height - 2, { steps: 10 });
+  await page.mouse.move(tri.x + tri.width / 2, tri.y + tri.height - 4, { steps: 10 });
   await page.mouse.up({ clickCount: 2 });
   await eventually(() => treeOutline(page), [['Два', ['B1']], ['Три', ['C1']], ['Один', ['A1', 'A2']]], 'Один dragged below Три');
   assert.equal(await isShown(page, '#modalOverlay'), false, 'a drag opens no rename prompt');
