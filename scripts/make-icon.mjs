@@ -1,5 +1,7 @@
-/* Generates assets/app-icon.png (1024x1024) with no dependencies, using zlib.
-   Run:  node scripts/make-icon.mjs   then   npm run icons */
+/* Draws assets/app-icon.png (1024x1024 RGBA: an amber rounded square with an "N" in the
+   theme colours) and encodes the PNG by hand with node:zlib, so no image library is
+   needed. The output is deterministic and committed; rerun only to change the design,
+   then `npm run icons` to regenerate src-tauri/icons/ from it. */
 import { writeFile, mkdir } from 'node:fs/promises';
 import { deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -44,7 +46,8 @@ stroke(360, 700, 360, 340, 34);           // left vertical
 stroke(360, 340, 664, 700, 34);           // diagonal
 stroke(664, 700, 664, 340, 34);           // right vertical
 
-// PNG encode
+// PNG encoding: signature, IHDR, a single zlib-compressed IDAT (each scanline prefixed
+// with filter byte 0 = none), IEND; every chunk ends with a CRC-32 of its type + data.
 function chunk(type, data) {
   const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
   const t = Buffer.from(type, 'ascii');

@@ -8,7 +8,8 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
-/// Resolve (and create) the app config directory.
+/// The app config directory, created on first use. Holds `last_file.txt`, `recent.json` and
+/// the `working.novel` autosave. Falls back to the current directory if the OS reports none.
 fn config_dir(app: &tauri::AppHandle) -> PathBuf {
     let dir = app
         .path()
@@ -61,6 +62,8 @@ fn last_file(app: &tauri::AppHandle) -> Option<String> {
 #[derive(Default)]
 struct GrantedPaths(Mutex<HashSet<PathBuf>>);
 
+// The lock ignores poisoning: a panic elsewhere must not turn every later file command into
+// a panic too, and a set of paths has no invariant a half-finished insert could break.
 impl GrantedPaths {
     fn grant(&self, path: &Path) {
         self.0
@@ -80,6 +83,9 @@ impl GrantedPaths {
 /// Comparison key for a path: the canonical path, or for a file that does not exist yet (a
 /// Save-As target) its canonical parent joined with the file name. `..` segments and
 /// symlinked directories therefore cannot dress up a different file as a granted one.
+///
+/// Only ever compare keys with keys: on Windows `canonicalize` yields a `\\?\` verbatim path
+/// that never equals the plain spelling the dialog returned.
 fn path_key(path: &Path) -> PathBuf {
     if let Ok(p) = path.canonicalize() {
         return p;
@@ -105,6 +111,10 @@ fn is_allowed(granted: &GrantedPaths, key: &Path, remembered: &[String]) -> bool
     granted.contains(key) || remembered.iter().any(|p| path_key(Path::new(p)) == key)
 }
 
+/// The gate every command that takes a path from the webview must pass through. Accepts a
+/// path granted in this session or remembered from an earlier one (which is then granted, so
+/// `recent.json` is read only once per path).
+///
 /// Returns the path that was authorised — the canonical `path_key` — and callers do their
 /// I/O on exactly that path. Writing through a symlinked `.novel` therefore updates the link's
 /// target and keeps the link (renaming over the literal link path would replace the link
@@ -133,6 +143,7 @@ fn check_path(
     ))
 }
 
+/// File name for a menu label. Splits on `/` and `\` alike: Windows paths may use either.
 fn base_name(path: &str) -> String {
     path.replace('\\', "/")
         .rsplit('/')
@@ -146,9 +157,11 @@ fn base_name(path: &str) -> String {
 // The dialogs are async commands: synchronous commands run on the main thread, where the
 // dialog plugin's blocking_* calls must not be used (they wait for the event loop that the
 // main thread is supposed to be running). The blocking call happens on a worker thread.
-// Each dialog is parented to the window, as the plugin's own commands do, so it stays modal
-// (Windows) or a sheet (macOS) instead of leaving the editor usable underneath; the
-// frontend additionally shields the window while a dialog is pending (pickPath in app.js).
+// Each dialog is parented to the window exactly as the plugin's own `open`/`save` commands
+// do it (open: Windows and macOS only; save: every desktop OS), so it stays modal (Windows)
+// or a sheet (macOS) instead of leaving the editor usable underneath. On Linux it cannot be
+// made modal, so the frontend shields the window while a dialog is pending (pickPath in
+// app.js). Granting the returned path is what lets the file commands below touch it.
 #[tauri::command]
 async fn pick_open(
     app: tauri::AppHandle,
@@ -224,6 +237,10 @@ fn read_text(
 /// Write via a temporary file in the same directory, flushed to disk, then renamed over the
 /// target: a crash or power loss leaves either the old file or the new one, never a torn
 /// or empty one. The temporary file is removed if anything fails.
+///
+/// Same directory because a rename is only atomic within one file system. The directory
+/// itself is not fsynced, so a power loss right after the rename may bring back the old
+/// version, but never a partial one.
 fn atomic_write(target: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
     let dir = target.parent().unwrap_or_else(|| Path::new(""));
     let epoch = std::time::SystemTime::now()
@@ -272,6 +289,8 @@ fn set_last_file(
     atomic_write(&last_file_ptr(&app), path).map_err(|e| e.to_string())
 }
 
+/// Crash-recovery snapshot of unsaved work (`localBackup` in app.js). Takes no path: it always
+/// writes the fixed `working.novel` in the config dir, so it needs no allowlist check.
 #[tauri::command]
 fn autosave(app: tauri::AppHandle, content: String) -> Result<(), String> {
     atomic_write(&working_file(&app), content).map_err(|e| e.to_string())
@@ -305,7 +324,9 @@ fn write_binary(
     atomic_write(&path, bytes).map_err(|e| e.to_string())
 }
 
-/// Minimal standard-base64 decoder (avoids pulling in an extra crate).
+/// Minimal standard-base64 decoder (avoids pulling in an extra crate). Lenient on purpose:
+/// `=` and whitespace are skipped wherever they appear and trailing bits are dropped; only a
+/// character outside the alphabet fails. The payload comes from the app's own encoder.
 fn b64_decode(s: &str) -> Option<Vec<u8>> {
     fn val(c: u8) -> Option<u8> {
         match c {
@@ -369,13 +390,16 @@ fn fnv1a64(s: &str) -> u64 {
     })
 }
 
-/// Backup directory of the file whose canonical path (see `path_key`) is `key`.
+/// Backup directory of the file whose canonical path (see `path_key`) is `key`. Every spelling
+/// of one file therefore shares a directory, while a moved or renamed file starts a new one.
 fn backup_dir(root: &Path, key: &Path) -> PathBuf {
     root.join(format!("{:016x}", fnv1a64(&key.to_string_lossy())))
 }
 
 /// The creation time encoded in a backup's file name, if it is one (`<unix seconds>.novel`).
-/// Anything else — including path tricks like `../x` — is not a backup name.
+/// Anything else — including path tricks like `../x` — is not a backup name. The explicit
+/// ASCII-digit check matters: `u64::parse` alone would accept `+1`, a name that maps to a
+/// different file than `1.novel`.
 fn backup_time(name: &str) -> Option<u64> {
     let secs = name.strip_suffix(".novel")?;
     if secs.is_empty() || secs.len() > 20 || !secs.bytes().all(|b| b.is_ascii_digit()) {
@@ -458,6 +482,8 @@ fn backup_file(
         name += 1;
     }
     atomic_write(&dir.join(format!("{name}.novel")), current)?;
+    // For people browsing the backups folder (the hashed directory name says nothing); the
+    // app never reads it.
     let _ = atomic_write(&dir.join("source.txt"), file.to_string_lossy().as_bytes());
     times.push(name);
     times.sort_unstable_by(|a, b| b.cmp(a));
@@ -622,8 +648,10 @@ fn add_recent_file(
 
 /* ---------------- menu ---------------- */
 
+/// The native menu. Item ids are the payload of the `menu` event (see `on_menu_event`) that
+/// app.js dispatches on; keep the two in sync.
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    // "Open Recent" submenu, populated from recent.json at launch
+    // Built once at launch from recent.json and never rebuilt; see the grants in `run`.
     let recent = read_recent(app);
     let recent_items: Vec<MenuItem<tauri::Wry>> = if recent.is_empty() {
         vec![MenuItem::with_id(
@@ -685,6 +713,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         app,
         "Edit",
         true,
+        // Undo/Redo are plain items, not predefined ones: those are unsupported on Linux.
+        // app.js runs document.execCommand for these ids.
         &[
             &MenuItem::with_id(app, "undo", "Undo", true, Some("CmdOrCtrl+Z"))?,
             &MenuItem::with_id(app, "redo", "Redo", true, Some("CmdOrCtrl+Shift+Z"))?,
@@ -740,6 +770,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Restores size, position and maximized state between launches; the 1400x900 in
+        // tauri.conf.json only applies to the very first one.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(GrantedPaths::default())
         .setup(|app| {

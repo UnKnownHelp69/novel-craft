@@ -1,7 +1,9 @@
-/* Local @font-face declarations for offline use.
-   Run `node scripts/fetch-fonts.mjs` once (with internet) to populate the .woff2
-   files below. Georgia, Arial and Roboto fall back to system fonts if the files
-   are missing, so the app still works fully offline without any downloads. */
+/* Local @font-face declarations; nothing is loaded from the network (the CSP allows no
+   remote fonts). The .woff2 files are optional and not checked in: `npm run fonts`
+   downloads them. Each face tries an installed copy first (local()), then the file; with
+   neither, the font stacks in styles.css and the font pickers fall back to a system
+   serif/sans/mono. Georgia and Arial are system fonts and need no entry here. The PDF
+   export embeds its own TrueType fonts from fonts/pdf/ instead. */
 
 @font-face {
   font-family: 'Lora';

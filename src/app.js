@@ -1,7 +1,9 @@
 /* ================= NovelCraft ================= */
 'use strict';
 
-/* ---------- Tauri bridge (graceful browser fallback) ---------- */
+/* ---------- Tauri bridge (graceful browser fallback) ----------
+   In a plain browser invoke() resolves to null and listen() to a no-op unlisten, so `src/`
+   still runs without the backend; anything that needs a real result checks hasTauri. */
 const TAURI = window.__TAURI__ || null;
 const hasTauri = !!TAURI;
 const invoke = hasTauri ? TAURI.core.invoke : async () => null;
@@ -37,10 +39,8 @@ const uuid = () =>
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 /* --- docx-strings:esc:end --- */
 /* --- docx-strings:escAttr:start --- */
-/* escAttr: like esc() but also escapes " → &quot;.  Use for values interpolated
-   inside double-quoted HTML attribute strings (e.g. value="${escAttr(x)}").
-   esc() intentionally leaves quotes alone — its element-content behavior is
-   pinned by existing DOCX tests — so attribute contexts need this variant. */
+/* esc() is for element content only: it leaves quotes alone (DOCX tests pin that output).
+   Values interpolated into double-quoted attributes (value="${escAttr(x)}") need escAttr(). */
 const escAttr = s => esc(s).replace(/"/g, '&quot;');
 /* --- docx-strings:escAttr:end --- */
 /* --- count-words:start --- pure: test/count-words.test.js lifts this block. A word starts
@@ -160,6 +160,8 @@ function sanitizeChildren(parent) {
     if (action === 'drop') { node.remove(); continue; }
     sanitizeChildren(node);
     if (action === 'unwrap') { node.replaceWith(...node.childNodes); continue; }
+    // `style` is rebuilt from the declarations the browser parsed, one allowlisted property at a
+    // time, never copied as raw text; the raw attribute is removed with the rest below.
     let style = '';
     if (node.hasAttribute('style') && node.style) {
       style = Object.keys(SCENE_STYLE_PROPS)
@@ -172,7 +174,7 @@ function sanitizeChildren(parent) {
       if (v === null) node.removeAttribute(a.name);
     }
     if (style) node.setAttribute('style', style);
-    if (tag === 'img' && !node.hasAttribute('src')) node.remove();
+    if (tag === 'img' && !node.hasAttribute('src')) node.remove();   // its source was not inline raster data
   }
 }
 /* Scene HTML as it may safely enter the editor, previews and exports. Idempotent. */
@@ -203,14 +205,14 @@ function blankChapter(n) {
 function blankWorldMap() {
   return {
     backgroundImage: '', imageW: 0, imageH: 0,
-    locations: {},              // locationId -> { x:0-1, y:0-1, visible }
+    locations: {},              // locationId -> { x, y, visible }; x/y are fractions (0-1) of the image size
     routes: [],
     layers: [],                 // custom drawing layers
     baseLayers: { background: true, locations: true, routes: true, labels: true }
   };
 }
-/* One .novel file = ONE novel. Structure matches the original spec:
-   { version, title, settings, chapters[], characters[], locations[], races[] } */
+/* One .novel file = ONE novel; these top-level keys are exactly what toFileObject() writes.
+   fontSize is in px, wordGoal in words; language null = auto-detect from the text. */
 function newNovel(title) {
   return {
     version: '1.0',
@@ -233,10 +235,10 @@ let mdMode = false;
 let focusMode = false;
 let typewriter = false;
 
-/* --- dirty-tracking (Bug 2) --- */
-let isLoadingContent = false;  // true while we programmatically populate the editor
-let savedContent = {};         // chapterId -> normalized HTML snapshot at last save/load
-let savedMd = {};              // chapterId -> markdown snapshot at last save/load
+/* Dirty tracking: see markDirty() and the editor's input handler. */
+let isLoadingContent = false;  // true while code (not the user) fills the editor; markDirty() ignores it
+let savedContent = {};         // sceneId -> normalizeHTML() snapshot at last save/load
+let savedMd = {};              // sceneId -> markdown snapshot at last save/load
 
 
 /* ---------- DOM refs ---------- */
@@ -259,12 +261,15 @@ function setSaved() {
   ind.classList.remove('saving');
 }
 
-/* Normalize HTML so trivial browser differences don't look like edits (Bug 2B). */
+/* Canonical form of scene HTML for the "is this a real edit?" comparison against savedContent.
+   contenteditable re-serializes markup it did not change (attribute order, whitespace between
+   tags, <br> spelling, a trailing empty <p> left after deleting everything), and none of that
+   may count as an edit. Only for comparing: scene content itself is never normalized. */
 function normalizeHTML(html) {
   try {
     const doc = new DOMParser().parseFromString('<div id="__r">' + (html || '') + '</div>', 'text/html');
     const root = doc.getElementById('__r');
-    root.querySelectorAll('*').forEach(el => {                 // sort attributes alphabetically
+    root.querySelectorAll('*').forEach(el => {                 // re-add attributes in sorted order
       const names = [...el.attributes].map(a => a.name).sort();
       const vals = {};
       names.forEach(n => (vals[n] = el.getAttribute(n)));
@@ -272,13 +277,14 @@ function normalizeHTML(html) {
       names.forEach(n => el.setAttribute(n, vals[n]));
     });
     let s = root.innerHTML;
-    s = s.replace(/>\s+</g, '><');            // trim whitespace between tags
-    s = s.replace(/<br\s*\/?>/gi, '<br/>');   // standardize <br>
-    s = s.replace(/(?:<p>(?:\s|<br\/>)*<\/p>)+$/i, ''); // drop trailing empty paragraphs
+    s = s.replace(/>\s+</g, '><');
+    s = s.replace(/<br\s*\/?>/gi, '<br/>');
+    s = s.replace(/(?:<p>(?:\s|<br\/>)*<\/p>)+$/i, '');
     return s.trim();
   } catch { return (html || '').trim(); }
 }
-/* Capture a clean snapshot of the whole novel so edits can be compared against it. */
+/* The baseline later edits are compared against, per scene; retaken on every save (manual or
+   auto) and every load. */
 function snapshotSaved() {
   savedContent = {};
   savedMd = {};
@@ -297,10 +303,13 @@ function setSaving() {
 /* ================= SCENES & CHAPTERS (tree) ================= */
 /* A chapter is a container of scenes. A scene is the writing unit that the
    editor edits; it carries content, per-scene metadata, and margin notes. */
+// [id stored in the file, label, icon]; ids the file may hold that are not listed fall back
+// to the last entry ('unknown') in timeMeta().
 const TIME_OF_DAY = [
   ['morning', 'Morning', '🌅'], ['afternoon', 'Afternoon', '🌞'], ['evening', 'Evening', '🌆'],
   ['night', 'Night', '🌙'], ['dawn', 'Dawn', '🌄'], ['dusk', 'Dusk', '🌇'], ['unknown', 'Unknown', '❓']
 ];
+// [id, label, colour]; unknown ids fall back to 'draft' in statusMeta().
 const SCENE_STATUS = [
   ['draft', 'Draft', '#8f887c'], ['review', 'Review', '#e6b422'], ['done', 'Done', '#5cb85c']
 ];
@@ -335,7 +344,9 @@ function renumber() {
   novel.chapters.forEach((c, i) => { c.order = i; (c.scenes || []).forEach((s, j) => (s.order = j)); });
 }
 
-/* ---- tree render ---- */
+/* Rebuilds the whole sidebar tree. That detaches every row element, so it must not run while a
+   pointer gesture still needs its row (between the two presses of a double-click on a chapter:
+   see setChapterCollapsed). Also rewrites every `order` to match the array positions. */
 function renderTree() {
   chapterList.innerHTML = '';
   if (!novel) return;
@@ -357,7 +368,7 @@ function renderTree() {
        <ul class="tc-scenes"></ul>`;
     const sceneUl = chLi.querySelector('.tc-scenes');
     (c.scenes || []).forEach(s => {
-      const st = statusMeta(s.status);
+      const st = statusMeta(s.status);   // constants, never file data, so safe unescaped below
       const li = document.createElement('li');
       li.className = 'tree-scene' + (s.id === currentSceneId ? ' active' : '');
       li.dataset.sceneId = s.id;
@@ -372,7 +383,7 @@ function renderTree() {
     chapterList.appendChild(chLi);
   });
 }
-const renderChapters = renderTree;   // back-compat alias for existing callers
+const renderChapters = renderTree;   // chapter-era name; nothing calls it any more
 
 /* ---- selection / editor sync ---- */
 function selectScene(sceneId, saveFirst = true) {
@@ -398,8 +409,8 @@ function selectChapter(id) {
   else { currentChapterId = id; renderTree(); }
 }
 function loadSceneIntoEditor() {
-  const wasLoading = isLoadingContent;
-  isLoadingContent = true;               // programmatic editor population must not mark dirty
+  const wasLoading = isLoadingContent;   // restored, not cleared: refreshUI() holds the flag across its whole pass
+  isLoadingContent = true;
   const s = currentScene();
   if (!s) { editor.innerHTML = ''; mdEditor.value = ''; }
   else if (mdMode) mdEditor.value = s.markdownContent || htmlToMd(s.content);
@@ -412,6 +423,8 @@ function saveCurrentScene() {
   const s = currentScene();
   if (!s) return;
   const before = s.content;
+  // The HTML -> Markdown -> HTML round trip is lossy (fonts, alignment, …), so the HTML is only
+  // regenerated when the Markdown was actually edited.
   if (mdMode) { 
     if (mdEditor.value !== htmlToMd(s.content)) {
       s.content = mdToHtml(mdEditor.value); 
@@ -424,7 +437,8 @@ function saveCurrentScene() {
   const c = currentChapter();
   if (c) c.wordCount = chapterWordCount(c);
 }
-/* thin aliases kept so file I/O helpers (flushNovel, doSave, recovery…) still work */
+/* Chapter-era names. Only saveCurrentChapter is still called (by flushNovel); the other two
+   are unused. */
 function saveCurrentChapter() { saveCurrentScene(); }
 function loadChapterIntoEditor() { loadSceneIntoEditor(); }
 const loadChapter = id => selectChapter(id);
@@ -609,6 +623,8 @@ function updateBreadcrumb() {
     const b = document.createElement('button');
     b.className = 'bc-part ' + cls;
     b.textContent = text;
+    // A title edit still in progress is committed here, not on mousedown (see the breadcrumb
+    // mousedown listener near nvTitle).
     if (handler) b.onclick = () => { if (document.activeElement === nvTitle) nvTitle.blur(); handler(); };
     return b;
   };
@@ -668,6 +684,10 @@ chapterList.addEventListener('dblclick', e => {   // chapters are renamed on the
   if (sc) renameScene(sc.dataset.sceneId);
 });
 
+/* Reordering uses mousedown/mousemove/mouseup, not the HTML5 Drag API, which is unreliable in
+   the WebView2/Chromium webview under the global `user-select: none`. A press becomes a drag
+   only after 5px of movement; below that it is a click (select a scene / toggle a chapter).
+   move/up listen on document so a release outside the sidebar still ends the drag. */
 let treeDrag = null;
 /* A click on a chapter row collapses or expands it; a double-click renames it. The first click has
    toggled the chapter by the time the second press comes (the OS allows ~500 ms), and with the tree
@@ -712,6 +732,9 @@ document.addEventListener('mousemove', e => {
   e.preventDefault();
   clearTreeDrop();
   treeDrag.target = null;
+  // Hit-testing is by Y only (the tree is one column). A scene drops before/after the scene row
+  // under it, or at the end of a chapter whose header row is under it; a chapter drops
+  // before/after another chapter's whole block (header and scenes).
   if (treeDrag.type === 'scene') {
     const over = $$('.tree-scene').find(x => { const r = x.getBoundingClientRect(); return e.clientY >= r.top && e.clientY <= r.bottom; });
     if (over && over !== treeDrag.el) {
@@ -746,10 +769,11 @@ document.addEventListener('mouseup', () => {
     return;
   }
   if (!d) return;
-  if (!d.started) {                                   // no movement -> click
+  if (!d.started) {                                   // under the drag threshold -> click
     if (d.type === 'scene') { if (d.id !== currentSceneId) selectScene(d.id); }
     else {
       const c = findChapter(d.id);
+      // remembers the state before this toggle, for a double-click to restore
       if (c) { chapterClick = { id: c.id, was: !!c.collapsed, scrollTop: chapterList.scrollTop }; setChapterCollapsed(c, !c.collapsed); }
     }
     return;
@@ -824,9 +848,10 @@ function updateFilePathIndicator() {
     el.classList.add('unsaved');
   }
 }
-function flushNovel() { if (novel) saveCurrentChapter(); }
+function flushNovel() { if (novel) saveCurrentChapter(); }   // editor -> current scene, before serializing
 
-/* Render the whole UI for the current `novel` (or the empty state). */
+/* Render the whole UI for the current `novel` (or the empty state) and select its first scene.
+   isLoadingContent is held for the whole pass, so nothing it fills in marks the novel dirty. */
 function refreshUI() {
   const has = !!novel;
   isLoadingContent = true;
@@ -860,7 +885,8 @@ function refreshUI() {
   isLoadingContent = false;
 }
 
-/* Serialize the current novel to the clean .novel file structure. */
+/* Only the file keys are written: anything else migrateNovel() carried over from the loaded
+   object (e.g. a library-era `id`) stays in memory and is dropped on save. */
 function toFileObject(n) {
   return {
     version: '1.0',
@@ -874,7 +900,9 @@ function toFileObject(n) {
 }
 function serializeNovel(n) { return JSON.stringify(toFileObject(n), null, 2); }
 
-/* Normalize any loaded object into a valid in-memory novel. */
+/* Normalize any loaded object (current, older or hand-edited file) into a valid in-memory
+   novel. Fills defaults and validates what later code interpolates (colours, counts); scene
+   HTML is not touched here, sanitizeNovelHTML() does that. */
 /* --- migration-core:migrate:start ---
    test/migrate-novel.test.js reassembles migrateNovel out of the four `migration-core:*`
    marker pairs scattered through this file (uuid, base, note-types, migrate) and runs it
@@ -897,7 +925,6 @@ function migrateNovel(d) {
   Object.keys(n.settings.noteTypeColors).forEach(k => {
     if (!safeColor(n.settings.noteTypeColors[k], null)) delete n.settings.noteTypeColors[k];
   });
-  // world map
   const wm = { ...blankWorldMap(), ...(n.settings.worldMap || {}) };
   if (typeof wm.locations !== 'object' || !wm.locations) wm.locations = {};
   if (!Array.isArray(wm.routes)) wm.routes = [];
@@ -918,7 +945,7 @@ function migrateNovel(d) {
   });
   n.settings.worldMap = wm;
   if (!Array.isArray(n.settings.compilationPresets)) n.settings.compilationPresets = [];
-  // The "Chapter One" numbering mode ('word') was removed; its nearest equivalent is "Chapter 1".
+  // Presets may still name the retired 'word' numbering ("Chapter One"); its nearest equivalent is "Chapter 1".
   n.settings.compilationPresets.forEach(p => {
     if (p && p.settings && p.settings.numberChapters === 'word') p.settings.numberChapters = 'arabic';
   });
@@ -933,6 +960,7 @@ function migrateNovel(d) {
     nt.typeId = nt.typeId || 'idea';
     nt.content = nt.content || '';
     nt.selectedText = nt.selectedText || '';
+    // offsets into the scene's plain text (editor.textContent); reconcileNotes() re-finds selectedText when they drift
     nt.startOffset = nt.startOffset || 0;
     nt.endOffset = nt.endOffset || 0;
     nt.createdAt = nt.createdAt || nowISO();
@@ -971,11 +999,8 @@ function migrateNovel(d) {
       c.scenes = [s];
       migratedToScenes = true;
     } else if (Array.isArray(c.notes) && c.notes.length) {
-      // Issue #16: the chapter already had scenes (legacy-wrap was skipped)
-      // but still carries leftover c.notes — merge them into the first scene's
-      // notes so they aren't silently destroyed by the delete below.  This is
-      // consistent with the legacy-wrap branch above, which places chapter-level
-      // notes on the (single) scene it creates.
+      // Chapter-level notes left on a chapter that has scenes go to its first scene, as in
+      // the legacy wrap above, rather than being lost to the delete below.
       const dest = c.scenes[0];
       if (!Array.isArray(dest.notes)) dest.notes = [];
       dest.notes.push(...c.notes);
@@ -989,9 +1014,10 @@ function migrateNovel(d) {
     if (!Array.isArray(n[k])) n[k] = [];
     n[k].forEach(e => { if (!e.id) e.id = uuid(); });
   });
-  // characters gain relationships[] + graphPosition for the relationship graph
+  // Relationship graph data. graphPosition null = not placed yet (the graph lays it out);
+  // strength is 1-10.
   n.characters.forEach(ch => {
-    // legacy: `relationships` used to be a free-text field — preserve it
+    // older files keep `relationships` as free text: it moves to relationshipNotes
     if (typeof ch.relationships === 'string') { ch.relationshipNotes = ch.relationships; ch.relationships = []; }
     if (!Array.isArray(ch.relationships)) ch.relationships = [];
     ch.relationships.forEach(r => {
@@ -1016,8 +1042,8 @@ function sanitizeNovelHTML(n) {
     const root = parseInert(sc.content);
     sanitizeChildren(root);
     sc.content = root.innerHTML;
-    // Every scene is recounted: a stored count is a cache that older versions computed by
-    // older rules (a lone " - " used to count as a word).
+    // Every scene is recounted: a stored count is only a cache, and the file may have been
+    // written by a version that counted words by other rules.
     sc.wordCount = countWords(textFromNode(root));
   }));
   return n;
@@ -1081,6 +1107,8 @@ async function handleLibraryFile(data, path) {
 }
 
 /* --- open / new / load --- */
+/* The backend reads only paths the user picked this session or that are in the recent list /
+   last file (GrantedPaths); any other path is rejected and ends up as "Could not open file". */
 async function loadFromPath(path) {
   try {
     const content = await invoke('read_text', { path });
@@ -1218,7 +1246,7 @@ function commitNovelTitle() {
 
 /* ================= EDITOR ================= */
 editor.addEventListener('input', () => {
-  if (isLoadingContent) return;          // skip programmatic loads (Bug 2A)
+  if (isLoadingContent) return;          // programmatic innerHTML writes are not edits
   const s = currentScene();
   if (!s) return;
   s.content = editor.innerHTML;
@@ -1228,12 +1256,15 @@ editor.addEventListener('input', () => {
   refreshSceneWordCount(s);
   reconcileNotes(s);            // keep note offsets valid as text shifts
   scheduleNotesRender();
-  // only mark dirty if the content really differs from the last saved snapshot (Bug 2B)
+  // compared normalized: input that leaves the scene as saved (markup the browser reshuffles
+  // without a visible change) does not mark the novel dirty
   if (normalizeHTML(s.content) !== (savedContent[s.id] || '')) markDirty();
 });
 /* Pasted HTML goes through the same allowlist as file content (sanitizeSceneHTML): pastes
    from Word or the web otherwise bring their classes, styles, fonts and remote images into
-   the scene. Plain-text pastes, including Ctrl+Shift+V, are left to the browser. */
+   the scene. Plain-text pastes, including Ctrl+Shift+V, are left to the browser. The paste
+   event itself does not say whether Shift was held, so the keydown just before it records
+   that (shortcutKey(), so Ctrl+Shift+V also works on non-Latin layouts). */
 let plainPasteRequested = false;
 editor.addEventListener('keydown', e => {
   plainPasteRequested = (e.ctrlKey || e.metaKey) && e.shiftKey && shortcutKey(e) === 'v';
@@ -1252,10 +1283,12 @@ editor.addEventListener('paste', e => {
   // paste the bitmap as inline data instead.
   const file = [...(cd.files || [])].find(f => /^image\/(?:png|jpe?g|gif|webp)$/.test(f.type));
   if (file) {
+    // The read is async: remember the caret now and put it back before inserting.
     const sel = getSelection();
     const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
     const reader = new FileReader();
     reader.onload = () => {
+      // through the policy too: it only keeps base64 data: URLs of the four types above
       const img = sanitizeSceneHTML(`<img src="${escAttr(String(reader.result))}">`);
       if (!img) return;
       editor.focus();
@@ -1285,6 +1318,8 @@ mdEditor.addEventListener('input', () => {
   refreshSceneWordCount(s);
   if (s.markdownContent !== (savedMd[s.id] || '')) markDirty();
 });
+/* Patch the scene's and chapter's word counts in the tree in place: this runs on every
+   keystroke, and re-rendering the tree would rebuild every row. */
 function refreshSceneWordCount(s) {
   const el = chapterList.querySelector(`[data-scene-id="${CSS.escape(String(s.id))}"] .ts-words`);
   if (el) el.textContent = s.wordCount || 0;
@@ -1308,10 +1343,9 @@ $('#styleSelect').addEventListener('change', e => {
   exec('formatBlock', e.target.value === 'P' ? 'P' : e.target.value);
 });
 $('#fontSelect').addEventListener('change', e => {
-  // apply font to selection only
   editor.focus();
+  // writes <font face>, which the html-policy keeps (face checked against FONT_FAMILY_RE)
   document.execCommand('fontName', false, e.target.value);
-  // execCommand fontName uses <font face>; wrap already fine visually
   markDirty();
 });
 
@@ -1342,12 +1376,15 @@ document.addEventListener('selectionchange', () => {
   if (document.activeElement === editor) updateToolbarState();
 });
 
-/* markdown mode toggle */
+/* Markdown mode. htmlToMd() keeps only h1-h3, paragraphs, bold/italic and line breaks,
+   so the round trip is lossy: the HTML is rebuilt from the markdown only when the markdown
+   text was actually changed; otherwise the scene's HTML (images, fonts, ...) stays as it was.
+   saveCurrentScene() applies the same rule. */
 $('#btnMarkdownMode').addEventListener('click', toggleMarkdownMode);
 function toggleMarkdownMode() {
   const s = currentScene();
   if (!s) return;
-  isLoadingContent = true;   // switching views is not an edit (Bug 2C)
+  isLoadingContent = true;   // switching views is not an edit
   if (!mdMode) {
     // visual -> markdown
     s.content = editor.innerHTML;
@@ -1368,7 +1405,7 @@ function toggleMarkdownMode() {
     editor.classList.remove('hidden');
     $('#btnMarkdownMode').classList.remove('active');
     mdMode = false;
-    reconcileNotes(s);
+    reconcileNotes(s);   // note offsets are positions in editor.textContent, re-anchor them
   }
   isLoadingContent = false;
   renderNotes();   // margin dots / highlights only exist in visual mode
@@ -1394,6 +1431,10 @@ function mdToHtml(md) {
   });
   return out.join('');
 }
+/* esc() runs first, so only the <b>/<i> added here are markup. Backslash escapes are parked
+   as control-character placeholders while the emphasis passes run: \* and \# come back as
+   the bare character, but \\ keeps both backslashes (it is not unescaped, so a backslash
+   that htmlToMd() wrote as \\ comes back doubled when edited markdown is applied). */
 function inlineMd(s) {
   s = esc(s);
   s = s.replace(/\\\\/g, '\x01');
@@ -1409,6 +1450,9 @@ function inlineMd(s) {
   return s;
 }
 /* --- mdtohtml:end --- */
+/* Scene HTML -> markdown, the inverse of mdToHtml() for what it supports. Other elements
+   keep their text but lose their markup. Blocks are joined by blank lines, which mdToHtml()
+   reads back as empty paragraphs: <p>a</p><p>b</p> returns with a <p><br></p> between. */
 function htmlToMd(html) {
   const d = parseInert(html);
   let out = [];
@@ -1417,6 +1461,7 @@ function htmlToMd(html) {
     node.childNodes.forEach(ch => {
       if (ch.nodeType === 3) {
         let t = ch.textContent;
+        // escape what inlineMd()/mdToHtml() would read as syntax ('#' only at a line start)
         t = t.replace(/\\/g, '\\\\');
         t = t.replace(/\*/g, '\\*');
         t = t.replace(/^#/g, '\\#');
@@ -1603,6 +1648,7 @@ function updateCounters() {
   const c = currentChapter();
   const chapWords = c ? chapterWordCount(c) : 0;
   const total = novel ? novel.chapters.reduce((s, x) => s + chapterWordCount(x), 0) : 0;
+  // the character counts are for the scene in the editor, read live from whichever view is shown
   const txt = !novel ? '' : mdMode ? stripHtml(mdToHtml(mdEditor.value)) : stripHtml(editor.innerHTML);
   $('#statChapWords').textContent = chapWords;
   $('#statTotalWords').textContent = total;
@@ -1653,14 +1699,13 @@ function setFocus(on) {
 $('#btnFocus').addEventListener('click', () => setFocus(!focusMode));
 $('#exitFocus').addEventListener('click', () => setFocus(false));
 $('#exitFocus').addEventListener('mousedown', e => e.preventDefault());   // the caret stays where it was
-// peek exit button when hovering top edge
+/* The exit button peeks in when the pointer reaches the top 8px of the window and stays while
+   the pointer is within its own height + 8px, so moving onto it does not hide it again. */
 document.addEventListener('mousemove', e => {
   if (!focusMode) return;
-  const exit = $('#exitFocus');   // revealed at the top edge; stays while the pointer is within its band
+  const exit = $('#exitFocus');
   exit.classList.toggle('peek', e.clientY < (exit.classList.contains('peek') ? exit.offsetHeight + 8 : 8));
 });
-
-/* Scene/chapter titles are edited via the breadcrumb and the tree (double-click). */
 
 /* ================= TREE CONTEXT MENU (scene / chapter) ================= */
 const ctx = $('#ctxMenu');
@@ -1725,12 +1770,14 @@ chapterList.addEventListener('contextmenu', e => {
     ctx.appendChild(ctxItem('Collapse All', () => setAllCollapsed(true)));
     ctx.appendChild(ctxItem('Expand All', () => setAllCollapsed(false)));
   }
-  showCtx(Math.min(e.clientX, innerWidth - 190), e.clientY);
+  showCtx(Math.min(e.clientX, innerWidth - 190), e.clientY);   // 190px: room for the menu (showCtx only fits it vertically)
 });
 // a click on a "▸" head opens nothing by itself (its submenu shows on hover): keep the menu up
 document.addEventListener('click', e => { if (!e.target.closest('#ctxMenu .ctx-sub-head')) hideCtx(); });
 
 /* ================= MODAL ================= */
+/* One shared dialog: opening it replaces any pending callback. Cancel runs no callback, so a
+   caller that must hear about Cancel listens on #modalCancel itself (see checkRecovery). */
 let modalCb = null;
 function confirmModal(title, body, onOk) {
   $('#modalTitle').textContent = title;
@@ -1769,10 +1816,10 @@ function toast(msg) {
   t.className = 'toast';
   t.textContent = msg;
   $('#toastHost').appendChild(t);
-  requestAnimationFrame(() => t.classList.add('show'));
+  requestAnimationFrame(() => t.classList.add('show'));   // a frame later, so the .toast transition runs
   setTimeout(() => {
     t.classList.remove('show');
-    setTimeout(() => t.remove(), 250);
+    setTimeout(() => t.remove(), 250);   // after the .2s fade-out in styles.css
   }, 2200);
 }
 
@@ -1814,6 +1861,8 @@ async function doSave(saveAs = false) {
   const content = serializeNovel(novel);
   const wasDirty = dirty;
   setSaving();
+  // Clean as of `content`, before the write is awaited: an edit typed while it is in flight
+  // sets dirty again and must survive the success path below.
   snapshotSaved();
   dirty = false;
   try {
@@ -1823,7 +1872,7 @@ async function doSave(saveAs = false) {
       await invoke('set_last_file', { path });
       await addRecent(path);
     } else {
-      downloadFile(defaultName, content);
+      downloadFile(defaultName, content);   // browser fallback: Save is a download
     }
     if (!dirty) setSaved();
     else $('#saveIndicator').classList.remove('saving');
@@ -1845,7 +1894,6 @@ async function doSave(saveAs = false) {
     return false;
   }
 }
-// The top-bar buttons / menu use these:
 const doOpen = openNovelFile;      // "Open" == open a .novel file
 const newProject = newNovelFile;   // "New"  == new .novel file
 
@@ -1881,9 +1929,12 @@ function resolveLanguage(novel) {
   return detectLanguage(novel) || 'en';
 }
 /* --- novel-language:end --- */
+/* Text exports: 'txt', 'md' or 'html' (anything else returns undefined). Scenes were
+   sanitized on load and paste already; the HTML export sanitizes them again and escapes the
+   titles, since the file is opened in a full browser. */
 function buildExport(kind, n) {
   if (!n) return '';
-  if (n === novel) saveCurrentScene();
+  if (n === novel) saveCurrentScene();   // the editor holds the newest text of the open scene
   const scenesOf = c => c.scenes || [];
   if (kind === 'txt') {
     return n.chapters.map(c =>
@@ -1933,7 +1984,7 @@ function downloadFile(name, content) {
   a.href = URL.createObjectURL(blob);
   a.download = name;
   a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);   // revoking at once can abort the download
 }
 
 /* top bar buttons */
@@ -1942,7 +1993,7 @@ $('#btnOpen').addEventListener('click', doOpen);
 $('#btnSave').addEventListener('click', () => doSave(false));
 $('#btnSaveAs').addEventListener('click', () => doSave(true));
 $('#btnExport').addEventListener('click', e => {
-  e.stopPropagation();
+  e.stopPropagation();   // the document click handler below closes the menu
   $('#exportMenu').classList.toggle('open');
 });
 document.addEventListener('click', () => $('#exportMenu').classList.remove('open'));
@@ -1955,7 +2006,10 @@ $('#exportMenu').addEventListener('click', e => {
 
 /* ================= AUTOSAVE / RECOVERY ================= */
 const LS_KEY = 'novelcraft:autosave';
-let backupFailed = false;
+let backupFailed = false;   // show the quota toast once, not every 10s, until a backup succeeds again
+/* Crash-recovery copy of the unsaved state, separate from the .novel file and its backups:
+   working.novel in the app config dir (desktop) or localStorage (browser, ~5 MB quota).
+   It records the file path too, so checkRecovery() can reattach the novel to its file. */
 function localBackup() {
   flushNovel();
   const payload = JSON.stringify({ ts: Date.now(), path: currentFilePath, novel });
@@ -1985,7 +2039,9 @@ function clearBackup() {
 }
 setInterval(() => { if (dirty && novel) localBackup(); }, 10000); // every 10s while dirty
 
-// every 30s: write to the current file if we have one, else only localStorage
+/* Every 30s while dirty: save to the novel's own file when it has one (desktop only;
+   save_novel keeps at most one backup copy per 10 minutes, so this cadence does not flood
+   the backups), otherwise refresh the recovery copy. Same snapshot-before-await rule as doSave(). */
 setInterval(async () => {
   if (!dirty || !novel) return;
   if (hasTauri && currentFilePath) {
@@ -2000,9 +2056,9 @@ setInterval(async () => {
       else $('#saveIndicator').classList.remove('saving');
       clearBackup();
       updateFilePathIndicator();
-    } catch (_) { localBackup(); markDirty(); }
+    } catch (_) { localBackup(); markDirty(); }   // still unsaved: keep the recovery copy current
   } else {
-    localBackup();   // unsaved (new) novel -> localStorage only
+    localBackup();   // no file yet, or the browser build: recovery copy only
   }
 }, 30000);
 
@@ -2019,7 +2075,7 @@ async function checkRecovery() {
     }
     if (!raw) return null;
     data = JSON.parse(raw);
-    // support new (novel) and legacy (library) backups
+    // { novel } from localBackup(); older versions wrote { library: { novels, activeNovelId } }
     payload = data && data.novel;
     if (!payload && data && data.library) {
       const lib = data.library;
@@ -2050,10 +2106,10 @@ async function checkRecovery() {
         } catch (e) {
           console.error('Recovery restore failed:', e);
           toast('Could not restore backup — the saved data appears corrupted');
-          done('declined');   // leave the start menu; backup stays in localStorage for inspection
+          done('declined');   // leave the start menu; the backup is kept for inspection
         }
       });
-    cancel.addEventListener('click', onCancel);
+    cancel.addEventListener('click', onCancel);   // confirmModal() runs nothing on Cancel
   });
 }
 
@@ -2080,13 +2136,16 @@ let openNoteId = null;             // id of the note whose card is open
 let noteEditing = false;           // card is in edit mode
 let noteResolvedFilter = 'hide';   // 'hide' | 'show' | 'only'
 let noteTypeFilter = new Set();    // empty = all types
-let pendingSelection = null;       // {start,end,text,rect} captured for the add popup
+let pendingSelection = null;       // {start,end,text,rect} captured for the add popup (rect: client coords)
 let notesRenderRAF = null;
 
 const marginNotes = $('#marginNotes');
 const noteCard = $('#noteCard');
 const notePopup = $('#notePopup');
 
+/* Default types are fixed in code; a novel only stores colour overrides for them
+   (settings.noteTypeColors). Custom types live whole in settings.customNoteTypes. Both are
+   colour-checked by migrateNovel on load. */
 function getNoteTypes() {
   const overrides = (novel && novel.settings && novel.settings.noteTypeColors) || {};
   const defs = DEFAULT_NOTE_TYPES.map(t => ({ ...t, color: overrides[t.id] || t.color, isDefault: true }));
@@ -2098,13 +2157,20 @@ function getNoteType(id) {
   const all = getNoteTypes();
   return all.find(t => t.id === id) || all.find(t => t.id === NOTE_FALLBACK_ID) || all[0];
 }
-function chapterNotes() { const s = currentScene(); return (s && s.notes) || []; }  // notes live on the current scene
+function chapterNotes() { const s = currentScene(); return (s && s.notes) || []; }  // despite the name: notes live on scenes
+/* Coalesces dot/highlight/card layout into one frame; called on every keystroke and resize. */
 function scheduleNotesRender() {
   if (notesRenderRAF) return;
   notesRenderRAF = requestAnimationFrame(() => { notesRenderRAF = null; renderMargin(); updateHighlights(); positionOpenCard(); });
 }
 
-/* ---- text-offset helpers (character offsets within the editor text content) ---- */
+/* ---- text-offset helpers ----
+   A note's startOffset/endOffset (saved in the .novel) index editor.textContent: UTF-16 code
+   units over all text nodes concatenated, with nothing between paragraphs, i.e. the same
+   indices String.slice uses. selectedText is kept alongside so reconcileNotes can re-anchor
+   the note after edits. The notes UI is visual-mode only; the markdown text has other offsets. */
+/* A DOM boundary point may be (element, child index) rather than (text node, char), so count
+   the text in a cloned prefix range instead of walking to the container. */
 function charIndexFromPoint(root, container, offset) {
   const pre = document.createRange();
   pre.setStart(root, 0);
@@ -2115,6 +2181,7 @@ function charIndexFromPoint(root, container, offset) {
   while (w.nextNode()) len += w.currentNode.textContent.length;
   return len;
 }
+/* Inverse of charIndexFromPoint. null when the offsets run past the text (stale note). */
 function rangeFromOffsets(root, start, end) {
   const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
   let idx = 0, sN = null, sO = 0, eN = null, eO = 0, n;
@@ -2128,7 +2195,8 @@ function rangeFromOffsets(root, start, end) {
   try { const r = document.createRange(); r.setStart(sN, sO); r.setEnd(eN, eO); return r; }
   catch { return null; }
 }
-/* Locate annotated text after the surrounding prose has changed length. */
+/* Locate annotated text after the surrounding prose has changed length. When the phrase occurs
+   more than once, take the occurrence nearest `hint` (the old start) so the note stays on its copy. */
 function findTextInContent(content, searchText, hint) {
   if (!searchText) return null;
   let idx = content.indexOf(searchText);
@@ -2143,6 +2211,9 @@ function findTextInContent(content, searchText, hint) {
   }
   return { start: idx, end: idx + searchText.length };
 }
+/* Re-anchor each note of scene `c` by its selectedText. Runs on every edit and whenever the scene
+   enters the visual editor; it updates offsets in place and never marks dirty itself. A note
+   whose text is gone keeps its old offsets and is flagged positionLost (optionally auto-resolved). */
 function reconcileNotes(c) {
   if (!c || !Array.isArray(c.notes) || !c.notes.length) return;
   const text = editor.textContent;
@@ -2158,6 +2229,7 @@ function reconcileNotes(c) {
 }
 
 /* ---- selection capture ---- */
+/* The editor selection as note offsets, or null in markdown mode / outside the editor. */
 function getSelectionInEditor() {
   if (mdMode) return null;
   const sel = window.getSelection();
@@ -2192,12 +2264,12 @@ function buildTypeOptions(select, selectedId) {
     select.appendChild(o);
   });
 }
-function hexToRgba(hex, a) {
+function hexToRgba(hex, a) {   // anything but #rrggbb falls back to the accent gold
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '');
   if (!m) return `rgba(201,169,110,${a})`;
   return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})`;
 }
-/* clamp a floating element to the viewport near a client rect. Shown, measured and placed in
+/* Clamp a floating element to the viewport near a client rect. Shown, measured and placed in
    one task, so it never paints at the old spot. No visibility:hidden while measuring: the
    controls inside transition `all`, so their inherited visibility would animate back from
    hidden and stay hidden (unfocusable) until the next frame. */
@@ -2282,6 +2354,8 @@ function filteredNotes() {
 }
 
 /* ================= MARGIN DOTS ================= */
+/* Dots live inside #editorWrap, which scrolls with the text, so `top` is relative to it and
+   they need re-layout only when lines reflow (edits, resize), not on scroll. */
 function renderMargin() {
   if (!marginNotes) return;
   marginNotes.innerHTML = '';
@@ -2325,6 +2399,11 @@ function showDotTooltip(dot, nt) {
 function hideDotTooltip() { if (dotTip) { dotTip.remove(); dotTip = null; } }
 
 /* ================= ANNOTATED-TEXT HIGHLIGHTING (CSS Custom Highlight API) ================= */
+/* Highlights paint over Ranges without touching the editor DOM, so the scene HTML, the saved
+   snapshot (dirty flag), caret and undo stack are unaffected. One registry entry per note type
+   plus `note-active` for the open note; webviews without the API just show no underline.
+   Type ids and colours come from the .novel and end up in generated CSS text: ids are reduced
+   to identifier characters and colours go through safeColor, so a crafted type cannot inject CSS. */
 function cssHlName(id) { return 'note-' + String(id).replace(/[^a-zA-Z0-9_-]/g, '_'); }
 function ensureHighlightStyles() {
   let st = document.getElementById('noteHiliteStyles');
@@ -2370,6 +2449,7 @@ function openNoteCard(id, scroll = true) {
       const sc = $('.editor-scroll');
       const target = sc.scrollTop + (rect.top - sc.getBoundingClientRect().top) - sc.clientHeight / 2;
       sc.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+      // the card is position:fixed: place it again once the smooth scroll has (roughly) settled
       setTimeout(() => { renderNoteCard(); renderMargin(); }, 260);
     }
   }
@@ -2383,7 +2463,8 @@ function closeNoteCard() {
   renderMargin();
   updateHighlights();
 }
-/* click outside the open card (and not on a dot / list entry) closes it */
+/* Click outside the open card closes it. Dots and list entries open a card themselves, and
+   modals are excluded so the Delete confirmation does not close the card under it. */
 document.addEventListener('mousedown', e => {
   if (!openNoteId) return;
   if (e.target.closest('#noteCard') || e.target.closest('.note-dot') ||
@@ -2438,6 +2519,8 @@ function renderNoteCard() {
   }
   positionOpenCard();
 }
+/* Beside the annotated text: right of it, flipped left when it would overflow. Without a range
+   (markdown mode, stale offsets) it falls back to a spot near the top of the editor. 48 = 40px top bar + gap. */
 function positionOpenCard() {
   if (!noteCard || noteCard.classList.contains('hidden') || !openNoteId) return;
   const c = currentScene();
@@ -2542,6 +2625,8 @@ const noteResolvedSel = $('#noteResolvedFilter');
 if (noteResolvedSel) noteResolvedSel.addEventListener('change', e => { noteResolvedFilter = e.target.value; renderNotes(); });
 
 /* ================= NOTE-TYPE SETTINGS ================= */
+/* The ::highlight rules are generated per type, so every type/colour change calls
+   ensureHighlightStyles before re-rendering. */
 function setNoteTypeColor(ty, color) {
   if (!novel) return;
   if (ty.isDefault) { novel.settings.noteTypeColors[ty.id] = color; }
@@ -2705,7 +2790,8 @@ async function doExportNotes(kind) {
   toast('Notes exported (' + kind.toUpperCase() + ')');
 }
 
-/* reposition floating notes UI when the layout shifts */
+/* Resize reflows the text, so everything is re-laid out. Scrolling only moves the fixed-position
+   card; the dot tooltip is dropped and the add popup closed (its selection rect is now stale). */
 addEventListener('resize', scheduleNotesRender);
 $('.editor-scroll').addEventListener('scroll', () => { positionOpenCard(); hideDotTooltip(); if (notePopup && !notePopup.classList.contains('hidden')) closeAddNote(); });
 
@@ -2714,9 +2800,9 @@ let corkboardOpen = false;
 let corkZoomLevel = 1;          // 0 = small, 1 = medium, 2 = large
 let corkFilterStatus = 'all';
 let corkFilterPov = '';
-let corkSort = 'order';
+let corkSort = 'order';         // display only; drops always edit the real scene order
 let corkDrag = null;
-let suppressCorkClick = false;
+let suppressCorkClick = false;  // swallows the click that follows a drop
 
 function charName(id) { const c = novel && novel.characters.find(x => x.id === id); return c ? (c.name || '(unnamed)') : ''; }
 function locName(id) { const l = novel && novel.locations.find(x => x.id === id); return l ? (l.name || '(unnamed)') : ''; }
@@ -2783,6 +2869,7 @@ function buildSceneCard(s, c) {
   card.dataset.sceneId = s.id;
   card.dataset.chapterId = c.id;
   card.style.setProperty('--sc', st[2]);
+  // tilt of -1..+0.9deg from the id, so a card keeps its angle across re-renders
   card.style.setProperty('--rot', (((hashStr(s.id) % 20) / 10) - 1).toFixed(2) + 'deg');
   const pov = s.povCharacter ? `<div class="cc-meta">👤 ${esc(charName(s.povCharacter))}</div>` : '';
   const loc = s.location ? `<div class="cc-meta">📍 ${esc(locName(s.location))}</div>` : '';
@@ -2794,6 +2881,8 @@ function buildSceneCard(s, c) {
      <div class="cc-meta">${tm[2]} ${tm[1]}</div>
      <div class="cc-foot"><span>${s.wordCount || 0} words</span><span class="cc-date">${fmtNoteDate(s.modifiedAt || s.createdAt)}</span></div>
      <div class="cc-actions"><button class="cc-edit" title="Open in editor">Edit</button><button class="cc-del" title="Delete scene">Delete</button></div>`;
+  // A single click opens the scene only after 230ms, so a double-click on the title can
+  // rename it instead of leaving the corkboard.
   let clickTimer = null;
   card.querySelector('.cc-badge').onclick = e => { e.stopPropagation(); cycleStatus(s); };
   card.querySelector('.cc-edit').onclick = e => { e.stopPropagation(); selectScene(s.id); closeCorkboard(); };
@@ -2812,7 +2901,10 @@ function cycleStatus(s) {
   s.status = SCENE_STATUS[(i + 1) % SCENE_STATUS.length][0];
   markDirty(); renderCorkboard(); renderTree(); updateSceneMeta();
 }
-/* corkboard card drag (pointer-based; reorder within a chapter, move between chapters) */
+/* Corkboard card drag: mouse events, not the HTML5 Drag API (unreliable in the webview, see
+   chapter reordering). A 6px threshold separates a click from a drag. Dropping on a card inserts
+   before/after it by which half is under the pointer; dropping elsewhere in a chapter's row
+   appends to that chapter. */
 $('#corkGrid').addEventListener('mousedown', e => {
   if (e.button !== 0) return;
   const card = e.target.closest('.cork-card:not(.cork-ghost)');
@@ -2844,6 +2936,8 @@ document.addEventListener('mouseup', () => {
   suppressCorkClick = true;
   setTimeout(() => (suppressCorkClick = false), 60);
 });
+/* Indices are into chapter.scenes (the real order), whatever sort/filter the board shows.
+   Invariant: a chapter always keeps at least one scene. */
 function applyCorkDrop(sceneId, target) {
   const f = findScene(sceneId);
   if (!f) return;
@@ -2885,11 +2979,17 @@ const REL_STATUS = [['active', 'Active'], ['past', 'Past'], ['secret', 'Secret']
 function relColor(t) { const r = REL_TYPES.find(x => x[0] === t); return r ? r[2] : '#c9a96e'; }
 function relTypeName(t) { const r = REL_TYPES.find(x => x[0] === t); return r ? r[1] : 'Custom'; }
 
+/* Coordinates: character.graphPosition {x,y} (saved in the .novel) is in world units, CSS px at
+   zoom 1 around an arbitrary origin. gView maps world to canvas CSS px: screen = world*zoom + (x,y)
+   (w2s/s2w). The DPR scaling of the backing store is set in gResize, so all drawing and
+   hit-testing works in CSS px relative to the canvas.
+   Relationships are directed: each lives on its source character's `relationships[]` and names
+   the other end by targetCharacterId. */
 let graphOpen = false;
 let gEventsInit = false;
 let gCanvas = null, gCtx = null;
 let gView = { x: 0, y: 0, zoom: 1 };
-let gDragNode = null, gPanning = false, gLast = null, gMoved = false;
+let gDragNode = null, gPanning = false, gLast = null, gMoved = false;   // gMoved: drag vs click on mouseup
 let gSelected = null, gHoverEdge = null, gFilter = 'all';
 let gPanelRel = null;   // relationship being edited in the panel
 
@@ -2914,6 +3014,7 @@ function graphEdges(chars) {
   }));
   return edges;
 }
+/* Seed missing positions on a jittered 220-unit circle; this writes to the novel, hence markDirty. */
 function ensureGraphPositions() {
   const chars = novel.characters;
   const n = chars.length;
@@ -2936,7 +3037,7 @@ function openGraph() {
   $('#graphOverlay').classList.remove('hidden');
   gCanvas = $('#graphCanvas');
   gCtx = gCanvas.getContext('2d');
-  if (!gEventsInit) { initGraphEvents(); gEventsInit = true; }
+  if (!gEventsInit) { initGraphEvents(); gEventsInit = true; }   // once; window handlers bail while closed
   ensureGraphPositions();
   fillSelect($('#graphFilter'), [['all', 'Show All'], ['main', 'Main Characters Only'], ['withrel', 'With Relationships'], ['withoutrel', 'Without Relationships']], gFilter);
   renderLegend();
@@ -2985,14 +3086,14 @@ function drawGraph() {
   edges.forEach(e => drawEdge(e, connected));
   chars.forEach(ch => drawNode(ch, connected));
 }
-function drawGrid(W, H) {
+function drawGrid(W, H) {   // a dot every 50 world units, anchored to the world origin
   const step = 50 * gView.zoom;
   if (step < 12) return;
   const ox = gView.x % step, oy = gView.y % step;
   gCtx.fillStyle = '#2a2a35';
   for (let x = ox; x < W; x += step) for (let y = oy; y < H; y += step) { gCtx.beginPath(); gCtx.arc(x, y, 1, 0, Math.PI * 2); gCtx.fill(); }
 }
-function edgeDash(rel) {
+function edgeDash(rel) {   // status wins over strength (1-10); lengths in world units
   if (rel.status === 'past') return [8, 6];
   if (rel.status === 'secret') return [2, 5];
   if (rel.strength <= 3) return [5, 4];
@@ -3010,13 +3111,14 @@ function drawEdge(e, connected) {
   gCtx.lineWidth = (width + (hovered ? 1 : 0)) * gView.zoom;
   gCtx.setLineDash(edgeDash(e.rel).map(v => v * gView.zoom));
   if (e.rel.strength >= 9 && !faded) { gCtx.shadowColor = gCtx.strokeStyle; gCtx.shadowBlur = 8; }
+  // stop at the target's rim so a one-sided arrow tip touches the node instead of hiding under it
   const rt = nodeRadius(e.tgt) * gView.zoom;
   const ang = Math.atan2(b.y - a.y, b.x - a.x);
   const ex = b.x - Math.cos(ang) * rt, ey = b.y - Math.sin(ang) * rt;
   gCtx.beginPath(); gCtx.moveTo(a.x, a.y); gCtx.lineTo(ex, ey); gCtx.stroke();
   gCtx.setLineDash([]);
   if (e.rel.status === 'oneSided' && !faded) { drawArrow(ex, ey, ang, gCtx.strokeStyle); }
-  // label
+  // subtype label: only when hovered or zoomed in enough to read it
   if (!faded && (hovered || gView.zoom > 0.6) && e.rel.subtype) {
     gCtx.globalAlpha = hovered ? 1 : 0.5;
     gCtx.fillStyle = '#e8e0d5';
@@ -3045,16 +3147,16 @@ function drawNode(ch, connected) {
   gCtx.fill();
   gCtx.lineWidth = 2; gCtx.strokeStyle = isSel ? '#f0e2c8' : 'rgba(255,255,255,.5)'; gCtx.stroke();
   gCtx.shadowBlur = 0;
-  // role badge
+  // role glyph inside the node
   gCtx.fillStyle = '#1a1a1f'; gCtx.font = (13 * gView.zoom) + 'px sans-serif'; gCtx.textAlign = 'center'; gCtx.textBaseline = 'middle';
   gCtx.fillText(roleBadge(ch), p.x, p.y);
-  // name label
+  // name: fixed 14px at every zoom so it stays legible
   gCtx.globalAlpha = faded ? 0.3 : 1;
   gCtx.fillStyle = '#ffffff'; gCtx.font = '14px Inter, sans-serif'; gCtx.textBaseline = 'top';
   gCtx.fillText(ch.name || '(unnamed)', p.x, p.y + r + 4);
   gCtx.restore();
 }
-function nodeAt(sx, sy) {
+function nodeAt(sx, sy) {   // screen coords; last-drawn (topmost) node wins
   const chars = graphChars();
   for (let i = chars.length - 1; i >= 0; i--) {
     const ch = chars[i]; const p = w2s(ch.graphPosition.x, ch.graphPosition.y);
@@ -3078,7 +3180,10 @@ function distToSeg(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 
-/* ---- graph interactions ---- */
+/* ---- graph interactions ----
+   mousedown on a node starts a node drag, anywhere else a pan. On mouseup without movement the
+   node drag becomes a click (toggle selection) and the pan becomes a background click, which is
+   where edge clicks are detected. move/up listen on window so a drag can leave the canvas. */
 function graphMouse(e) { const r = gCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
 function initGraphEvents() {
   gCanvas.addEventListener('mousedown', e => {
@@ -3109,6 +3214,7 @@ function initGraphEvents() {
     if (gDragNode) { if (gMoved) markDirty(); else onNodeClick(gDragNode); gDragNode = null; }
     else if (gPanning) { gPanning = false; if (!gMoved) onCanvasClick(e); }
   });
+  // zoom about the cursor: keep the world point under it fixed. passive:false so preventDefault works.
   gCanvas.addEventListener('wheel', e => {
     e.preventDefault();
     const m = graphMouse(e);
@@ -3262,6 +3368,7 @@ function openCharPanel(ch) {
     toast('Character updated');
   };
 }
+/* Relies on #charList rendering one .entity per character in novel.characters order. */
 function openCharacterInPanel(id) {
   const acc = $('.accordion[data-acc="chars"]');
   if (acc) acc.classList.add('open');
@@ -3275,6 +3382,9 @@ function circularLayout() {
   chars.forEach((c, i) => { const a = (i / Math.max(1, n)) * Math.PI * 2 - Math.PI / 2; c.graphPosition = { x: Math.cos(a) * R, y: Math.sin(a) * R }; });
   markDirty(); animateTo();
 }
+/* Simple O(n²) spring embedder over the visible characters: 120 rounds of inverse-square
+   repulsion (cooling 1% a round) plus springs pulling linked pairs toward 160 world units,
+   stiffer for stronger relationships. Results go to the transient `_target` that animateTo tweens to. */
 function forceLayout() {
   const chars = graphChars();
   if (!chars.length) return;
@@ -3300,6 +3410,8 @@ function forceLayout() {
   chars.forEach(c => (c._target = pos[c.id]));
   markDirty(); animateTo();
 }
+/* 900ms ease-out tween of graphPosition toward each `_target` (characters without one stay put),
+   then deletes `_target` (not part of the file format) and re-centres the view. */
 function animateTo() {
   const chars = graphChars();
   const start = {}; chars.forEach(c => (start[c.id] = { x: c.graphPosition.x, y: c.graphPosition.y }));
@@ -3315,13 +3427,11 @@ function animateTo() {
   requestAnimationFrame(step);
 }
 
-/* ---- legend ---- */
 function renderLegend() {
   const body = $('#legendBody');
   body.innerHTML = REL_TYPES.map(t => `<div class="lg-row"><span class="lg-line" style="background:${t[2]}"></span>${t[1]}</div>`).join('');
 }
 
-/* ---- export PNG ---- */
 function exportGraphPng() {
   if (!gCanvas) return;
   const url = gCanvas.toDataURL('image/png');
@@ -3346,6 +3456,7 @@ $('#graphAddChar').addEventListener('click', () => {
   });
 });
 $('#graphAddRel').addEventListener('click', () => { if (novel.characters.length < 2) { toast('Add at least two characters first'); return; } openRelPanel(null, novel.characters[0].id, novel.characters[1].id); });
+// the layout select is an action menu: run the layout, then show 'manual' again so it can be re-picked
 $('#graphLayout').addEventListener('change', e => {
   if (e.target.value === 'auto') forceLayout();
   else if (e.target.value === 'circular') circularLayout();
@@ -3358,6 +3469,12 @@ $('#legendToggle').addEventListener('click', () => { const b = $('#legendBody');
 addEventListener('resize', () => { if (graphOpen) gResize(); });
 
 /* ================= WORLD MAP ================= */
+/* Three coordinate spaces:
+   - relative: pin positions in novel.settings.worldMap.locations[id] = { x, y } in 0..1 of the
+     image, so pins stay put if the background image is replaced by one of another size;
+   - world: image pixels (relative × mapImageSize()); drawing points are stored in these;
+   - screen: CSS pixels from the canvas's top-left (mouse coords, everything mCtx draws).
+   screen = world × mView.zoom + (mView.x, mView.y); see mw2s / ms2w. */
 const LOC_TYPE_COLOR = { city: '#4a90d9', building: '#c9a96e', natural: '#5cb85c', other: '#8f887c' };
 function locColor(l) { return LOC_TYPE_COLOR[l.type] || '#8f887c'; }
 
@@ -3368,11 +3485,13 @@ let mImg = null;
 let mDragPin = null, mPanning = false, mLast = null, mMoved = false;
 let mActiveLayerId = '';           // '' = pin/pan mode; else a custom layer id -> drawing mode
 let mDrawTool = 'pen', mDrawColor = '#c9a96e';
-let mDrawing = null;               // in-progress drawing object
+let mDrawing = null;               // shape being drawn, pushed to the active layer on mouseup
 let mLocSearch = '';
-let mRouteMode = null;             // { fromId } while placing a route (see routes section)
+let mRouteMode = null;             // { fromId } while placing a route; fromId null = source not picked yet
 
 function worldMap() { return novel && novel.settings && novel.settings.worldMap; }
+/* World-space size. imageW/imageH are saved with the file so pins land correctly while the
+   data-URL image is still decoding. */
 function mapImageSize() {
   const wm = worldMap();
   if (mImg && mImg.complete && mImg.naturalWidth) return { w: mImg.naturalWidth, h: mImg.naturalHeight };
@@ -3382,8 +3501,11 @@ function mapImageSize() {
 function mw2s(x, y) { return { x: x * mView.zoom + mView.x, y: y * mView.zoom + mView.y }; }
 function ms2w(x, y) { return { x: (x - mView.x) / mView.zoom, y: (y - mView.y) / mView.zoom }; }
 function locRel(l) { const wm = worldMap(); return wm.locations[l.id] || null; }
+/* Returns { x, y } in that key order: callers spread it with mw2s(...Object.values(locWorld(l))). */
 function locWorld(l) { const sz = mapImageSize(); const p = locRel(l); const rx = p ? p.x : 0.5, ry = p ? p.y : 0.5; return { x: rx * sz.w, y: ry * sz.h }; }
 function placedLocs() { const wm = worldMap(); return novel.locations.filter(l => wm.locations[l.id]); }
+/* Pin head radius in screen px: follows zoom but clamped so pins stay clickable when zoomed
+   out and don't swamp the map when zoomed in. drawPins, pinAt and drawRoutes share it. */
 function pinScreenR() { return Math.max(9, Math.min(20, 13 * mView.zoom)); }
 
 function openMap() {
@@ -3416,6 +3538,9 @@ function loadMapImage() {
     mImg.src = wm.backgroundImage;
   } else { mImg = null; }
 }
+/* The backing store is devicePixelRatio× the CSS size for crisp lines, and the dpr transform
+   lets every draw call work in CSS px — so layout math uses clientWidth/clientHeight,
+   never canvas.width/height. */
 function mapResize() {
   if (!mCanvas) return;
   const stage = $('.map-stage');
@@ -3447,6 +3572,8 @@ function mapOriginal() {
   mView.y = (H - sz.h) / 2;
   updateMapZoom(); mapDraw();
 }
+/* Zoom about the viewport centre: re-pan so the world point under it stays under it
+   (the wheel handler does the same about the cursor). */
 function mapZoomBy(factor) {
   const W = mCanvas.clientWidth / 2, H = mCanvas.clientHeight / 2;
   const before = ms2w(W, H);
@@ -3457,6 +3584,8 @@ function mapZoomBy(factor) {
 }
 
 /* ---- drawing the map ---- */
+/* Paint order (bottom to top): background, custom layers, shape in progress, routes, pins.
+   With the background layer hidden or the image not loaded, the map bounds are outlined. */
 function mapDraw() {
   if (!mCtx) return;
   const W = mCanvas.clientWidth, H = mCanvas.clientHeight;
@@ -3482,6 +3611,8 @@ function mapDraw() {
   if (wm.baseLayers.routes) drawRoutes();
   if (wm.baseLayers.locations) drawPins();
 }
+/* A pin is a teardrop whose tip sits on the location point; its head is a circle of radius r
+   centred 1.5r above it. The label hangs below the tip. */
 function drawPins() {
   const wm = worldMap();
   const showLabels = wm.baseLayers.labels;
@@ -3511,6 +3642,8 @@ function drawPins() {
     mCtx.restore();
   });
 }
+/* Hit-test in screen px: the head circle (+2 px slack) or the box between head centre and tip.
+   Walks backwards so the pin drawn last (on top) wins. */
 function pinAt(sx, sy) {
   const locs = placedLocs();
   for (let i = locs.length - 1; i >= 0; i--) {
@@ -3528,6 +3661,10 @@ function drawLayer(l) {
   (l.drawings || []).forEach(d => drawOneDrawing(d, 1));
   mCtx.restore();
 }
+/* Drawing format (layer.drawings[]): { tool, color, width, points: [{x, y}] in world px, text? }.
+   pen = polyline through all points; line/rect/circle = [start, end] (circle is the ellipse
+   inscribed in their bounding box); text = [anchor]. Width and text size are world units, so
+   they scale with zoom (with a screen-px floor). */
 function drawOneDrawing(d, alpha) {
   mCtx.save();
   mCtx.globalAlpha *= alpha;
@@ -3559,13 +3696,15 @@ function drawOneDrawing(d, alpha) {
 }
 
 /* ---- image upload ---- */
+/* The image is embedded in the .novel file as a base64 data URL (~4/3 of its size), hence the
+   size cap. SVG is safe here: drawn through an <img>/Image() it runs no scripts. */
 async function uploadMapImage() {
   const wm = worldMap();
   const apply = dataUrl => {
     wm.backgroundImage = dataUrl;
     loadMapImage();
     markDirty();
-    setTimeout(() => mapFit(), 60);
+    setTimeout(() => mapFit(), 60);   // give the new image a moment to decode so the fit uses its size
     toast('Map image set');
   };
   const inp = document.createElement('input');
@@ -3596,6 +3735,7 @@ function renderMapLocList() {
     const placed = !!wm.locations[l.id];
     const row = document.createElement('div');
     row.className = 'map-loc-row' + (placed ? ' placed' : '');
+    // locColor() only returns constants from LOC_TYPE_COLOR, so it is safe unescaped in style=
     row.innerHTML =
       `<span class="mlr-dot" style="background:${locColor(l)}"></span>
        <span class="mlr-name">${esc(l.name || '(unnamed)')}</span>
@@ -3619,7 +3759,7 @@ function centerOnLoc(l) {
 function placeLocation(id, rel) {
   const wm = worldMap();
   if (!rel) {
-    // drop at the current view centre (in relative image coords)
+    // drop at the view centre, clamped onto the image
     const sz = mapImageSize();
     const c = ms2w(mCanvas.clientWidth / 2, mCanvas.clientHeight / 2);
     rel = { x: Math.max(0, Math.min(1, c.x / sz.w)), y: Math.max(0, Math.min(1, c.y / sz.h)) };
@@ -3631,6 +3771,7 @@ function placeAllUnplaced() {
   const wm = worldMap();
   const unplaced = novel.locations.filter(l => !wm.locations[l.id]);
   if (!unplaced.length) { toast('All locations are already placed'); return; }
+  // spread them over a near-square grid inset from the image edges
   const cols = Math.ceil(Math.sqrt(unplaced.length));
   unplaced.forEach((l, i) => {
     const c = i % cols, r = Math.floor(i / cols);
@@ -3643,6 +3784,7 @@ function placeAllUnplaced() {
 function removePin(id) {
   const wm = worldMap();
   delete wm.locations[id];
+  // a route needs both ends on the map, so routes touching this pin go with it
   wm.routes = wm.routes.filter(r => r.fromLocationId !== id && r.toLocationId !== id);
   markDirty(); renderMapLocList(); mapDraw(); hideMapDetails();
   toast('Removed from map');
@@ -3663,6 +3805,8 @@ function showLocDetails(l) {
        <button class="tbtn" id="mdRoute">Add Route</button>
        <button class="tbtn nc-danger" id="mdRemove">Remove Pin</button>
      </div>`;
+  // Position in stage px (= canvas screen px; the canvas fills the stage) beside the pin,
+  // flipped/clamped to stay inside. Unhide first: offsetWidth/Height are 0 while hidden.
   const p = mw2s(...Object.values(locWorld(l)));
   el.classList.remove('hidden');
   const stage = $('.map-stage').getBoundingClientRect();
@@ -3680,11 +3824,14 @@ function hideMapDetails() { const el = $('#mapDetails'); if (el) el.classList.ad
 function openLocationInPanel(id) {
   const acc = $('.accordion[data-acc="locs"]');
   if (acc) acc.classList.add('open');
+  // #locList renders one .entity per location in novel.locations order
   const wrap = $$('#locList .entity')[novel.locations.findIndex(l => l.id === id)];
   if (wrap) { wrap.classList.add('open'); wrap.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
 }
 
 /* ---- layers ---- */
+/* Base layers are fixed visibility toggles (wm.baseLayers); custom layers (wm.layers) hold
+   drawings, and selecting one to draw on switches the canvas from pin/pan to drawing mode. */
 function renderMapLayers() {
   const host = $('#mapLayerList');
   if (!host) return;
@@ -3744,6 +3891,8 @@ function updateDrawToolsVisibility() {
 }
 
 /* ---- drawing interactions ---- */
+/* Deletes whole drawings with a stored point within 10 screen px of world point w. Only stored
+   points count: a line/rect/circle is hit only near its two stored points, not along its outline. */
 function eraseAt(w) {
   const layer = activeLayer();
   if (!layer) return;
@@ -3755,6 +3904,9 @@ function eraseAt(w) {
 
 /* ---- map events ---- */
 function mapMouse(e) { const r = mCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+/* mousedown precedence: an active drawing layer → draw; route mode → pick pins; else drag a pin
+   or pan. Move/up listen on window so a drag continues outside the canvas. mMoved tells a
+   click from a drag: a pin click opens its card, a click off pins edits the route under it, if any. */
 function initMapEvents() {
   mCanvas.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
@@ -3782,7 +3934,7 @@ function initMapEvents() {
     if (mDrawing) {
       const w = ms2w(m.x, m.y);
       if (mDrawing.tool === 'pen') mDrawing.points.push(w);
-      else mDrawing.points[1] = w;
+      else mDrawing.points[1] = w;   // shapes keep only [start, current]
       mMoved = true; mapDraw(); return;
     }
     if (mDragPin) {
@@ -3805,6 +3957,7 @@ function initMapEvents() {
     if (mDrawing) {
       const layer = activeLayer();
       const d = mDrawing; mDrawing = null;
+      // a click without movement leaves no second point: discard it
       const enough = d.tool === 'pen' ? d.points.length > 1 : d.points.length >= 2;
       if (layer && enough) { layer.drawings.push(d); markDirty(); }
       mapDraw(); return;
@@ -3854,6 +4007,8 @@ function initMapEvents() {
 }
 
 /* ---- export PNG ---- */
+/* Exports the canvas as it is on screen (current pan/zoom, at devicePixelRatio resolution),
+   not the whole map at image resolution. */
 function exportMapPng() {
   if (!mCanvas) return;
   const url = mCanvas.toDataURL('image/png');
@@ -3862,7 +4017,10 @@ function exportMapPng() {
   toast('Map exported as PNG');
 }
 
-/* ---- travel routes (rendering; creation wired in the routes section) ---- */
+/* ---- travel routes: rendering ---- */
+/* A route is a quadratic curve between the two pin tips, its control point 22 screen px off
+   the midpoint, perpendicular to A→B, so routes A→B and B→A bow apart instead of overlapping.
+   The one-way arrow and the name sit at the control point. */
 function drawRoutes() {
   const wm = worldMap();
   wm.routes.forEach(rt => {
@@ -3876,11 +4034,13 @@ function drawRoutes() {
     mCtx.strokeStyle = rt.color || '#c9a96e';
     mCtx.lineWidth = (hovered ? 4 : 2);
     mCtx.globalAlpha = hovered ? 1 : 0.9;
+    // free-text terrain mentioning a secret/passage draws dashed
     mCtx.setLineDash(rt.terrain && /secret|passage/i.test(rt.terrain) ? [6, 6] : []);
+    // same control point as routeControl(), which routeAt hit-tests against: keep them in sync
     const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
     const nx = -(pb.y - pa.y), ny = (pb.x - pa.x);
     const len = Math.hypot(nx, ny) || 1;
-    const cx = mx + (nx / len) * 22, cy = my + (ny / len) * 22;   // gentle curve
+    const cx = mx + (nx / len) * 22, cy = my + (ny / len) * 22;
     mCtx.beginPath(); mCtx.moveTo(pa.x, pa.y); mCtx.quadraticCurveTo(cx, cy, pb.x, pb.y); mCtx.stroke();
     mCtx.setLineDash([]);
     if (!rt.bidirectional) { const ang = Math.atan2(pb.y - cy, pb.x - cx); drawRouteArrow(cx, cy, ang, mCtx.strokeStyle); }
@@ -3892,7 +4052,7 @@ function drawRoutes() {
     }
     mCtx.restore();
   });
-  if (mRouteMode) {
+  if (mRouteMode) {   // ring around the chosen source pin's head
     const a = novel.locations.find(l => l.id === mRouteMode.fromId);
     if (a && worldMap().locations[a.id]) {
       const pa = mw2s(...Object.values(locWorld(a)));
@@ -3907,10 +4067,11 @@ function drawRouteArrow(x, y, ang, color) {
   mCtx.beginPath(); mCtx.moveTo(0, 0); mCtx.lineTo(-s, -s * 0.5); mCtx.lineTo(-s, s * 0.5); mCtx.closePath(); mCtx.fill();
   mCtx.restore();
 }
+// Declared here but read by mapDraw/mousemove above; those only run once the map is open.
 let mHoverRoute = null;
-let routeEditing = null, routeCharSel = null;
+let routeEditing = null, routeCharSel = null;   // routeCharSel: character picks, committed on Save
 
-/* Quadratic-curve control point used for both drawing and hit-testing a route. */
+/* Control point (screen px) of a route's curve, for hit-testing; drawRoutes inlines the same math. */
 function routeControl(pa, pb) {
   const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2;
   const nx = -(pb.y - pa.y), ny = (pb.x - pa.x);
@@ -3924,6 +4085,8 @@ function routeEndpoints(rt) {
   if (!a || !b || !wm.locations[a.id] || !wm.locations[b.id]) return null;
   return { pa: mw2s(...Object.values(locWorld(a))), pb: mw2s(...Object.values(locWorld(b))) };
 }
+/* Hit-test in screen px: flatten each Bézier into 12 segments, accept within 7 px. Topmost
+   (last drawn) route wins; hidden routes can't be hit. */
 function routeAt(sx, sy) {
   const wm = worldMap();
   if (!wm.baseLayers.routes) return null;
@@ -3943,7 +4106,8 @@ function routeAt(sx, sy) {
   }
   return null;
 }
-/* enter route mode: fromId may start null (pick a source first) */
+/* Route mode from the toolbar: two clicks (source, then destination). startRouteFrom (pin card /
+   context menu) already knows the source. Either way drawing mode is switched off. */
 function beginRoute() {
   if (placedLocs().length < 2) { toast('Place at least two locations on the map first'); return; }
   mActiveLayerId = ''; $('#mapActiveLayer').value = ''; updateDrawToolsVisibility();
@@ -3982,6 +4146,7 @@ function updateMapHint() {
 }
 
 /* ---- route details editor ---- */
+/* Edits rt in place, but only on Save; Close discards. From/To offer only placed locations. */
 function openRouteEditor(rt) {
   routeEditing = rt;
   routeCharSel = new Set(rt.characterIds || []);
@@ -4090,7 +4255,10 @@ addEventListener('resize', () => { if (mapOpen) mapResize(); });
 
 /* ================= COMPILE NOVEL ================= */
 let compOpen = false, compEventsInit = false;
-let comp = null;                 // { items:[...], settings:{...} }
+/* { items, settings } of the open novel's compilation. In memory only and reset when another
+   novel loads; just the named presets (novel.settings.compilationPresets) reach the file.
+   items: { type: 'scene', sceneId, chapterId, title? } | { type: 'part', title } | { type: 'break' } */
+let comp = null;
 let compPreview = false;
 let compDrag = null;
 
@@ -4116,6 +4284,7 @@ function buildDefaultOrder() {
   }));
   return items;
 }
+/* Drop items whose scene was deleted since the compilation was last open. */
 function syncCompItems() {
   comp.items = comp.items.filter(it => it.type !== 'scene' || findScene(it.sceneId));
 }
@@ -4148,7 +4317,6 @@ function renderComp() {
   if (compPreview) renderCompPreview();
 }
 
-/* ---- available scenes ---- */
 function renderCompAvailable() {
   const host = $('#compAvailable');
   const q = ($('#compSearch').value || '').trim().toLowerCase();
@@ -4173,7 +4341,7 @@ function renderCompAvailable() {
   if (!host.children.length) host.innerHTML = '<div class="map-empty">No scenes match.</div>';
 }
 
-/* ---- compilation order ---- */
+/* Rows carry their index into comp.items (data-idx); every change re-renders the list. */
 function renderCompOrder() {
   const host = $('#compOrder');
   host.innerHTML = '';
@@ -4213,10 +4381,13 @@ function updateCompTotals() {
   let words = 0;
   comp.items.forEach(it => { if (it.type === 'scene') { const f = findScene(it.sceneId); if (f) words += f.scene.wordCount || 0; } });
   $('#compTotal').textContent = 'Compiled document: ' + words.toLocaleString() + ' words';
-  $('#compPages').textContent = '~' + Math.max(1, Math.round(words / 300)) + ' pages';
+  $('#compPages').textContent = '~' + Math.max(1, Math.round(words / 300)) + ' pages';   // ~300 words per manuscript page
 }
 
-/* ---- order drag & drop (pointer based) ---- */
+/* Drag & drop into and within the order list, on pointer events like the chapter tree (the
+   HTML5 Drag API is unreliable in the webview). A press only becomes a drag after 5px, so a
+   click or a double-click (rename) on a row stays one; 'new' drags come from the available list.
+   The drop index is the first row whose vertical midpoint lies below the pointer. */
 function initCompEvents() {
   const order = $('#compOrder');
   const avail = $('#compAvailable');
@@ -4263,14 +4434,14 @@ function initCompEvents() {
     } else {
       let ti = d.targetIdx;
       const [moved] = comp.items.splice(d.idx, 1);
-      if (ti > d.idx) ti -= 1;
+      if (ti > d.idx) ti -= 1;   // targetIdx counted the moved row, which is gone now
       comp.items.splice(ti, 0, moved);
     }
     renderComp();
   });
 }
 
-/* ---- settings panel ---- */
+/* Every control is bound by its data-cs attribute to the comp.settings key of that name. */
 function renderCompSettings() {
   const s = comp.settings;
   const host = $('#compSettingsBody');
@@ -4345,7 +4516,12 @@ function renderCompSettings() {
   });
 }
 
-/* ---- compiled flow (shared by preview + all exporters) ---- */
+/* ---- compiled flow ----
+   buildFlow() turns comp.items into a format-neutral list of part / chapter / break / scene
+   entries that the preview and every exporter render. A chapter's heading appears once,
+   before the first of its scenes in the order, even when its scenes are scattered. Headings
+   get sequential anchors (h0, h1, …) that the HTML/EPUB TOCs link to. The scene separator
+   between two consecutive scenes is not in the flow; each renderer inserts it. */
 /* --- sep-text:start --- */
 function sepText(settings) {
   const s = settings;
@@ -4395,6 +4571,10 @@ function buildFlow(items, settings, chapters, findSceneFn) {
 function compFlow() {
   return buildFlow(comp.items, { ...comp.settings, language: resolveLanguage(novel) }, novel.chapters, findScene);
 }
+/* A scene's HTML for the compiled document; '' when it has no text and no image. With xhtml
+   (EPUB) it is re-serialized as XML, so void elements self-close and the markup is
+   well-formed. XMLSerializer stamps the XHTML namespace on every top-level element; that is
+   stripped, the enclosing book.xhtml already declares it. */
 function normalizeSceneHTML(html, xhtml) {
   const root = parseInert(html);
   sanitizeChildren(root);   // scenes are sanitized on load; this keeps previews and exports safe regardless
@@ -4405,6 +4585,7 @@ function normalizeSceneHTML(html, xhtml) {
   root.childNodes.forEach(n => { out += ser.serializeToString(n); });
   return out.replace(/ xmlns="[^"]*"/g, '');
 }
+/* &#160;, not &nbsp;: XHTML (EPUB) only knows XML's five predefined entities. */
 function flowToBodyHTML(flow, xhtml) {
   const s = comp.settings;
   let html = '';
@@ -4556,7 +4737,7 @@ function compileTXT() {
       lastScene = true;
     }
   });
-  return L.join('\n').replace(/\n{4,}/g, '\n\n\n');
+  return L.join('\n').replace(/\n{4,}/g, '\n\n\n');   // never more than two blank lines in a row
 }
 /* --- compile-txt:end --- */
 function compileHTML() {
@@ -4574,7 +4755,9 @@ async function doCompExport(kind) {
   if (kind === 'epub') return await exportCompEPUB();
   if (kind === 'docx') return await exportCompDOCX();
 }
-/* ---- binary output helpers (ZIP / base64) ---- */
+/* ---- binary output helpers (ZIP / base64) ----
+   IPC arguments travel as JSON, so binary exports cross to write_binary as base64. The
+   0x8000-byte chunks keep String.fromCharCode.apply under the engine's argument limit. */
 function bytesToBase64(bytes) {
   let bin = ''; const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
@@ -4614,7 +4797,14 @@ function crc32(bytes) {
   for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
   return (c ^ 0xFFFFFFFF) >>> 0;
 }
-/* Minimal ZIP writer (store / no compression) — enough for EPUB and DOCX. */
+/* Minimal ZIP writer: every entry STORED (method 0, no compression), no data descriptors,
+   extra fields or archive comment, and a zero DOS date/time, so equal input gives identical
+   bytes. Layout: per file a 30-byte local header + name + data, then one 46-byte central
+   directory record + name per file (pointing back at its local header's offset), then the
+   22-byte end-of-central-directory record. All integers little-endian; version 2.0 is what
+   plain stored entries need. Entries keep the given order, which EPUB relies on (mimetype
+   first). Names are encoded as UTF-8 but the UTF-8 flag (bit 11) is not set, so keep them
+   ASCII. No ZIP64. */
 function makeZip(files) {
   const u16 = n => [n & 255, (n >> 8) & 255];
   const u32 = n => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
@@ -4646,11 +4836,13 @@ function makeZip(files) {
    Type0 / Identity-H composite font.
 
    Why an embedded font: the PDF standard-14 fonts (Courier & co.) contain no Cyrillic
-   glyphs at all, so they cannot render Russian text under any encoding — the old code
-   papered over that by rewriting every codepoint above 255 as '?'. IBM Plex Mono covers
-   Latin + Cyrillic + Greek and is monospaced at exactly 600/1000 em, which is the
-   advance the layout code below assumes (`size * 0.6` per glyph). Identity-H means the
-   content stream carries glyph ids as hex strings instead of Latin-1 literals. */
+   glyphs at all, so they cannot render Russian text under any encoding. IBM Plex Mono
+   covers Latin + Cyrillic + Greek and is monospaced at exactly 600/1000 em, which is the
+   advance the layout code below assumes (`size * 0.6` per glyph) — there is no per-glyph
+   width measuring, so the layout is only right for a monospaced font. Identity-H means the
+   content stream carries 2-byte glyph ids as hex strings instead of Latin-1 literals.
+   The whole font file is embedded, not a subset. Coordinates are PDF points (1/72 in) with
+   the origin at the bottom-left of the page, so the layout cursor moves down by decreasing y. */
 
 /* --- pdf-text-core:start --- pure, DOM-free helpers. test/pdf-cyrillic.test.js
    extracts everything between these two markers and exercises it in isolation, so keep
@@ -4676,7 +4868,10 @@ function normalizeForPdf(str) {
 function pdfLen(str) { return [...(str || '')].length; }
 
 /* cmap subtable reader: formats 4 (BMP) and 12 (full Unicode) cover every font we
-   bundle and virtually every TrueType font in the wild. */
+   bundle and virtually every TrueType font in the wild. Of the subtables present it takes
+   the best by score: Windows full-Unicode (3,10) format 12 > any Unicode-platform (0,*)
+   format 12 > Windows BMP (3,1) format 4 > Unicode-platform format 4. All values are
+   big-endian (DataView's default). */
 function readTtfCmap(dv, bytes, cmapOff) {
   const n = dv.getUint16(cmapOff + 2);
   let best = null, bestScore = -1;
@@ -4695,6 +4890,9 @@ function readTtfCmap(dv, bytes, cmapOff) {
   if (!best) throw new Error('font has no usable cmap subtable');
   const map = new Map();
   if (best.fmt === 4) {
+    // Four parallel arrays of segX2/2 entries follow the 14-byte header: endCode, (2-byte
+    // pad) startCode, idDelta, idRangeOffset. A nonzero idRangeOffset is a byte offset
+    // from that very array slot into glyphIdArray. The 0xFFFF code is the end sentinel.
     const o = best.off, segX2 = dv.getUint16(o + 6);
     const endO = o + 14, startO = endO + segX2 + 2, deltaO = startO + segX2, rangeO = deltaO + segX2;
     for (let i = 0; i < segX2 / 2; i++) {
@@ -4714,6 +4912,7 @@ function readTtfCmap(dv, bytes, cmapOff) {
       }
     }
   } else {
+    // format 12: 16-byte header, then groups of (startCode, endCode, startGlyphId), 12 bytes each
     const o = best.off, groups = dv.getUint32(o + 12);
     for (let i = 0; i < groups; i++) {
       const p = o + 16 + i * 12;
@@ -4723,7 +4922,8 @@ function readTtfCmap(dv, bytes, cmapOff) {
   }
   return map;
 }
-/* PostScript name (name id 6), sanitised for use as a PDF name object. */
+/* PostScript name (name id 6), sanitised for use as a PDF name object. A Windows-platform
+   record (UTF-16BE) wins; a Mac one (single-byte) is the fallback. */
 function readTtfPsName(dv, nameTbl) {
   if (!nameTbl) return '';
   const off = nameTbl.off, count = dv.getUint16(off + 2), strOff = off + dv.getUint16(off + 4);
@@ -4744,7 +4944,12 @@ function readTtfPsName(dv, nameTbl) {
   return clean(mac);
 }
 /* Read just enough of a TrueType file to embed it and map codepoints -> glyph ids.
-   All metrics are returned in PDF glyph space (1000ths of an em). */
+   All metrics are returned in PDF glyph space (1000ths of an em). The numeric offsets are
+   field positions from the OpenType spec: head (unitsPerEm @18, xMin..yMax @36-42), hhea
+   (ascender @4, descender @6, numberOfHMetrics @34), maxp (numGlyphs @4), post
+   (italicAngle 16.16 @4, isFixedPitch @12), OS/2 (usWeightClass @4, sCapHeight @88, which
+   exists from table version 2). Accepts 0x00010000 and Apple's 'true' sfnt tags; CFF-based
+   ('OTTO') fonts are rejected because /FontFile2 only takes glyf outlines. */
 function parseTrueType(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const sfnt = dv.getUint32(0);
@@ -4768,7 +4973,8 @@ function parseTrueType(bytes) {
     bytes, unitsPerEm,
     numGlyphs: dv.getUint16(tbl.maxp.off + 4),
     cmap,
-    // monospaced font -> one advance for every glyph, which is what /DW encodes
+    // monospaced font -> one advance for every glyph, which is what /DW encodes. Taken from
+    // the space glyph's hmtx entry; glyphs past numberOfHMetrics share the last one.
     advance: scale(dv.getUint16(tbl.hmtx.off + Math.min(spaceGid == null ? 1 : spaceGid, numHMetrics - 1) * 4)),
     bbox: [scale(dv.getInt16(head + 36)), scale(dv.getInt16(head + 38)), scale(dv.getInt16(head + 40)), scale(dv.getInt16(head + 42))],
     ascent: scale(dv.getInt16(hhea + 4)),
@@ -4795,7 +5001,9 @@ function pdfGlyphHex(text, font, report) {
   }
   return out;
 }
-/* /ToUnicode CMap, so the text stays selectable, searchable and copy-pasteable. */
+/* /ToUnicode CMap, so the text stays selectable, searchable and copy-pasteable. Maps each
+   glyph id used to its codepoint (UTF-16BE, a surrogate pair above the BMP), in
+   beginbfchar blocks of at most 100 entries — the limit the CMap format sets per block. */
 function pdfToUnicodeCMap(used) {
   const hex4 = n => n.toString(16).toUpperCase().padStart(4, '0');
   const uni = cp => {
@@ -4844,7 +5052,8 @@ async function loadPdfFont(res) {
   if (!r.ok) throw new Error(`could not read the embedded font ${url} (HTTP ${r.status})`);
   return (pdfFontCache[res] = parseTrueType(new Uint8Array(await r.arrayBuffer())));
 }
-/* Byte-for-byte string so the final latin-1 cast round-trips the font file intact. */
+/* One char per byte (0-255), so the font file can be spliced into the PDF string and the
+   final `charCodeAt & 0xff` cast turns it back into the same bytes. */
 function bytesToBinary(bytes) {
   let s = ''; const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
@@ -4999,7 +5208,6 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
     if (s.dateText) { blank(0.5); wrap(s.dateText, { align: 'center' }); }
     newPage();
   }
-  // toc (after title)
   const tocEntries = compTocEntries(flow, s);
   /* Page numbers aren't known when a leading TOC is emitted, so each entry is drawn as
      its bare title and patched once the body is laid out. One entry is always one line,
@@ -5053,6 +5261,7 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
 async function exportCompPDF() {
   const s = comp.settings;
   const flow = compFlow();
+  // Points: Letter 8.5×11 in, A4 210×297 mm. Margins ≈ 15 / 23 / 32 mm.
   const pageW = s.pageSize === 'Letter' ? 612 : 595;
   const pageH = s.pageSize === 'Letter' ? 792 : 842;
   const marg = ({ narrow: 42, normal: 64, wide: 90 })[s.margins] || 64;
@@ -5061,7 +5270,7 @@ async function exportCompPDF() {
   const usableW = pageW - marg * 2;
   const charW = size * 0.6;                       // IBM Plex Mono advance = 0.6em
   const maxChars = Math.max(8, Math.floor(usableW / charW));
-  const F = { normal: 'F1', bold: 'F2', italic: 'F3' };
+  const F = { normal: 'F1', bold: 'F2', italic: 'F3' };   // font resource names, keys of PDF_FONT_FILES
 
   const layout = createPdfLayout({
     pageW, pageH, margin: marg, fontSize: size, lineHeight: lh,
@@ -5088,6 +5297,12 @@ async function exportCompPDF() {
     return;
   }
 
+  /* The file is built as a JS string in which every char is one byte: font files go in via
+     bytesToBinary(), text only as ASCII hex glyph ids. That is what makes string lengths
+     valid /Length values and string offsets valid xref byte offsets. Objects that point at
+     later ones (catalog, page tree, ToUnicode) get their number reserved now and their body
+     filled in once the targets exist. Per font: FontFile2 stream -> FontDescriptor ->
+     CIDFontType2 descendant -> Type0 font, which is what the page resources reference. */
   const objs = [];
   const add = body => { objs.push(body); return objs.length; };   // returns 1-based obj number
   const catalog = add('');            // 1 (filled later)
@@ -5099,12 +5314,17 @@ async function exportCompPDF() {
     const toUni = add('');            // reserved; filled once every page is encoded
     reports[res] = { missing: new Set(), used: new Map(), toUni };
     const raw = bytesToBinary(f.bytes);
+    // /Length1 is the decoded font length; with no filter it equals /Length.
     const fileObj = add(`<< /Length ${raw.length} /Length1 ${raw.length} >>\nstream\n${raw}\nendstream`);
-    const flags = 4 | (f.fixedPitch ? 1 : 0) | (f.italicAngle ? 64 : 0);   // 4 = symbolic
+    // Flag bits: 1 FixedPitch, 4 Symbolic (glyphs are addressed by id, outside any standard
+    // Latin charset), 64 Italic. StemV is required but unmeasured: a weight-based guess.
+    const flags = 4 | (f.fixedPitch ? 1 : 0) | (f.italicAngle ? 64 : 0);
     const desc = add(`<< /Type /FontDescriptor /FontName /${f.psName} /Flags ${flags} ` +
       `/FontBBox [${f.bbox.join(' ')}] /ItalicAngle ${f.italicAngle} /Ascent ${f.ascent} ` +
       `/Descent ${f.descent} /CapHeight ${f.capHeight} /StemV ${f.weight >= 600 ? 140 : 80} ` +
       `/FontFile2 ${fileObj} 0 R >>`);
+    // CID = glyph id (Identity encoding + /CIDToGIDMap /Identity); /DW, the default width,
+    // covers every glyph of a monospaced font, so no /W array is needed.
     const cidFont = add(`<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${f.psName} ` +
       `/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> ` +
       `/FontDescriptor ${desc} 0 R /DW ${f.advance} /CIDToGIDMap /Identity >>`);
@@ -5127,6 +5347,7 @@ async function exportCompPDF() {
       stream += '\n';
     });
     if (s.pageNumber && s.pageNumber !== 'none') {
+      // drawn inside the bottom margin, below the last text line
       const label = String((s.startPage || 1) + pi);
       const pnx = s.pageNumber === 'right' ? (pageW - marg - label.length * (size * 0.6)) : (pageW / 2 - label.length * (size * 0.6) / 2);
       stream += `/${F.normal} ${Math.max(9, size - 1)} Tf 1 0 0 1 ${pnx.toFixed(2)} ${(marg * 0.6).toFixed(2)} Tm ` +
@@ -5148,6 +5369,8 @@ async function exportCompPDF() {
   const offsets = [];
   objs.forEach((body, i) => { offsets[i] = pdf.length; pdf += `${i + 1} 0 obj\n${body}\nendobj\n`; });
   const xrefStart = pdf.length;
+  // Every xref entry must be exactly 20 bytes, hence the space before each '\n'. Entry 0 is
+  // the mandatory free-list head.
   pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
   offsets.forEach(off => { pdf += String(off).padStart(10, '0') + ' 00000 n \n'; });
   pdf += `trailer\n<< /Size ${objs.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
@@ -5164,7 +5387,12 @@ async function exportCompPDF() {
   }
 }
 
-/* ---- EPUB (valid EPUB3 package) ---- */
+/* ---- EPUB (valid EPUB3 package) ----
+   A ZIP whose first entry is the uncompressed `mimetype`; META-INF/container.xml points at
+   OEBPS/content.opf, which lists the parts and the spine. The whole book is one
+   book.xhtml, so TOC links are fragment links to the flow's heading anchors. nav.xhtml is
+   the EPUB 3 table of contents; toc.ncx duplicates it for EPUB 2 readers. Every XHTML part
+   must be well-formed XML: scene HTML goes through normalizeSceneHTML(…, true). */
 /* --- epub-xml:start --- pure, DOM-free builders for the EPUB envelope: container.xml,
    content.opf, nav.xhtml, toc.ncx and the book.xhtml wrapper. test/epub-xml.test.js lifts
    them out from between these markers and runs them in isolation, so they must stay free
@@ -5197,7 +5425,7 @@ async function exportCompEPUB() {
   const title = s.titleText || novel.title || 'Untitled';
   const author = s.author || 'Unknown';
   const uid = 'urn:uuid:' + uuid();
-  const modifiedISO = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  const modifiedISO = new Date().toISOString().replace(/\.\d+Z$/, 'Z');   // dcterms:modified allows no fractional seconds
   const flow = compFlow();
   const body = flowToBodyHTML(flow, true);
   const lang = resolveLanguage(novel);
@@ -5213,6 +5441,8 @@ async function exportCompEPUB() {
   const opf = buildEpubOpfXml({ uid, title, author, modifiedISO, lang });
   const container = buildEpubContainerXml();
   const enc = new TextEncoder();
+  // mimetype must come first: readers sniff its content at a fixed offset (byte 38), which
+  // holds only because makeZip() stores it with no extra field.
   const files = [
     { name: 'mimetype', bytes: enc.encode('application/epub+zip') },
     { name: 'META-INF/container.xml', bytes: enc.encode(container) },
@@ -5224,7 +5454,8 @@ async function exportCompEPUB() {
   ];
   await saveBinary(compFileName('epub'), makeZip(files), 'application/epub+zip');
 }
-/* XHTML-safe title page / TOC (avoid unescaped entities) */
+/* EPUB counterparts of titlePageHTML()/tocHTML(); keep the markup in step. tocHTMLx takes
+   the language its caller already resolved. */
 function titlePageHTMLx() {
   const s = comp.settings;
   if (!s.titlePage) return '';
@@ -5242,10 +5473,19 @@ function tocHTMLx(flow, lang) {
     entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') + `</ul></section>`;
 }
 
-/* ---- DOCX (minimal OOXML) ---- */
+/* ---- DOCX (minimal OOXML) ----
+   The smallest package Word opens: [Content_Types].xml, _rels/.rels (pointing at the main
+   part) and word/document.xml. There is no styles.xml, numbering or fonts part, so every
+   paragraph carries direct formatting and the typeface and base size are Word's defaults;
+   the compile dialog's font and font size do not reach the DOCX. Headings are bold, sized
+   paragraphs, not Heading styles. OOXML units used below: twips (1/20 pt; 1440 = 1 in),
+   half-points for w:sz (32 = 16 pt), and w:line in 240ths of a line under lineRule="auto". */
 /* --- docx-strings:xmlesc:start --- */
 function xmlEsc(s) { return esc(String(s == null ? '' : s)); }
 /* --- docx-strings:xmlesc:end --- */
+/* Scene HTML -> [{ tag: 'p'|'h1'|'h2'|'h3', runs: [{ text, b, i }] }], one block per
+   top-level node; shared by the DOCX and PDF exporters. Only bold/italic survive, and
+   a <br> becomes a '\n' run. */
 function htmlToBlocks(html) {
   const d = parseInert(html);
   const blocks = [];
@@ -5282,6 +5522,9 @@ function htmlToBlocks(html) {
 /* settings.language -> the OOXML locale every run is tagged with (spellcheck, hyphenation).
    A language missing here simply gets no w:lang, leaving it to Word's default. */
 const DOCX_LOCALE = { en: 'en-US', ru: 'ru-RU' };
+/* One <w:p>. w:jc "both" is justified; 720 twips = 1.27 cm, the same first-line indent as
+   the HTML/EPUB CSS; w:after 120 twips = 6 pt. A '\n' in a run becomes a <w:br/>;
+   xml:space="preserve" keeps leading/trailing spaces. */
 function docxP(runs, opts, settings) {
   opts = opts || {};
   const s = settings;
@@ -5349,6 +5592,8 @@ function buildDocxBodyXml(flow, settings, htmlToBlocksFn) {
   if (hasToc && s.tocPosition === 'end') { bodyXml += docxPageBreak(); bodyXml += docxTOC(flow, s); }
   return bodyXml;
 }
+/* Page size in twips (Letter 8.5×11 in, A4 210×297 mm) with fixed 1-inch margins; the
+   dialog's margin choice applies to the PDF only. w:sectPr must be the last child of w:body. */
 function buildDocxDocumentXml({ bodyXml, pageSize }) {
   const letter = pageSize === 'Letter';
   const sect = `<w:sectPr><w:pgSz w:w="${letter ? 12240 : 11906}" w:h="${letter ? 15840 : 16838}"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>`;
@@ -5518,6 +5763,13 @@ function shortcutKey(e) {
   return key;
 }
 /* --- shortcut-key:end --- */
+/* One handler for every global shortcut; the first matching line wins, so order matters.
+   Escape closes the topmost layer first (backup dialog, graph side panel, graph, corkboard,
+   map route editor / route mode, map, compile, note card, add-note popup, focus mode), and
+   Ctrl+Shift+S is tested before Ctrl+S, which does not exclude Shift. Letters are compared
+   via shortcutKey(), so shortcuts work on non-Latin layouts; arrow keys and Escape via e.key.
+   While a native file dialog is pending, the capture listener next to pickPath() swallows
+   every key before it gets here. */
 document.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey;
   const key = shortcutKey(e);
@@ -5544,10 +5796,15 @@ document.addEventListener('keydown', e => {
   if (mod && key === '\\') { e.preventDefault(); $('#toggleLeft').click(); return; }
   if (mod && key === '/') { e.preventDefault(); $('#toggleRight').click(); return; }
   if (e.key === 'Escape' && focusMode) { setFocus(false); return; }
-  if (mod && (key === 'b' || key === 'i')) { updateToolbarState(); } // let native handle, refresh state
+  if (mod && (key === 'b' || key === 'i')) { updateToolbarState(); } // no preventDefault: contenteditable applies bold/italic itself
 });
 
 /* ================= MENU EVENTS FROM RUST ================= */
+/* The native menu (build_menu in lib.rs) emits a `menu` event whose payload is the clicked
+   item's id; the ids below must match the MenuItem ids there. "Open Recent" items carry
+   "recent:<path>". That submenu is built once at launch, and the backend grants those
+   paths at the same time, so loading one passes check_path. Menu clicks are ignored while
+   a native file dialog is pending. */
 if (hasTauri) {
   listen('menu', e => {
     if (nativeDialogOpen) return;
@@ -5577,22 +5834,28 @@ if (hasTauri) {
     }
   });
 
-  /* intercept OS-level close (Alt+F4, taskbar) -> route through our dialog */
+  /* OS-level close (Alt+F4, taskbar, native title bar) goes through the unsaved-changes
+     dialog too. The window is then closed by close_window, which destroys it without
+     raising another CloseRequested. */
   const win = TAURI.window.getCurrentWindow();
   win.onCloseRequested(ev => {
     ev.preventDefault();
     requestClose();
   });
-  /* keep maximize icon in sync when the OS changes window state */
+  /* keep the maximize icon in sync when the OS changes the window state */
   win.onResized(() => refreshMaxIcon());
 }
 
 /* ================= WINDOW CONTROLS (frameless) ================= */
+/* The window has no OS frame (decorations: false in tauri.conf.json): the top bar is the
+   drag handle (data-tauri-drag-region in index.html) and #winControls are the minimize /
+   maximize / close buttons. "Use native title bar" brings the OS frame back and hides them. */
 if (!hasTauri) $('#winControls').style.display = 'none'; // browser: no native controls
 async function destroyWindow() {
   if (hasTauri) await invoke('close_window');
 }
-/* Three-option close flow */
+/* Every close path (our button, the OS) ends here: close at once when nothing is unsaved,
+   otherwise ask Save / Discard / Cancel. */
 function requestClose() {
   if (nativeDialogOpen) return;   // finish (or cancel) the open file dialog first
   // Clean close: the open novel matches disk. With no novel open (start menu, e.g. after
@@ -5633,12 +5896,16 @@ $('#winMax').addEventListener('click', async () => {
 });
 
 /* ================= SETTINGS TOGGLES ================= */
+/* App-wide UI preferences live in the webview's localStorage, per machine — not in the
+   .novel file, whose settings belong to the novel. */
 const PREF_KEY = 'novelcraft:prefs';
 function loadPrefs() {
   try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch { return {}; }
 }
 function savePrefs(p) { try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch (_) {} }
 
+/* The stored preference is the source of truth: startup re-applies it on every launch,
+   whatever frame the window opened with. body.native-titlebar hides the custom controls. */
 async function applyNativeTitlebar(on) {
   document.body.classList.toggle('native-titlebar', on);
   if (hasTauri) { try { await invoke('set_decorations', { on }); } catch (_) {} }
@@ -5656,11 +5923,14 @@ function applyTypewriter(on) {
 $('#typewriterToggle').addEventListener('change', e => applyTypewriter(e.target.checked));
 
 /* ================= STARTUP ================= */
+/* Runs once, last in the file, so every handler above is wired before a novel loads. An
+   unsaved-work recovery is offered before the last file is reopened: a leftover recovery
+   copy holds work that never reached disk, and whichever way the user answers, the last
+   file is not opened on top of it. */
 async function startup() {
   refreshUI();               // no novel yet -> shows the empty state
   setSaved();
 
-  // restore user preferences
   const prefs = loadPrefs();
   applyNativeTitlebar(!!prefs.nativeTitlebar);
   applyTypewriter(!!prefs.typewriter);

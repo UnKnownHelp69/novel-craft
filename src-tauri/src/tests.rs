@@ -1,7 +1,8 @@
-// Unit tests for the file-access allowlist and the write helpers in lib.rs.
+// Unit tests for lib.rs: the file-access allowlist, atomic writes, base64 and backups.
 use super::*;
 
-/// A fresh scratch directory under the system temp dir.
+/// A fresh scratch directory under the system temp dir. Named per test because cargo runs
+/// tests on parallel threads, and per process so concurrent `cargo test` runs don't collide.
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("novelcraft-test-{}-{}", name, std::process::id()));
     let _ = fs::remove_dir_all(&dir);
@@ -194,8 +195,9 @@ fn backup_dirs_are_stable_per_file() {
 
 #[test]
 fn pruning_keeps_the_newest_twenty_and_one_per_day_for_a_month() {
-    let now = 100 * DAY + DAY / 2; // midday, so the offsets below stay inside their day
-                                   // 30 backups today, newest first, ten minutes apart
+    // midday, so the offsets below stay inside their day
+    let now = 100 * DAY + DAY / 2;
+    // 30 backups today, newest first, ten minutes apart
     let today: Vec<u64> = (0..30).map(|i| now - i * 600).collect();
     let doomed = backups_to_prune(&today, now);
     assert_eq!(

@@ -8,7 +8,11 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <!-- ============ TOP BAR ============ -->
+  <!-- ============ TOP BAR ============
+       The window is frameless, so this bar is the title bar. A bare data-tauri-drag-region
+       drags (and double-click maximizes) only when the press lands on that element itself,
+       i.e. on the bar's empty space; the titles and buttons inside keep their own clicks.
+       .topbar-right carries no attribute: it is all buttons. -->
   <header id="topbar" data-tauri-drag-region>
     <div class="topbar-left" data-tauri-drag-region>
       <button class="icon-btn panel-toggle" id="toggleLeft" title="Toggle panels (Ctrl+\)">◀</button>
@@ -503,6 +507,8 @@
   <!-- Toasts -->
   <div id="toastHost" class="toast-host"></div>
 
+  <!-- The CSP (tauri.conf.json) forbids inline scripts and on*= attributes: all event wiring
+       lives in app.js. -->
   <script src="app.js"></script>
 </body>
 </html>

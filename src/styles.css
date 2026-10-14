@@ -1,4 +1,15 @@
-/* ========= NovelCraft theme ========= */
+/* ========= NovelCraft theme =========
+   Stacking order (z-index), bottom to top. Values below 10 only order siblings inside one
+   container (graph side panel 1, tree drop markers 2, hovered cork card 3, margin-note strip 5,
+   corkboard over the editor and map popups 6).
+     30   focus-mode exit tab            50   top-bar dropdown menus
+     410–420  note popup < note card < note tooltip (editor-level, below the overlays)
+     500  full-window tools: graph, world map, compile
+     620  context menus (also opened inside those tools)
+     640  modals (confirm/prompt, route, backups; opened from tools and context menus)
+     660  toasts (an undo toast stays clickable above everything)
+     max  body.native-dialog shield while a native file dialog is open
+   Keep new layers inside this ladder. */
 :root{
   --bg:#1a1a1f;
   --panel:#22222b;
@@ -22,12 +33,19 @@ body{
   font-size:14px;
   display:flex;
   flex-direction:column;
+  /* The page itself never scrolls: each pane scrolls on its own. The window is at least
+     1100x600 (tauri.conf.json), so the fixed side panels (250 + 300px) leave the editor
+     column at least ~550px. */
   overflow:hidden;
+  /* App chrome is not selectable, like a native app; the editor and the contenteditable
+     titles opt back in with user-select:text. With this in place HTML5 drag-and-drop is
+     unreliable in WebView2, which is why the tree is reordered with pointer events. */
   user-select:none;
 }
 button,input,select,textarea{font-family:inherit;color:inherit;}
 
-/* Scrollbars */
+/* Scrollbars: ::-webkit-scrollbar is honoured by all three webviews (WebView2, WKWebView,
+   WebKitGTK). */
 *::-webkit-scrollbar{width:9px;height:9px;}
 *::-webkit-scrollbar-track{background:transparent;}
 *::-webkit-scrollbar-thumb{background:var(--accent-dim);border-radius:6px;border:2px solid var(--bg);}
@@ -49,6 +67,8 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
 .topbar-left>*{flex-shrink:0;}
 .topbar-right{flex-shrink:0;}
 .tbtn{white-space:nowrap;}
+/* min-width = the save indicator's 52px + the 10px gap: it keeps its room even when the
+   breadcrumb has shrunk to nothing. */
 .topbar-center{flex:1;min-width:62px;display:flex;align-items:center;justify-content:center;gap:10px;overflow:hidden;}
 .app-title{color:var(--accent);font-weight:700;letter-spacing:.5px;font-size:15px;}
 .chapter-title{
@@ -106,7 +126,8 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
 .tbtn.subtle{background:transparent;border-color:transparent;color:var(--text-dim);}
 .tbtn.subtle:hover{background:var(--editor-bg);color:var(--text);box-shadow:none;}
 
-/* window controls (frameless) */
+/* Window controls for the frameless window (decorations:false); hidden when the user turns
+   on "Use native title bar" (body.native-titlebar). */
 .win-controls{display:flex;align-items:center;gap:2px;margin-left:6px;-webkit-app-region:no-drag;}
 .win-btn{
   width:34px;height:30px;background:transparent;border:none;color:var(--text-dim);
@@ -116,7 +137,9 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
 .win-btn:hover{background:var(--editor-bg);color:var(--text);}
 .win-btn.win-close:hover{background:#c0392b;color:#fff;}
 body.native-titlebar .win-controls{display:none;}
-/* A native file dialog is open (pickPath): nothing behind it may be clicked. */
+/* A native file dialog is open (pickPath). The dialog runs off the main thread and cannot be
+   made modal on Linux, so this covers the whole window above every other layer; app.js
+   swallows the keyboard. */
 body.native-dialog::after{content:'';position:fixed;inset:0;z-index:2147483647;cursor:progress;}
 
 /* settings toggles */
@@ -147,8 +170,8 @@ body.native-dialog::after{content:'';position:fixed;inset:0;z-index:2147483647;c
 #rightPanel{width:300px;min-width:300px;overflow-y:auto;border-left:1px solid var(--border);}
 #leftPanel{border-right:1px solid var(--border);}
 .side-panel.collapsed{width:0;min-width:0;opacity:0;pointer-events:none;}
-/* ID-level override so the collapsed state beats #rightPanel's width:300px
-   (an ID selector) — both panels now fully slide to 0 identically. */
+/* .side-panel.collapsed alone loses to #rightPanel{width:300px} (ID specificity), so the
+   collapsed state is repeated at ID level for both panels. */
 #leftPanel.collapsed,#rightPanel.collapsed{width:0;min-width:0;padding:0;border:none;opacity:0;pointer-events:none;overflow:hidden;}
 
 .panel-head{
@@ -234,7 +257,8 @@ body.native-dialog::after{content:'';position:fixed;inset:0;z-index:2147483647;c
 .bc-sep{color:var(--text-dim);font-size:11px;}
 
 /* scene metadata bar — the bar background spans full width, but its content is
-   constrained to the editor column so the dropdowns stay put when panels hide */
+   constrained to the editor column so the dropdowns stay put when panels hide.
+   max-width and side padding mirror #editorWrap; change them together. */
 .scene-meta{padding:5px 0;background:var(--panel);border-bottom:1px solid var(--border);}
 .scene-meta-inner{display:flex;align-items:center;width:100%;max-width:820px;margin:0 auto;padding:0 30px;}
 .metadata-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;}
@@ -267,14 +291,16 @@ body.focus .scene-meta,body.focus .meta-show{display:none;}
 .editor p{margin:0 0 .8em;}
 .editor:empty::before{content:"Start writing your chapter…";color:var(--text-dim);}
 .md-editor{resize:none;font-family:'Roboto Mono',monospace;white-space:pre-wrap;}
-.hidden{display:none !important;}
+.hidden{display:none !important;}   /* !important: must beat the display:flex of the element's own class */
 
-/* Focus mode */
+/* Focus mode. The top bar collapses to zero height, so the only mouse way out is the exit
+   tab: parked above the editor area at top:-40px, app.js adds .peek while the pointer is at
+   the top edge. */
 body.focus #topbar{transform:translateY(-100%);height:0;min-height:0;opacity:0;overflow:hidden;}
 body.focus #leftPanel,body.focus #rightPanel{width:0;min-width:0;opacity:0;pointer-events:none;}
-/* Focus mode hides the side panels, so the editor expands into a wider,
-   comfortable column (~850px, or up to 70% of the window) — more space, not less. */
+/* With the panels gone the column widens: 70% of the window, at most 850px. */
 body.focus #editorWrap{width:70%;max-width:850px;}
+/* Typewriter mode: the padding lets the first and last lines scroll to mid-screen. */
 body.focus.typewriter .editor{padding-top:30vh;padding-bottom:30vh;}
 .exit-focus{
   position:absolute;top:-40px;left:50%;transform:translateX(-50%);
@@ -377,9 +403,12 @@ body.focus .exit-focus.peek{top:0;}
 
 /* ========= MARGIN NOTES ========= */
 .dropdown-sep{height:1px;background:var(--border);margin:4px 0;}
+/* CSS Custom Highlight API: app.js registers the ranges (CSS.highlights), so annotated text is
+   marked without touching the editor's DOM or its dirty state. */
 ::highlight(note-active){background-color:rgba(201,169,110,.2);}
 
-/* margin strip + dots (inside #editorWrap, scrolls with content) */
+/* margin strip + dots (inside #editorWrap, scrolls with content). The strip lets clicks
+   through to the editor; only the dots take the pointer. */
 .margin-notes{position:absolute;top:0;right:2px;width:26px;height:100%;pointer-events:none;z-index:5;}
 .note-dot{
   position:absolute;right:8px;width:10px;height:10px;padding:0;border-radius:50%;
@@ -513,7 +542,10 @@ body.focus .exit-focus.peek{top:0;}
 .ctx-sub-left > .ctx-sub-menu{left:auto;right:100%;}
 .ctx-sub.open > .ctx-sub-menu{display:flex;}   /* .open: set by showCtx (hover intent) */
 
-/* ========= CORKBOARD ========= */
+/* ========= CORKBOARD =========
+   Sits on top of the editor area (z-index 6); corkboard-mode hides what is underneath.
+   Each card's slight tilt (--rot) is set by app.js from the scene id, so it stays the same
+   across renders. */
 body.corkboard-mode .editor-scroll,body.corkboard-mode #exitFocus,body.corkboard-mode .scene-meta,body.corkboard-mode .meta-show{display:none;}
 .corkboard{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg);
   background-image:radial-gradient(circle, rgba(255,255,255,.03) 1px, transparent 1px);background-size:22px 22px;z-index:6;}
@@ -700,6 +732,7 @@ body.corkboard-mode .editor-scroll,body.corkboard-mode #exitFocus,body.corkboard
 .co-part-t{flex:1;color:var(--accent);font-weight:700;font-size:13px;letter-spacing:.03em;cursor:pointer;}
 .co-break{background:transparent;border-style:dashed;justify-content:center;}
 .co-break-t{flex:1;text-align:center;}
+/* Paper colour on purpose, not a theme token: the preview shows the printed page. */
 .compile-preview{flex:1;overflow-y:auto;background:#f4f1ea;padding:24px;}
 .compile-foot{display:flex;justify-content:space-between;padding:8px 14px;border-top:1px solid var(--border);font-size:12px;color:var(--text-dim);}
 .compile-settings{width:270px;min-width:250px;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;padding:10px;overflow:hidden;}

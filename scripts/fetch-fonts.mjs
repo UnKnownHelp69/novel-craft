@@ -1,6 +1,16 @@
-/* Downloads the woff2 files for the bundled Google Fonts so the app works
-   fully offline. Run once with internet access:  node scripts/fetch-fonts.mjs
-   Requires Node 18+ (built-in fetch). */
+/* `npm run fonts`: downloads the editor's Google Fonts into src/fonts/*.woff2, which
+   src/fonts/fonts.css loads when the font is not installed locally. The files are
+   ignored by version control, so they are only bundled into builds made after running
+   this; CI and release builds never run it. Without them the editor falls back to
+   system fonts. (The PDF export's fonts are separate, committed .ttf files in
+   src/fonts/pdf/.)
+
+   KNOWN ISSUE: this currently saves nothing. Google Fonts chooses the format by
+   User-Agent, and the UA below (no browser engine token) is served TrueType, so the
+   woff2 regex never matches. A modern-browser UA gets woff2, but split into
+   unicode-range subsets with cyrillic-ext first, so taking only the first url would
+   drop Latin. A fix has to fetch the latin and cyrillic subsets (or a full TTF, with
+   fonts.css changed to match). */
 import { writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -8,7 +18,7 @@ import { dirname, join } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const outDir = join(__dirname, '..', 'src', 'fonts');
 
-// Google Fonts css2 endpoints; we parse out the first woff2 url for weight 400.
+// Weight 400 only, although fonts.css declares each face for the range 400–700.
 const fonts = {
   'lora.woff2': 'https://fonts.googleapis.com/css2?family=Lora:wght@400&display=swap',
   'merriweather.woff2': 'https://fonts.googleapis.com/css2?family=Merriweather:wght@400&display=swap',
