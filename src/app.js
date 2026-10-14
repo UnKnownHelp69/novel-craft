@@ -523,7 +523,9 @@ function moveSceneToChapter(sceneId, chapterId) {
   const [moved] = f.chapter.scenes.splice(idx, 1);
   dest.scenes.push(moved);
   dest.collapsed = false;
-  renderTree(); updateBreadcrumb(); updateCounters(); markDirty();
+  renderTree(); updateBreadcrumb(); updateCounters();
+  if (corkboardOpen) renderCorkboard();
+  markDirty();
   toast('Scene moved to ' + dest.title);
 }
 
@@ -588,7 +590,9 @@ function renameChapter(id) {
   promptModal('Rename chapter', 'New title:', c.title, val => {
     if (!val || val === c.title) return;
     c.title = val;
-    renderTree(); updateBreadcrumb(); markDirty();
+    renderTree(); updateBreadcrumb();
+    if (corkboardOpen) renderCorkboard();
+    markDirty();
   });
 }
 function setAllCollapsed(v) { if (!novel) return; novel.chapters.forEach(c => (c.collapsed = v)); renderTree(); }
@@ -605,7 +609,7 @@ function updateBreadcrumb() {
     const b = document.createElement('button');
     b.className = 'bc-part ' + cls;
     b.textContent = text;
-    if (handler) b.onclick = handler;
+    if (handler) b.onclick = () => { if (document.activeElement === nvTitle) nvTitle.blur(); handler(); };
     return b;
   };
   bc.appendChild(part(novel.title || 'Untitled Novel', 'bc-novel', () => { if (novel) nvTitle.dispatchEvent(new MouseEvent('dblclick')); }));
@@ -652,22 +656,45 @@ function bindSceneMeta() {
 
 /* ---- tree interaction: caret / add / select / pointer drag ---- */
 chapterList.addEventListener('click', e => {
+  if (swallowTreeClicks) return;
   const caret = e.target.closest('.tc-caret');
   if (caret) { const c = findChapter(caret.closest('.tree-chapter').dataset.chapterId); if (c) { c.collapsed = !c.collapsed; renderTree(); } return; }
   const add = e.target.closest('.tc-add');
   if (add) { addScene(add.closest('.tree-chapter').dataset.chapterId); return; }
 });
-chapterList.addEventListener('dblclick', e => {
+chapterList.addEventListener('dblclick', e => {   // chapters are renamed on the second press (below)
+  if (swallowTreeClicks) { swallowTreeClicks = false; return; }
   const sc = e.target.closest('.tree-scene');
-  if (sc) { renameScene(sc.dataset.sceneId); return; }
-  const cr = e.target.closest('.tc-row');
-  if (cr) renameChapter(cr.dataset.chapterId);
+  if (sc) renameScene(sc.dataset.sceneId);
 });
 
 let treeDrag = null;
+/* A click on a chapter row collapses or expands it; a double-click renames it. The first click has
+   toggled the chapter by the time the second press comes (the OS allows ~500 ms), and with the tree
+   scrolled to its end the shorter list slides another row under the pointer. So on the release of
+   the second press (unless it turned into a drag) that click's toggle is undone and the chapter
+   that was clicked is renamed, whatever is under the pointer now; the click/dblclick events that
+   follow are swallowed. */
+let chapterClick = null;        // { id, was, scrollTop } of the last click on a chapter row, until the next press
+let chapterRename = null;       // that click again, while the second press of its double-click is down
+let swallowTreeClicks = false;
+function setChapterCollapsed(c, v) {
+  c.collapsed = v;
+  // in place: rebuilding the tree would detach the row under the pointer
+  const li = chapterList.querySelector(`.tree-chapter[data-chapter-id="${CSS.escape(String(c.id))}"]`);
+  if (li) li.classList.toggle('collapsed', v); else renderTree();
+}
 function clearTreeDrop() { $$('.tree-scene,.tree-chapter').forEach(x => x.classList.remove('drop-before', 'drop-after', 'drop-into')); }
+// a press anywhere else ends a pending chapter click: a double-click that began elsewhere (say on a
+// context-menu item over the tree) is not a double-click on that chapter
+document.addEventListener('mousedown', e => { if (!chapterList.contains(e.target)) chapterClick = null; }, true);
 chapterList.addEventListener('mousedown', e => {
+  const click = chapterClick;
+  chapterClick = null;
   if (e.button !== 0) return;
+  swallowTreeClicks = false;
+  chapterRename = e.detail > 1 && click ? click : null;   // second press of a double-click on a chapter row
+  if (chapterRename) e.preventDefault();
   if (e.target.closest('.tc-caret') || e.target.closest('.tc-add')) return;   // buttons handled on click
   const sceneEl = e.target.closest('.tree-scene');
   const chapRow = e.target.closest('.tc-row');
@@ -680,6 +707,7 @@ document.addEventListener('mousemove', e => {
     if (Math.abs(e.clientX - treeDrag.startX) < 5 && Math.abs(e.clientY - treeDrag.startY) < 5) return;
     treeDrag.started = true;
     treeDrag.el.classList.add('dragging');
+    chapterRename = null;   // a press that drags is a drag, double-click or not
   }
   e.preventDefault();
   clearTreeDrop();
@@ -706,14 +734,24 @@ document.addEventListener('mousemove', e => {
   }
 });
 document.addEventListener('mouseup', () => {
-  if (!treeDrag) return;
   const d = treeDrag;
   treeDrag = null;
-  clearTreeDrop();
-  d.el.classList.remove('dragging');
+  if (d) { clearTreeDrop(); d.el.classList.remove('dragging'); }
+  if (chapterRename) {
+    const click = chapterRename;
+    chapterRename = null;
+    swallowTreeClicks = true;
+    const c = findChapter(click.id);
+    if (c) { setChapterCollapsed(c, click.was); chapterList.scrollTop = click.scrollTop; renameChapter(c.id); }
+    return;
+  }
+  if (!d) return;
   if (!d.started) {                                   // no movement -> click
     if (d.type === 'scene') { if (d.id !== currentSceneId) selectScene(d.id); }
-    else { const c = findChapter(d.id); if (c) { c.collapsed = !c.collapsed; renderTree(); } }
+    else {
+      const c = findChapter(d.id);
+      if (c) { chapterClick = { id: c.id, was: !!c.collapsed, scrollTop: chapterList.scrollTop }; setChapterCollapsed(c, !c.collapsed); }
+    }
     return;
   }
   if (!d.target) return;
@@ -747,6 +785,7 @@ function applySceneDrop(sceneId, target) {
   renderTree();
   updateBreadcrumb();
   updateCounters();
+  if (corkboardOpen) renderCorkboard();
   markDirty();
 }
 function applyChapterDrop(chapterId, target) {
@@ -757,6 +796,7 @@ function applyChapterDrop(chapterId, target) {
   if (target.after) to += 1;
   novel.chapters.splice(to, 0, moved);
   renderTree();
+  if (corkboardOpen) renderCorkboard();
   markDirty();
 }
 
@@ -1153,6 +1193,10 @@ nvTitle.addEventListener('dblclick', () => {
   document.execCommand('selectAll', false, null);
 });
 nvTitle.addEventListener('blur', commitNovelTitle);
+// A press on a breadcrumb part while the title is being edited must not commit it right then: the
+// new title relabels the novel part and shifts the other parts out from under the pointer, so the
+// click would be lost. The part's click handler commits it instead.
+$('#breadcrumb').addEventListener('mousedown', e => { if (document.activeElement === nvTitle && e.target.closest('.bc-part')) e.preventDefault(); });
 nvTitle.addEventListener('keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); nvTitle.blur(); }
 });
@@ -1160,7 +1204,15 @@ function commitNovelTitle() {
   nvTitle.contentEditable = 'false';
   if (!novel) return;
   const v = nvTitle.textContent.trim();
-  if (v && v !== novel.title) { novel.title = v; updateWindowTitle(); markDirty(); }
+  if (v && v !== novel.title) {
+    novel.title = v;
+    updateWindowTitle();
+    // in place, not updateBreadcrumb(): this runs on blur, often from a press on another breadcrumb
+    // part, and rebuilding the breadcrumb would detach that button before its click
+    const bcNovel = $('#breadcrumb .bc-novel');
+    if (bcNovel) bcNovel.textContent = v;
+    markDirty();
+  }
   else nvTitle.textContent = novel.title;
 }
 
@@ -1591,13 +1643,21 @@ $('#toggleRight').addEventListener('click', () => {
 function setFocus(on) {
   focusMode = on;
   document.body.classList.toggle('focus', on);
-  if (on) editor.focus();
+  // focus mode hides the top bar (and its Focus button): the exit button is the mouse way out
+  const exit = $('#exitFocus');
+  exit.classList.toggle('hidden', !on);
+  exit.classList.remove('peek');
+  if (on && !corkboardOpen) (mdMode ? mdEditor : editor).focus();
+  else if (on && document.activeElement && document.activeElement.closest('#topbar, #leftPanel, #rightPanel')) document.activeElement.blur();
 }
 $('#btnFocus').addEventListener('click', () => setFocus(!focusMode));
 $('#exitFocus').addEventListener('click', () => setFocus(false));
+$('#exitFocus').addEventListener('mousedown', e => e.preventDefault());   // the caret stays where it was
 // peek exit button when hovering top edge
 document.addEventListener('mousemove', e => {
-  if (focusMode) $('#exitFocus').classList.toggle('peek', e.clientY < 8);
+  if (!focusMode) return;
+  const exit = $('#exitFocus');   // revealed at the top edge; stays while the pointer is within its band
+  exit.classList.toggle('peek', e.clientY < (exit.classList.contains('peek') ? exit.offsetHeight + 8 : 8));
 });
 
 /* Scene/chapter titles are edited via the breadcrumb and the tree (double-click). */
@@ -1611,6 +1671,28 @@ function ctxItem(label, handler, cls) {
   if (cls) b.className = cls;
   b.addEventListener('click', () => { hideCtx(); handler(); });
   return b;
+}
+/* Show the menu at (x, y), or above y when it would run off the bottom of the window. A "▸"
+   submenu opens to the right of the menu, or to the left when it would run off the window
+   there, and moves up as far as it would run off the bottom. */
+function showCtx(x, y) {
+  ctx.style.left = x + 'px';
+  ctx.classList.remove('hidden');
+  const h = ctx.offsetHeight;
+  ctx.style.top = (y + h > innerHeight ? Math.max(0, y - h) : y) + 'px';
+  const right = ctx.getBoundingClientRect().right;
+  ctx.querySelectorAll('.ctx-sub-menu').forEach(list => {
+    list.style.display = 'flex';   // shown only on hover: lay it out once to measure it
+    list.parentElement.classList.toggle('ctx-sub-left', right + list.offsetWidth > innerWidth);
+    list.style.top = Math.min(0, innerHeight - list.getBoundingClientRect().bottom) + 'px';
+    list.style.display = '';
+    // hover intent: a pointer heading for an item further down cuts across the menu for a moment,
+    // so the submenu closes a little after the pointer leaves it, not at once
+    const sub = list.parentElement;
+    let closing = null;
+    sub.addEventListener('pointerenter', () => { clearTimeout(closing); sub.classList.add('open'); });
+    sub.addEventListener('pointerleave', () => { closing = setTimeout(() => sub.classList.remove('open'), 300); });
+  });
 }
 chapterList.addEventListener('contextmenu', e => {
   const sceneEl = e.target.closest('.tree-scene');
@@ -1643,11 +1725,10 @@ chapterList.addEventListener('contextmenu', e => {
     ctx.appendChild(ctxItem('Collapse All', () => setAllCollapsed(true)));
     ctx.appendChild(ctxItem('Expand All', () => setAllCollapsed(false)));
   }
-  ctx.style.left = Math.min(e.clientX, innerWidth - 190) + 'px';
-  ctx.style.top = e.clientY + 'px';
-  ctx.classList.remove('hidden');
+  showCtx(Math.min(e.clientX, innerWidth - 190), e.clientY);
 });
-document.addEventListener('click', hideCtx);
+// a click on a "▸" head opens nothing by itself (its submenu shows on hover): keep the menu up
+document.addEventListener('click', e => { if (!e.target.closest('#ctxMenu .ctx-sub-head')) hideCtx(); });
 
 /* ================= MODAL ================= */
 let modalCb = null;
@@ -1677,6 +1758,7 @@ $('#modalCancel').addEventListener('click', () => {
   $('#modalOverlay').classList.add('hidden');
   modalCb = null;
 });
+$('#modalOverlay').addEventListener('mousedown', e => { if (e.target === e.currentTarget) e.preventDefault(); });   // keep focus in the field
 $('#modalInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') $('#modalOk').click();
 });
@@ -2115,9 +2197,11 @@ function hexToRgba(hex, a) {
   if (!m) return `rgba(201,169,110,${a})`;
   return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})`;
 }
-/* clamp a floating element to the viewport near a client rect */
+/* clamp a floating element to the viewport near a client rect. Shown, measured and placed in
+   one task, so it never paints at the old spot. No visibility:hidden while measuring: the
+   controls inside transition `all`, so their inherited visibility would animate back from
+   hidden and stay hidden (unfocusable) until the next frame. */
 function positionFloat(el, rect) {
-  el.style.visibility = 'hidden';
   el.classList.remove('hidden');
   const w = el.offsetWidth, h = el.offsetHeight;
   let left = rect.left;
@@ -2127,7 +2211,6 @@ function positionFloat(el, rect) {
   if (top + h > innerHeight - 10) top = Math.max(10, rect.top - h - 8);
   el.style.left = left + 'px';
   el.style.top = top + 'px';
-  el.style.visibility = '';
 }
 
 /* ================= ADD-NOTE POPUP ================= */
@@ -2139,7 +2222,8 @@ function openAddNote(sel) {
   buildTypeOptions($('#npType'));
   $('#npContent').value = '';
   positionFloat(notePopup, s.rect);
-  setTimeout(() => $('#npContent').focus(), 30);
+  // focus now, not on a timer: a key typed in between would replace the selection in the scene
+  $('#npContent').focus();
 }
 function closeAddNote() { if (notePopup) { notePopup.classList.add('hidden'); } pendingSelection = null; }
 function confirmAddNote() {
@@ -3043,9 +3127,7 @@ function initGraphEvents() {
     ctx.appendChild(ctxItem('Edit Character', () => openCharPanel(node)));
     ctx.appendChild(ctxItem('Add Relationship', () => openRelPanel(null, node.id)));
     ctx.appendChild(ctxItem('Hide from Graph', () => { node.hiddenInGraph = true; markDirty(); drawGraph(); }));
-    ctx.style.left = Math.min(e.clientX, innerWidth - 190) + 'px';
-    ctx.style.top = e.clientY + 'px';
-    ctx.classList.remove('hidden');
+    showCtx(Math.min(e.clientX, innerWidth - 190), e.clientY);
   });
 }
 function onNodeClick(node) { gSelected = gSelected === node.id ? null : node.id; gHoverEdge = null; drawGraph(); }
@@ -3767,9 +3849,7 @@ function initMapEvents() {
         sub.appendChild(list); ctx.appendChild(sub);
       }
     }
-    ctx.style.left = Math.min(e.clientX, innerWidth - 200) + 'px';
-    ctx.style.top = e.clientY + 'px';
-    ctx.classList.remove('hidden');
+    showCtx(Math.min(e.clientX, innerWidth - 200), e.clientY);
   });
 }
 

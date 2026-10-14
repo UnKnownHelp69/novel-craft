@@ -282,8 +282,7 @@ body.focus.typewriter .editor{padding-top:30vh;padding-bottom:30vh;}
   padding:6px 16px;border-radius:0 0 8px 8px;cursor:pointer;font-size:12px;
   transition:top .2s ease;z-index:30;
 }
-body.focus .exit-focus:not(.hidden){}
-body.focus #editorArea:hover .exit-focus,body.focus .exit-focus.peek{top:0;}
+body.focus .exit-focus.peek{top:0;}
 
 /* ========= RIGHT PANEL ACCORDION ========= */
 .accordion{border-bottom:1px solid var(--border);}
@@ -352,12 +351,16 @@ body.focus #editorArea:hover .exit-focus,body.focus .exit-focus.peek{top:0;}
 /* Context menu */
 .ctx-menu{
   position:fixed;z-index:620;background:var(--panel);border:1px solid var(--border);
-  border-radius:6px;display:flex;flex-direction:column;min-width:140px;overflow:hidden;
+  border-radius:6px;display:flex;flex-direction:column;min-width:140px;
   box-shadow:0 6px 20px rgba(0,0,0,.5);
 }
 .ctx-menu button{background:transparent;border:none;text-align:left;padding:8px 12px;cursor:pointer;font-size:12px;}
 .ctx-menu button:hover{background:var(--editor-bg);color:var(--accent);}
 .ctx-menu button.danger:hover{color:var(--danger);}
+/* The menu can't clip its items to its rounded corners (overflow:hidden would clip the
+   "▸" submenus too), so the first and last item round their hover background themselves. */
+.ctx-menu > :first-child,.ctx-menu > :first-child > .ctx-sub-head{border-top-left-radius:5px;border-top-right-radius:5px;}
+.ctx-menu > :last-child,.ctx-menu > :last-child > .ctx-sub-head{border-bottom-left-radius:5px;border-bottom-right-radius:5px;}
 
 /* Modal */
 .modal-overlay{
@@ -503,9 +506,12 @@ body.focus #editorArea:hover .exit-focus,body.focus .exit-focus.peek{top:0;}
 /* ========= context submenu (Move to Chapter) ========= */
 .ctx-sub{position:relative;}
 .ctx-sub-head{width:100%;background:transparent;border:none;text-align:left;padding:8px 12px;cursor:pointer;font-size:12px;color:var(--text);}
-.ctx-sub-head:hover{background:var(--editor-bg);color:var(--accent);}
-.ctx-sub-menu{display:none;position:absolute;left:100%;top:0;min-width:150px;background:var(--panel);border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,.5);max-height:260px;overflow-y:auto;}
-.ctx-sub:hover .ctx-sub-menu{display:block;}
+.ctx-sub.open > .ctx-sub-head{background:var(--editor-bg);color:var(--accent);}
+/* flush against the menu (no gap to cross, so hover isn't lost on the way in); opens to the
+   left instead when it would run off the window (.ctx-sub-left, set by showCtx) */
+.ctx-sub-menu{display:none;flex-direction:column;position:absolute;left:100%;top:0;width:max-content;min-width:150px;max-width:260px;background:var(--panel);border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,.5);max-height:260px;overflow-y:auto;}
+.ctx-sub-left > .ctx-sub-menu{left:auto;right:100%;}
+.ctx-sub.open > .ctx-sub-menu{display:flex;}   /* .open: set by showCtx (hover intent) */
 
 /* ========= CORKBOARD ========= */
 body.corkboard-mode .editor-scroll,body.corkboard-mode #exitFocus,body.corkboard-mode .scene-meta,body.corkboard-mode .meta-show{display:none;}
@@ -558,12 +564,12 @@ body.corkboard-mode .editor-scroll,body.corkboard-mode #exitFocus,body.corkboard
 .graph-ctl{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim);}
 .graph-ctl .control{width:auto;min-width:130px;}
 .graph-close{margin-left:auto;}
-.graph-stage{flex:1;position:relative;overflow:hidden;}
+.graph-stage{flex:1;position:relative;overflow:hidden;--graph-panel-w:300px;}
 #graphCanvas{position:absolute;inset:0;display:block;cursor:default;}
 .graph-panel{
-  position:absolute;top:0;right:0;width:300px;height:100%;background:var(--panel);
+  position:absolute;top:0;right:0;width:var(--graph-panel-w);height:100%;background:var(--panel);
   border-left:1px solid var(--border);padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;
-  box-shadow:-6px 0 24px rgba(0,0,0,.4);
+  box-shadow:-6px 0 24px rgba(0,0,0,.4);z-index:1;
 }
 .gp-head{display:flex;justify-content:space-between;align-items:center;color:var(--accent);font-weight:700;font-size:14px;margin-bottom:6px;}
 .gp-x{background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:14px;}
@@ -576,6 +582,9 @@ body.corkboard-mode .editor-scroll,body.corkboard-mode #exitFocus,body.corkboard
 .gp-reldot{width:9px;height:9px;border-radius:50%;flex:none;}
 .gp-empty{color:var(--text-dim);font-style:italic;}
 .graph-legend{position:absolute;right:14px;bottom:14px;background:rgba(26,26,31,.85);border:1px solid var(--border);border-radius:8px;padding:8px 10px;min-width:120px;}
+/* while the side panel is open the legend moves out from under it (the panel's width + the
+   usual gap); the panel's z-index keeps it on top should the stage ever be too narrow */
+.graph-panel:not(.hidden) ~ .graph-legend{right:calc(var(--graph-panel-w) + 14px);}
 .legend-toggle{background:none;border:none;color:var(--accent);cursor:pointer;font-size:11px;font-weight:600;width:100%;text-align:left;}
 .legend-body{margin-top:6px;display:flex;flex-direction:column;gap:4px;}
 .legend-body.collapsed{display:none;}
