@@ -4255,7 +4255,10 @@ addEventListener('resize', () => { if (mapOpen) mapResize(); });
 
 /* ================= COMPILE NOVEL ================= */
 let compOpen = false, compEventsInit = false;
-let comp = null;                 // { items:[...], settings:{...} }
+/* { items, settings } of the open novel's compilation. In memory only and reset when another
+   novel loads; just the named presets (novel.settings.compilationPresets) reach the file.
+   items: { type: 'scene', sceneId, chapterId, title? } | { type: 'part', title } | { type: 'break' } */
+let comp = null;
 let compPreview = false;
 let compDrag = null;
 
@@ -4281,6 +4284,7 @@ function buildDefaultOrder() {
   }));
   return items;
 }
+/* Drop items whose scene was deleted since the compilation was last open. */
 function syncCompItems() {
   comp.items = comp.items.filter(it => it.type !== 'scene' || findScene(it.sceneId));
 }
@@ -4313,7 +4317,6 @@ function renderComp() {
   if (compPreview) renderCompPreview();
 }
 
-/* ---- available scenes ---- */
 function renderCompAvailable() {
   const host = $('#compAvailable');
   const q = ($('#compSearch').value || '').trim().toLowerCase();
@@ -4338,7 +4341,7 @@ function renderCompAvailable() {
   if (!host.children.length) host.innerHTML = '<div class="map-empty">No scenes match.</div>';
 }
 
-/* ---- compilation order ---- */
+/* Rows carry their index into comp.items (data-idx); every change re-renders the list. */
 function renderCompOrder() {
   const host = $('#compOrder');
   host.innerHTML = '';
@@ -4378,10 +4381,13 @@ function updateCompTotals() {
   let words = 0;
   comp.items.forEach(it => { if (it.type === 'scene') { const f = findScene(it.sceneId); if (f) words += f.scene.wordCount || 0; } });
   $('#compTotal').textContent = 'Compiled document: ' + words.toLocaleString() + ' words';
-  $('#compPages').textContent = '~' + Math.max(1, Math.round(words / 300)) + ' pages';
+  $('#compPages').textContent = '~' + Math.max(1, Math.round(words / 300)) + ' pages';   // ~300 words per manuscript page
 }
 
-/* ---- order drag & drop (pointer based) ---- */
+/* Drag & drop into and within the order list, on pointer events like the chapter tree (the
+   HTML5 Drag API is unreliable in the webview). A press only becomes a drag after 5px, so a
+   click or a double-click (rename) on a row stays one; 'new' drags come from the available list.
+   The drop index is the first row whose vertical midpoint lies below the pointer. */
 function initCompEvents() {
   const order = $('#compOrder');
   const avail = $('#compAvailable');
@@ -4428,14 +4434,14 @@ function initCompEvents() {
     } else {
       let ti = d.targetIdx;
       const [moved] = comp.items.splice(d.idx, 1);
-      if (ti > d.idx) ti -= 1;
+      if (ti > d.idx) ti -= 1;   // targetIdx counted the moved row, which is gone now
       comp.items.splice(ti, 0, moved);
     }
     renderComp();
   });
 }
 
-/* ---- settings panel ---- */
+/* Every control is bound by its data-cs attribute to the comp.settings key of that name. */
 function renderCompSettings() {
   const s = comp.settings;
   const host = $('#compSettingsBody');
@@ -4510,7 +4516,12 @@ function renderCompSettings() {
   });
 }
 
-/* ---- compiled flow (shared by preview + all exporters) ---- */
+/* ---- compiled flow ----
+   buildFlow() turns comp.items into a format-neutral list of part / chapter / break / scene
+   entries that the preview and every exporter render. A chapter's heading appears once,
+   before the first of its scenes in the order, even when its scenes are scattered. Headings
+   get sequential anchors (h0, h1, …) that the HTML/EPUB TOCs link to. The scene separator
+   between two consecutive scenes is not in the flow; each renderer inserts it. */
 /* --- sep-text:start --- */
 function sepText(settings) {
   const s = settings;
@@ -4560,6 +4571,10 @@ function buildFlow(items, settings, chapters, findSceneFn) {
 function compFlow() {
   return buildFlow(comp.items, { ...comp.settings, language: resolveLanguage(novel) }, novel.chapters, findScene);
 }
+/* A scene's HTML for the compiled document; '' when it has no text and no image. With xhtml
+   (EPUB) it is re-serialized as XML, so void elements self-close and the markup is
+   well-formed. XMLSerializer stamps the XHTML namespace on every top-level element; that is
+   stripped, the enclosing book.xhtml already declares it. */
 function normalizeSceneHTML(html, xhtml) {
   const root = parseInert(html);
   sanitizeChildren(root);   // scenes are sanitized on load; this keeps previews and exports safe regardless
@@ -4570,6 +4585,7 @@ function normalizeSceneHTML(html, xhtml) {
   root.childNodes.forEach(n => { out += ser.serializeToString(n); });
   return out.replace(/ xmlns="[^"]*"/g, '');
 }
+/* &#160;, not &nbsp;: XHTML (EPUB) only knows XML's five predefined entities. */
 function flowToBodyHTML(flow, xhtml) {
   const s = comp.settings;
   let html = '';
@@ -4721,7 +4737,7 @@ function compileTXT() {
       lastScene = true;
     }
   });
-  return L.join('\n').replace(/\n{4,}/g, '\n\n\n');
+  return L.join('\n').replace(/\n{4,}/g, '\n\n\n');   // never more than two blank lines in a row
 }
 /* --- compile-txt:end --- */
 function compileHTML() {
@@ -4739,7 +4755,9 @@ async function doCompExport(kind) {
   if (kind === 'epub') return await exportCompEPUB();
   if (kind === 'docx') return await exportCompDOCX();
 }
-/* ---- binary output helpers (ZIP / base64) ---- */
+/* ---- binary output helpers (ZIP / base64) ----
+   IPC arguments travel as JSON, so binary exports cross to write_binary as base64. The
+   0x8000-byte chunks keep String.fromCharCode.apply under the engine's argument limit. */
 function bytesToBase64(bytes) {
   let bin = ''; const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
@@ -4779,7 +4797,14 @@ function crc32(bytes) {
   for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
   return (c ^ 0xFFFFFFFF) >>> 0;
 }
-/* Minimal ZIP writer (store / no compression) — enough for EPUB and DOCX. */
+/* Minimal ZIP writer: every entry STORED (method 0, no compression), no data descriptors,
+   extra fields or archive comment, and a zero DOS date/time, so equal input gives identical
+   bytes. Layout: per file a 30-byte local header + name + data, then one 46-byte central
+   directory record + name per file (pointing back at its local header's offset), then the
+   22-byte end-of-central-directory record. All integers little-endian; version 2.0 is what
+   plain stored entries need. Entries keep the given order, which EPUB relies on (mimetype
+   first). Names are encoded as UTF-8 but the UTF-8 flag (bit 11) is not set, so keep them
+   ASCII. No ZIP64. */
 function makeZip(files) {
   const u16 = n => [n & 255, (n >> 8) & 255];
   const u32 = n => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
@@ -4811,11 +4836,13 @@ function makeZip(files) {
    Type0 / Identity-H composite font.
 
    Why an embedded font: the PDF standard-14 fonts (Courier & co.) contain no Cyrillic
-   glyphs at all, so they cannot render Russian text under any encoding — the old code
-   papered over that by rewriting every codepoint above 255 as '?'. IBM Plex Mono covers
-   Latin + Cyrillic + Greek and is monospaced at exactly 600/1000 em, which is the
-   advance the layout code below assumes (`size * 0.6` per glyph). Identity-H means the
-   content stream carries glyph ids as hex strings instead of Latin-1 literals. */
+   glyphs at all, so they cannot render Russian text under any encoding. IBM Plex Mono
+   covers Latin + Cyrillic + Greek and is monospaced at exactly 600/1000 em, which is the
+   advance the layout code below assumes (`size * 0.6` per glyph) — there is no per-glyph
+   width measuring, so the layout is only right for a monospaced font. Identity-H means the
+   content stream carries 2-byte glyph ids as hex strings instead of Latin-1 literals.
+   The whole font file is embedded, not a subset. Coordinates are PDF points (1/72 in) with
+   the origin at the bottom-left of the page, so the layout cursor moves down by decreasing y. */
 
 /* --- pdf-text-core:start --- pure, DOM-free helpers. test/pdf-cyrillic.test.js
    extracts everything between these two markers and exercises it in isolation, so keep
@@ -4841,7 +4868,10 @@ function normalizeForPdf(str) {
 function pdfLen(str) { return [...(str || '')].length; }
 
 /* cmap subtable reader: formats 4 (BMP) and 12 (full Unicode) cover every font we
-   bundle and virtually every TrueType font in the wild. */
+   bundle and virtually every TrueType font in the wild. Of the subtables present it takes
+   the best by score: Windows full-Unicode (3,10) format 12 > any Unicode-platform (0,*)
+   format 12 > Windows BMP (3,1) format 4 > Unicode-platform format 4. All values are
+   big-endian (DataView's default). */
 function readTtfCmap(dv, bytes, cmapOff) {
   const n = dv.getUint16(cmapOff + 2);
   let best = null, bestScore = -1;
@@ -4860,6 +4890,9 @@ function readTtfCmap(dv, bytes, cmapOff) {
   if (!best) throw new Error('font has no usable cmap subtable');
   const map = new Map();
   if (best.fmt === 4) {
+    // Four parallel arrays of segX2/2 entries follow the 14-byte header: endCode, (2-byte
+    // pad) startCode, idDelta, idRangeOffset. A nonzero idRangeOffset is a byte offset
+    // from that very array slot into glyphIdArray. The 0xFFFF code is the end sentinel.
     const o = best.off, segX2 = dv.getUint16(o + 6);
     const endO = o + 14, startO = endO + segX2 + 2, deltaO = startO + segX2, rangeO = deltaO + segX2;
     for (let i = 0; i < segX2 / 2; i++) {
@@ -4879,6 +4912,7 @@ function readTtfCmap(dv, bytes, cmapOff) {
       }
     }
   } else {
+    // format 12: 16-byte header, then groups of (startCode, endCode, startGlyphId), 12 bytes each
     const o = best.off, groups = dv.getUint32(o + 12);
     for (let i = 0; i < groups; i++) {
       const p = o + 16 + i * 12;
@@ -4888,7 +4922,8 @@ function readTtfCmap(dv, bytes, cmapOff) {
   }
   return map;
 }
-/* PostScript name (name id 6), sanitised for use as a PDF name object. */
+/* PostScript name (name id 6), sanitised for use as a PDF name object. A Windows-platform
+   record (UTF-16BE) wins; a Mac one (single-byte) is the fallback. */
 function readTtfPsName(dv, nameTbl) {
   if (!nameTbl) return '';
   const off = nameTbl.off, count = dv.getUint16(off + 2), strOff = off + dv.getUint16(off + 4);
@@ -4909,7 +4944,12 @@ function readTtfPsName(dv, nameTbl) {
   return clean(mac);
 }
 /* Read just enough of a TrueType file to embed it and map codepoints -> glyph ids.
-   All metrics are returned in PDF glyph space (1000ths of an em). */
+   All metrics are returned in PDF glyph space (1000ths of an em). The numeric offsets are
+   field positions from the OpenType spec: head (unitsPerEm @18, xMin..yMax @36-42), hhea
+   (ascender @4, descender @6, numberOfHMetrics @34), maxp (numGlyphs @4), post
+   (italicAngle 16.16 @4, isFixedPitch @12), OS/2 (usWeightClass @4, sCapHeight @88, which
+   exists from table version 2). Accepts 0x00010000 and Apple's 'true' sfnt tags; CFF-based
+   ('OTTO') fonts are rejected because /FontFile2 only takes glyf outlines. */
 function parseTrueType(bytes) {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const sfnt = dv.getUint32(0);
@@ -4933,7 +4973,8 @@ function parseTrueType(bytes) {
     bytes, unitsPerEm,
     numGlyphs: dv.getUint16(tbl.maxp.off + 4),
     cmap,
-    // monospaced font -> one advance for every glyph, which is what /DW encodes
+    // monospaced font -> one advance for every glyph, which is what /DW encodes. Taken from
+    // the space glyph's hmtx entry; glyphs past numberOfHMetrics share the last one.
     advance: scale(dv.getUint16(tbl.hmtx.off + Math.min(spaceGid == null ? 1 : spaceGid, numHMetrics - 1) * 4)),
     bbox: [scale(dv.getInt16(head + 36)), scale(dv.getInt16(head + 38)), scale(dv.getInt16(head + 40)), scale(dv.getInt16(head + 42))],
     ascent: scale(dv.getInt16(hhea + 4)),
@@ -4960,7 +5001,9 @@ function pdfGlyphHex(text, font, report) {
   }
   return out;
 }
-/* /ToUnicode CMap, so the text stays selectable, searchable and copy-pasteable. */
+/* /ToUnicode CMap, so the text stays selectable, searchable and copy-pasteable. Maps each
+   glyph id used to its codepoint (UTF-16BE, a surrogate pair above the BMP), in
+   beginbfchar blocks of at most 100 entries — the limit the CMap format sets per block. */
 function pdfToUnicodeCMap(used) {
   const hex4 = n => n.toString(16).toUpperCase().padStart(4, '0');
   const uni = cp => {
@@ -5009,7 +5052,8 @@ async function loadPdfFont(res) {
   if (!r.ok) throw new Error(`could not read the embedded font ${url} (HTTP ${r.status})`);
   return (pdfFontCache[res] = parseTrueType(new Uint8Array(await r.arrayBuffer())));
 }
-/* Byte-for-byte string so the final latin-1 cast round-trips the font file intact. */
+/* One char per byte (0-255), so the font file can be spliced into the PDF string and the
+   final `charCodeAt & 0xff` cast turns it back into the same bytes. */
 function bytesToBinary(bytes) {
   let s = ''; const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
@@ -5164,7 +5208,6 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
     if (s.dateText) { blank(0.5); wrap(s.dateText, { align: 'center' }); }
     newPage();
   }
-  // toc (after title)
   const tocEntries = compTocEntries(flow, s);
   /* Page numbers aren't known when a leading TOC is emitted, so each entry is drawn as
      its bare title and patched once the body is laid out. One entry is always one line,
@@ -5218,6 +5261,7 @@ function buildPdfPages(flow, settings, layout, htmlToBlocksFn) {
 async function exportCompPDF() {
   const s = comp.settings;
   const flow = compFlow();
+  // Points: Letter 8.5×11 in, A4 210×297 mm. Margins ≈ 15 / 23 / 32 mm.
   const pageW = s.pageSize === 'Letter' ? 612 : 595;
   const pageH = s.pageSize === 'Letter' ? 792 : 842;
   const marg = ({ narrow: 42, normal: 64, wide: 90 })[s.margins] || 64;
@@ -5226,7 +5270,7 @@ async function exportCompPDF() {
   const usableW = pageW - marg * 2;
   const charW = size * 0.6;                       // IBM Plex Mono advance = 0.6em
   const maxChars = Math.max(8, Math.floor(usableW / charW));
-  const F = { normal: 'F1', bold: 'F2', italic: 'F3' };
+  const F = { normal: 'F1', bold: 'F2', italic: 'F3' };   // font resource names, keys of PDF_FONT_FILES
 
   const layout = createPdfLayout({
     pageW, pageH, margin: marg, fontSize: size, lineHeight: lh,
@@ -5253,6 +5297,12 @@ async function exportCompPDF() {
     return;
   }
 
+  /* The file is built as a JS string in which every char is one byte: font files go in via
+     bytesToBinary(), text only as ASCII hex glyph ids. That is what makes string lengths
+     valid /Length values and string offsets valid xref byte offsets. Objects that point at
+     later ones (catalog, page tree, ToUnicode) get their number reserved now and their body
+     filled in once the targets exist. Per font: FontFile2 stream -> FontDescriptor ->
+     CIDFontType2 descendant -> Type0 font, which is what the page resources reference. */
   const objs = [];
   const add = body => { objs.push(body); return objs.length; };   // returns 1-based obj number
   const catalog = add('');            // 1 (filled later)
@@ -5264,12 +5314,17 @@ async function exportCompPDF() {
     const toUni = add('');            // reserved; filled once every page is encoded
     reports[res] = { missing: new Set(), used: new Map(), toUni };
     const raw = bytesToBinary(f.bytes);
+    // /Length1 is the decoded font length; with no filter it equals /Length.
     const fileObj = add(`<< /Length ${raw.length} /Length1 ${raw.length} >>\nstream\n${raw}\nendstream`);
-    const flags = 4 | (f.fixedPitch ? 1 : 0) | (f.italicAngle ? 64 : 0);   // 4 = symbolic
+    // Flag bits: 1 FixedPitch, 4 Symbolic (glyphs are addressed by id, outside any standard
+    // Latin charset), 64 Italic. StemV is required but unmeasured: a weight-based guess.
+    const flags = 4 | (f.fixedPitch ? 1 : 0) | (f.italicAngle ? 64 : 0);
     const desc = add(`<< /Type /FontDescriptor /FontName /${f.psName} /Flags ${flags} ` +
       `/FontBBox [${f.bbox.join(' ')}] /ItalicAngle ${f.italicAngle} /Ascent ${f.ascent} ` +
       `/Descent ${f.descent} /CapHeight ${f.capHeight} /StemV ${f.weight >= 600 ? 140 : 80} ` +
       `/FontFile2 ${fileObj} 0 R >>`);
+    // CID = glyph id (Identity encoding + /CIDToGIDMap /Identity); /DW, the default width,
+    // covers every glyph of a monospaced font, so no /W array is needed.
     const cidFont = add(`<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${f.psName} ` +
       `/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> ` +
       `/FontDescriptor ${desc} 0 R /DW ${f.advance} /CIDToGIDMap /Identity >>`);
@@ -5292,6 +5347,7 @@ async function exportCompPDF() {
       stream += '\n';
     });
     if (s.pageNumber && s.pageNumber !== 'none') {
+      // drawn inside the bottom margin, below the last text line
       const label = String((s.startPage || 1) + pi);
       const pnx = s.pageNumber === 'right' ? (pageW - marg - label.length * (size * 0.6)) : (pageW / 2 - label.length * (size * 0.6) / 2);
       stream += `/${F.normal} ${Math.max(9, size - 1)} Tf 1 0 0 1 ${pnx.toFixed(2)} ${(marg * 0.6).toFixed(2)} Tm ` +
@@ -5313,6 +5369,8 @@ async function exportCompPDF() {
   const offsets = [];
   objs.forEach((body, i) => { offsets[i] = pdf.length; pdf += `${i + 1} 0 obj\n${body}\nendobj\n`; });
   const xrefStart = pdf.length;
+  // Every xref entry must be exactly 20 bytes, hence the space before each '\n'. Entry 0 is
+  // the mandatory free-list head.
   pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
   offsets.forEach(off => { pdf += String(off).padStart(10, '0') + ' 00000 n \n'; });
   pdf += `trailer\n<< /Size ${objs.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
@@ -5329,7 +5387,12 @@ async function exportCompPDF() {
   }
 }
 
-/* ---- EPUB (valid EPUB3 package) ---- */
+/* ---- EPUB (valid EPUB3 package) ----
+   A ZIP whose first entry is the uncompressed `mimetype`; META-INF/container.xml points at
+   OEBPS/content.opf, which lists the parts and the spine. The whole book is one
+   book.xhtml, so TOC links are fragment links to the flow's heading anchors. nav.xhtml is
+   the EPUB 3 table of contents; toc.ncx duplicates it for EPUB 2 readers. Every XHTML part
+   must be well-formed XML: scene HTML goes through normalizeSceneHTML(…, true). */
 /* --- epub-xml:start --- pure, DOM-free builders for the EPUB envelope: container.xml,
    content.opf, nav.xhtml, toc.ncx and the book.xhtml wrapper. test/epub-xml.test.js lifts
    them out from between these markers and runs them in isolation, so they must stay free
@@ -5362,7 +5425,7 @@ async function exportCompEPUB() {
   const title = s.titleText || novel.title || 'Untitled';
   const author = s.author || 'Unknown';
   const uid = 'urn:uuid:' + uuid();
-  const modifiedISO = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  const modifiedISO = new Date().toISOString().replace(/\.\d+Z$/, 'Z');   // dcterms:modified allows no fractional seconds
   const flow = compFlow();
   const body = flowToBodyHTML(flow, true);
   const lang = resolveLanguage(novel);
@@ -5378,6 +5441,8 @@ async function exportCompEPUB() {
   const opf = buildEpubOpfXml({ uid, title, author, modifiedISO, lang });
   const container = buildEpubContainerXml();
   const enc = new TextEncoder();
+  // mimetype must come first: readers sniff its content at a fixed offset (byte 38), which
+  // holds only because makeZip() stores it with no extra field.
   const files = [
     { name: 'mimetype', bytes: enc.encode('application/epub+zip') },
     { name: 'META-INF/container.xml', bytes: enc.encode(container) },
@@ -5389,7 +5454,8 @@ async function exportCompEPUB() {
   ];
   await saveBinary(compFileName('epub'), makeZip(files), 'application/epub+zip');
 }
-/* XHTML-safe title page / TOC (avoid unescaped entities) */
+/* EPUB counterparts of titlePageHTML()/tocHTML(); keep the markup in step. tocHTMLx takes
+   the language its caller already resolved. */
 function titlePageHTMLx() {
   const s = comp.settings;
   if (!s.titlePage) return '';
@@ -5407,10 +5473,19 @@ function tocHTMLx(flow, lang) {
     entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') + `</ul></section>`;
 }
 
-/* ---- DOCX (minimal OOXML) ---- */
+/* ---- DOCX (minimal OOXML) ----
+   The smallest package Word opens: [Content_Types].xml, _rels/.rels (pointing at the main
+   part) and word/document.xml. There is no styles.xml, numbering or fonts part, so every
+   paragraph carries direct formatting and the typeface and base size are Word's defaults;
+   the compile dialog's font and font size do not reach the DOCX. Headings are bold, sized
+   paragraphs, not Heading styles. OOXML units used below: twips (1/20 pt; 1440 = 1 in),
+   half-points for w:sz (32 = 16 pt), and w:line in 240ths of a line under lineRule="auto". */
 /* --- docx-strings:xmlesc:start --- */
 function xmlEsc(s) { return esc(String(s == null ? '' : s)); }
 /* --- docx-strings:xmlesc:end --- */
+/* Scene HTML -> [{ tag: 'p'|'h1'|'h2'|'h3', runs: [{ text, b, i }] }], one block per
+   top-level node; shared by the DOCX and PDF exporters. Only bold/italic survive, and
+   a <br> becomes a '\n' run. */
 function htmlToBlocks(html) {
   const d = parseInert(html);
   const blocks = [];
@@ -5447,6 +5522,9 @@ function htmlToBlocks(html) {
 /* settings.language -> the OOXML locale every run is tagged with (spellcheck, hyphenation).
    A language missing here simply gets no w:lang, leaving it to Word's default. */
 const DOCX_LOCALE = { en: 'en-US', ru: 'ru-RU' };
+/* One <w:p>. w:jc "both" is justified; 720 twips = 1.27 cm, the same first-line indent as
+   the HTML/EPUB CSS; w:after 120 twips = 6 pt. A '\n' in a run becomes a <w:br/>;
+   xml:space="preserve" keeps leading/trailing spaces. */
 function docxP(runs, opts, settings) {
   opts = opts || {};
   const s = settings;
@@ -5514,6 +5592,8 @@ function buildDocxBodyXml(flow, settings, htmlToBlocksFn) {
   if (hasToc && s.tocPosition === 'end') { bodyXml += docxPageBreak(); bodyXml += docxTOC(flow, s); }
   return bodyXml;
 }
+/* Page size in twips (Letter 8.5×11 in, A4 210×297 mm) with fixed 1-inch margins; the
+   dialog's margin choice applies to the PDF only. w:sectPr must be the last child of w:body. */
 function buildDocxDocumentXml({ bodyXml, pageSize }) {
   const letter = pageSize === 'Letter';
   const sect = `<w:sectPr><w:pgSz w:w="${letter ? 12240 : 11906}" w:h="${letter ? 15840 : 16838}"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>`;
@@ -5683,6 +5763,13 @@ function shortcutKey(e) {
   return key;
 }
 /* --- shortcut-key:end --- */
+/* One handler for every global shortcut; the first matching line wins, so order matters.
+   Escape closes the topmost layer first (backup dialog, graph side panel, graph, corkboard,
+   map route editor / route mode, map, compile, note card, add-note popup, focus mode), and
+   Ctrl+Shift+S is tested before Ctrl+S, which does not exclude Shift. Letters are compared
+   via shortcutKey(), so shortcuts work on non-Latin layouts; arrow keys and Escape via e.key.
+   While a native file dialog is pending, the capture listener next to pickPath() swallows
+   every key before it gets here. */
 document.addEventListener('keydown', e => {
   const mod = e.ctrlKey || e.metaKey;
   const key = shortcutKey(e);
@@ -5709,10 +5796,15 @@ document.addEventListener('keydown', e => {
   if (mod && key === '\\') { e.preventDefault(); $('#toggleLeft').click(); return; }
   if (mod && key === '/') { e.preventDefault(); $('#toggleRight').click(); return; }
   if (e.key === 'Escape' && focusMode) { setFocus(false); return; }
-  if (mod && (key === 'b' || key === 'i')) { updateToolbarState(); } // let native handle, refresh state
+  if (mod && (key === 'b' || key === 'i')) { updateToolbarState(); } // no preventDefault: contenteditable applies bold/italic itself
 });
 
 /* ================= MENU EVENTS FROM RUST ================= */
+/* The native menu (build_menu in lib.rs) emits a `menu` event whose payload is the clicked
+   item's id; the ids below must match the MenuItem ids there. "Open Recent" items carry
+   "recent:<path>". That submenu is built once at launch, and the backend grants those
+   paths at the same time, so loading one passes check_path. Menu clicks are ignored while
+   a native file dialog is pending. */
 if (hasTauri) {
   listen('menu', e => {
     if (nativeDialogOpen) return;
@@ -5742,22 +5834,28 @@ if (hasTauri) {
     }
   });
 
-  /* intercept OS-level close (Alt+F4, taskbar) -> route through our dialog */
+  /* OS-level close (Alt+F4, taskbar, native title bar) goes through the unsaved-changes
+     dialog too. The window is then closed by close_window, which destroys it without
+     raising another CloseRequested. */
   const win = TAURI.window.getCurrentWindow();
   win.onCloseRequested(ev => {
     ev.preventDefault();
     requestClose();
   });
-  /* keep maximize icon in sync when the OS changes window state */
+  /* keep the maximize icon in sync when the OS changes the window state */
   win.onResized(() => refreshMaxIcon());
 }
 
 /* ================= WINDOW CONTROLS (frameless) ================= */
+/* The window has no OS frame (decorations: false in tauri.conf.json): the top bar is the
+   drag handle (data-tauri-drag-region in index.html) and #winControls are the minimize /
+   maximize / close buttons. "Use native title bar" brings the OS frame back and hides them. */
 if (!hasTauri) $('#winControls').style.display = 'none'; // browser: no native controls
 async function destroyWindow() {
   if (hasTauri) await invoke('close_window');
 }
-/* Three-option close flow */
+/* Every close path (our button, the OS) ends here: close at once when nothing is unsaved,
+   otherwise ask Save / Discard / Cancel. */
 function requestClose() {
   if (nativeDialogOpen) return;   // finish (or cancel) the open file dialog first
   // Clean close: the open novel matches disk. With no novel open (start menu, e.g. after
@@ -5798,12 +5896,16 @@ $('#winMax').addEventListener('click', async () => {
 });
 
 /* ================= SETTINGS TOGGLES ================= */
+/* App-wide UI preferences live in the webview's localStorage, per machine — not in the
+   .novel file, whose settings belong to the novel. */
 const PREF_KEY = 'novelcraft:prefs';
 function loadPrefs() {
   try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch { return {}; }
 }
 function savePrefs(p) { try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch (_) {} }
 
+/* The stored preference is the source of truth: startup re-applies it on every launch,
+   whatever frame the window opened with. body.native-titlebar hides the custom controls. */
 async function applyNativeTitlebar(on) {
   document.body.classList.toggle('native-titlebar', on);
   if (hasTauri) { try { await invoke('set_decorations', { on }); } catch (_) {} }
@@ -5821,11 +5923,14 @@ function applyTypewriter(on) {
 $('#typewriterToggle').addEventListener('change', e => applyTypewriter(e.target.checked));
 
 /* ================= STARTUP ================= */
+/* Runs once, last in the file, so every handler above is wired before a novel loads. An
+   unsaved-work recovery is offered before the last file is reopened: a leftover recovery
+   copy holds work that never reached disk, and whichever way the user answers, the last
+   file is not opened on top of it. */
 async function startup() {
   refreshUI();               // no novel yet -> shows the empty state
   setSaved();
 
-  // restore user preferences
   const prefs = loadPrefs();
   applyNativeTitlebar(!!prefs.nativeTitlebar);
   applyTypewriter(!!prefs.typewriter);
