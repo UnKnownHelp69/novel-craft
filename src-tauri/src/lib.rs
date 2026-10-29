@@ -161,7 +161,7 @@ fn base_name(path: &str) -> String {
 // do it (open: Windows and macOS only; save: every desktop OS), so it stays modal (Windows)
 // or a sheet (macOS) instead of leaving the editor usable underneath. On Linux it cannot be
 // made modal, so the frontend shields the window while a dialog is pending (pickPath in
-// app.js). Granting the returned path is what lets the file commands below touch it.
+// src/js/bridge.js). Granting the returned path is what lets the file commands below touch it.
 #[tauri::command]
 async fn pick_open(
     app: tauri::AppHandle,
@@ -289,7 +289,7 @@ fn set_last_file(
     atomic_write(&last_file_ptr(&app), path).map_err(|e| e.to_string())
 }
 
-/// Crash-recovery snapshot of unsaved work (`localBackup` in app.js). Takes no path: it always
+/// Crash-recovery snapshot of unsaved work (`localBackup` in src/js/autosave.js). Takes no path: it always
 /// writes the fixed `working.novel` in the config dir, so it needs no allowlist check.
 #[tauri::command]
 fn autosave(app: tauri::AppHandle, content: String) -> Result<(), String> {
@@ -649,7 +649,7 @@ fn add_recent_file(
 /* ---------------- menu ---------------- */
 
 /// The native menu. Item ids are the payload of the `menu` event (see `on_menu_event`) that
-/// app.js dispatches on; keep the two in sync.
+/// src/js/menu.js dispatches on; keep the two in sync.
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     // Built once at launch from recent.json and never rebuilt; see the grants in `run`.
     let recent = read_recent(app);
@@ -714,7 +714,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         "Edit",
         true,
         // Undo/Redo are plain items, not predefined ones: those are unsupported on Linux.
-        // app.js runs document.execCommand for these ids.
+        // src/js/menu.js runs document.execCommand for these ids.
         &[
             &MenuItem::with_id(app, "undo", "Undo", true, Some("CmdOrCtrl+Z"))?,
             &MenuItem::with_id(app, "redo", "Redo", true, Some("CmdOrCtrl+Shift+Z"))?,

@@ -10,29 +10,16 @@
  *      the layout code assumes.
  *   3. The bytes written into the PDF content stream must decode back to the original
  *      text — i.e. the glyph ids really are the Cyrillic glyphs, not '?' or .notdef.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * pure helpers are lifted out of the file between the `pdf-text-core` markers and run
- * here in isolation. That block is DOM-free by contract.
  */
 import test from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as core from '../src/js/lib/pdf.js';
 
 const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-function loadPdfCore() {
-  const start = APP.indexOf('/* --- pdf-text-core:start ---');
-  const end = APP.indexOf('/* --- pdf-text-core:end --- */');
-  assert.ok(start !== -1 && end > start,
-    'pdf-text-core markers missing from src/app.js — the PDF helpers moved, update this test');
-  const src = APP.slice(start, end);
-  return new Function(`${src}\nreturn { normalizeForPdf, pdfLen, parseTrueType, pdfGlyphHex, pdfToUnicodeCMap };`)();
-}
-
-const core = loadPdfCore();
+// The PDF code: the text/layout helpers and the exporter that writes the font objects.
+const PDF_SRC = ['lib/pdf.js', 'compile-export.js'].map(f => readFileSync(join(ROOT, 'src', 'js', f), 'utf8')).join('\n');
 const FONTS = ['IBMPlexMono-Regular.ttf', 'IBMPlexMono-Bold.ttf', 'IBMPlexMono-Italic.ttf'];
 const fontBytes = name => new Uint8Array(readFileSync(join(ROOT, 'src', 'fonts', 'pdf', name)));
 
@@ -172,8 +159,8 @@ test('ToUnicode CMap maps the glyph ids back to Cyrillic codepoints', () => {
 test('the exporter embeds the bundled font instead of standard-14 Courier', () => {
   // Cheap guard against someone reinstating the base-14 fonts, which cannot render
   // Cyrillic under any encoding.
-  assert.ok(!/BaseFont \/Courier/.test(APP), 'standard-14 Courier is back in the PDF exporter');
-  assert.ok(!/WinAnsiEncoding/.test(APP), 'WinAnsiEncoding is back in the PDF exporter');
-  assert.ok(/\/Encoding \/Identity-H/.test(APP), 'PDF text is no longer written as Identity-H');
-  assert.ok(!/code > 255/.test(APP), 'the codepoint > 255 -> "?" fallback is back');
+  assert.ok(!/BaseFont \/Courier/.test(PDF_SRC), 'standard-14 Courier is back in the PDF exporter');
+  assert.ok(!/WinAnsiEncoding/.test(PDF_SRC), 'WinAnsiEncoding is back in the PDF exporter');
+  assert.ok(/\/Encoding \/Identity-H/.test(PDF_SRC), 'PDF text is no longer written as Identity-H');
+  assert.ok(!/code > 255/.test(PDF_SRC), 'the codepoint > 255 -> "?" fallback is back');
 });

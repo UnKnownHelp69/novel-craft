@@ -21,7 +21,7 @@ new feature plus four fixes is a single MINOR bump.
 | **MINOR** | At least one new feature; everything old still works. | `1.2.1 → 1.3.0` |
 | **MAJOR** | Breaking changes.                                     | `1.3.0 → 2.0.0` |
 
-MAJOR should be rare: `migrateNovel()` in `src/app.js` keeps older `.novel` files opening in newer
+MAJOR should be rare: `migrateNovel()` in `src/js/novel-file.js` keeps older `.novel` files opening in newer
 builds, and as long as that holds a release isn't breaking, however large it is.
 
 ## Checklist

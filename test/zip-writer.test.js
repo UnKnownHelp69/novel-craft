@@ -9,31 +9,12 @@
  * navigates strictly by the offsets and lengths makeZip() *declares* rather than by
  * scanning for PK signatures — see that file for why that distinction matters here.
  * test/epub-xml.test.js uses the same reader on a whole compiled EPUB.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * writer is lifted out from between the `zip-core` markers and run in isolation, the same
- * technique as test/pdf-cyrillic.test.js and test/migrate-novel.test.js.
  */
 import test from 'node:test';
 import assert from 'node:assert';
 import zlib from 'node:zlib';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readZip, LOCAL_FIXED, EOCD_FIXED } from './helpers/zip-reader.js';
-
-const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-function loadZipCore() {
-  const start = APP.indexOf('/* --- zip-core:start ---');
-  const end = APP.indexOf('/* --- zip-core:end --- */');
-  assert.ok(start !== -1 && end > start,
-    'zip-core markers missing from src/app.js — the ZIP writer moved, update this test');
-  // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function(`'use strict';\n${APP.slice(start, end)}\nreturn { crc32, makeZip };`)();
-}
-
-const { crc32, makeZip } = loadZipCore();
+import { crc32, makeZip } from '../src/js/lib/zip.js';
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 

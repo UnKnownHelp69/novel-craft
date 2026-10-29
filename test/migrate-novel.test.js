@@ -11,54 +11,27 @@
  *      files go through this on every single open.
  *   4. Derived values (order, wordCount) are recomputed, never trusted from the file.
  *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * function is lifted out of the file and run here in isolation — the same technique as
- * test/pdf-cyrillic.test.js. migrateNovel's dependencies are scattered across the file
- * instead of contiguous, so there are four marker pairs rather than one, and this test
- * concatenates the slices; declaration order in app.js does not matter.
+ * migrateNovel() lives in src/js/novel-file.js, a UI module, so it is lifted out between its
+ * markers (see test/helpers/lift.js) and run with the real model helpers it builds on.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { lift, compile } from './helpers/lift.js';
+import { uuid, countWords } from '../src/js/lib/text.js';
+import { nowISO, blankScene, blankChapter, blankWorldMap, newNovel } from '../src/js/lib/model.js';
 
-const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-/* Node stand-ins for three globals migrateNovel reaches for that are deliberately left
-   outside the markers. countWords/stripHtml are the production helpers' behaviour minus
-   the DOM (the real stripHtml uses document.createElement, which node --test has no
-   version of); they are scaffolding for the fixtures here, not under test themselves.
+/* Node stand-ins for the two DOM-bound helpers migrateNovel reaches for. stripHtml is the
+   production helper's behaviour minus the DOM (the real one parses with DOMParser, which
+   node --test has no version of); it is scaffolding for the fixtures here, not under test.
    toast must exist because the legacy-chapter path schedules one 400ms later — without a
    stand-in that timer throws ReferenceError long after the assertions have finished. */
-const testCountWords = t => {
-  const m = String(t || '').match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}]*(?:['’-][\p{L}\p{N}][\p{L}\p{M}\p{N}]*)*/gu);
-  return m ? m.length : 0;
-};
 const testStripHtml = html => String(html || '').replace(/<[^>]*>/g, ' ');
 const testToast = () => {};
 
-function slice(name) {
-  const startMark = `/* --- migration-core:${name}:start ---`;
-  const endMark = `/* --- migration-core:${name}:end --- */`;
-  const start = APP.indexOf(startMark);
-  const end = APP.indexOf(endMark);
-  assert.ok(start !== -1 && end > start,
-    `migration-core:${name} markers missing from src/app.js — the code moved, update this test`);
-  return APP.slice(start, end);
-}
-
-function loadMigrateNovel() {
-  // uuid first: the other slices call it at definition time is not required, but keeping
-  // dependency order makes the synthetic script readable if it ever needs debugging.
-  const src = ['uuid', 'base', 'note-types', 'migrate'].map(slice).join('\n');
-  // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict', so
-  // opt in explicitly rather than testing subtly different semantics from production.
-  return new Function('countWords', 'stripHtml', 'toast',
-    `'use strict';\n${src}\nreturn migrateNovel;`)(testCountWords, testStripHtml, testToast);
-}
-
-const migrateNovel = loadMigrateNovel();
+const migrateNovel = compile(
+  ['uuid', 'countWords', 'nowISO', 'blankScene', 'blankChapter', 'blankWorldMap', 'newNovel', 'stripHtml', 'toast'],
+  lift('novel-file.js', 'migrate-novel'), 'migrateNovel'
+)(uuid, countWords, nowISO, blankScene, blankChapter, blankWorldMap, newNovel, testStripHtml, testToast);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isId = v => typeof v === 'string' && UUID_RE.test(v);
 

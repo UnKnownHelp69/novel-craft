@@ -1,50 +1,32 @@
 /* Shared helpers for the e2e suites (e2e/*.e2e.mjs). Not picked up by `npm test`: node --test
  * only collects *.test.* files and files under test/. */
-import { createServer } from 'node:http';
-import { readFile, mkdtemp, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, extname, normalize } from 'node:path';
+import { join, relative, sep } from 'node:path';
+
+export { serveApp, desktopCsp } from '../scripts/serve.mjs';
 
 export const ROOT = join(import.meta.dirname, '..');
 const SRC = join(ROOT, 'src');
 
-/* The Content-Security-Policy the desktop app runs under, straight from tauri.conf.json, so
-   the browser suite exercises the exact same policy. */
-export function desktopCsp() {
-  const conf = JSON.parse(readFileSync(join(ROOT, 'src-tauri', 'tauri.conf.json'), 'utf8'));
-  const csp = conf.app.security.csp;
-  return typeof csp === 'string' ? csp : Object.entries(csp).map(([k, v]) => `${k} ${v}`).join('; ');
-}
+/* Every module of the app, as a URL relative to index.html (js/main.js, js/lib/text.js, …). */
+export const APP_MODULES = readdirSync(join(SRC, 'js'), { recursive: true })
+  .filter(f => f.endsWith('.js')).map(f => relative(SRC, join(SRC, 'js', f)).split(sep).join('/'));
 
-const TYPES = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.ttf': 'font/ttf', '.woff2': 'font/woff2', '.png': 'image/png', '.txt': 'text/plain; charset=utf-8'
-};
-
-/* Serve src/ over http on a free loopback port, optionally with the desktop CSP header.
-   Not file://, for two reasons: the policy is sent as a response header, and Playwright
-   cannot attach headers to file:// pages; and Chromium refuses fetch() of file:// URLs,
-   which the PDF export uses to load src/fonts/pdf/*.ttf.
-   Resolves to { url, close }. */
-export async function serveApp({ csp = false } = {}) {
-  const policy = csp ? desktopCsp() : null;
-  const server = createServer(async (req, res) => {
-    const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname)).replace(/^([/\\])+/, '');
-    const file = join(SRC, path || 'index.html');
-    if (!file.startsWith(SRC)) { res.writeHead(403).end(); return; }
-    try {
-      const body = await readFile(file);
-      const headers = { 'content-type': TYPES[extname(file)] || 'application/octet-stream' };
-      if (policy) headers['content-security-policy'] = policy;
-      res.writeHead(200, headers).end(body);
-    } catch {
-      res.writeHead(404).end();
+/* Runs in the page, never in node: imports every app module and exposes `window.app`, a
+   read-only view of all their exports. Module bindings are live, so `app.dirty` is the
+   current value, not a copy; a module instance is shared by URL, so these are the very
+   modules the running app uses. The white-box suites (browser, desktop) reach app
+   internals through it; e2e/flows.e2e.mjs never does. */
+export async function exposeApp(urls) {
+  const mods = await Promise.all(urls.map(u => import(new URL(u, location.href).href)));
+  window.app = new Proxy({}, {
+    get(_, name) {
+      for (const m of mods) if (name in m) return m[name];
+      throw new ReferenceError(`no app module exports ${String(name)}`);
     }
   });
-  await new Promise(r => server.listen(0, '127.0.0.1', r));
-  const { port } = server.address();
-  return { url: `http://127.0.0.1:${port}/index.html`, close: () => new Promise(r => server.close(r)) };
 }
 
 /* A Chromium to drive; playwright-core never downloads one. Tried in order: $CHROME_PATH;

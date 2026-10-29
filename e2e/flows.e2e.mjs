@@ -2,12 +2,12 @@
  * driven the way a user drives it. Run with
  *   node --test e2e/flows.e2e.mjs
  *
- * A safety net for refactoring src/app.js: every test is black-box. It seeds a novel by
+ * A safety net for refactoring the frontend (src/js/): every test is black-box. It seeds a novel by
  * opening a .novel fixture through the app's own Open flow, acts through clicks, double-clicks,
  * context menus, real keystrokes and pointer drags, and observes only the DOM and the files the
  * app hands out (a browser-mode Save downloads the .novel JSON, which is the main oracle).
- * Nothing here reads or calls the app's globals, so the suite must keep passing unchanged once
- * the script becomes ES modules.
+ * Nothing here reads or calls the app's internals, so the suite must keep passing unchanged
+ * across any refactor of the modules.
  *
  * Tests marked { todo: 'bug: …' } assert the correct behaviour of something that is broken
  * today; node:test runs them and reports them without failing the run.

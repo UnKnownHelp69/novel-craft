@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import { readFile } from 'node:fs/promises';
-import { launchChromium, serveApp, writeTempNovel, openNovel, craftedNovel } from './support.mjs';
+import { launchChromium, serveApp, writeTempNovel, openNovel, craftedNovel, exposeApp, APP_MODULES } from './support.mjs';
 
 let browser;
 test.before(async () => { browser = await launchChromium(); });
@@ -25,7 +25,7 @@ async function appPage({ csp = false } = {}) {
     document.addEventListener('securitypolicyviolation', e => window.__csp.push(`${e.violatedDirective} ${e.blockedURI}`));
   });
   await page.goto(server.url);
-  await page.waitForFunction(() => typeof window.setCurrentNovel === 'function');
+  await page.evaluate(exposeApp, APP_MODULES);
   return { page, errors, close: async () => { await context.close(); await server.close(); } };
 }
 
@@ -43,18 +43,18 @@ test('a crafted .novel cannot run script anywhere its data is rendered', async (
     // visit every view that renders file data
     await page.evaluate(() => {
       document.querySelectorAll('.accordion').forEach(a => a.classList.add('open'));
-      openNoteCard('n1');
-      openCompile(); loadPreset(novel.settings.compilationPresets[0].id); compPreview = true; renderComp(); closeCompile();
-      openGraph(); openCharPanel(novel.characters[0]); closeGraph();
-      toggleCorkboard(); toggleCorkboard();
-      toggleMarkdownMode(); toggleMarkdownMode();
+      app.openNoteCard('n1');
+      app.openCompile(); app.loadPreset(app.novel.settings.compilationPresets[0].id); document.getElementById('compPreviewBtn').click(); app.closeCompile();
+      app.openGraph(); app.openCharPanel(app.novel.characters[0]); app.closeGraph();
+      app.toggleCorkboard(); app.toggleCorkboard();
+      app.toggleMarkdownMode(); app.toggleMarkdownMode();
     });
     await page.waitForTimeout(800);
     const state = await page.evaluate(() => ({
       pwn: window.__pwn || null,
       editor: document.getElementById('editor').innerHTML,
-      wordCount: novel.chapters[0].scenes[0].wordCount,
-      exported: buildExport('html', novel),
+      wordCount: app.novel.chapters[0].scenes[0].wordCount,
+      exported: app.buildExport('html', app.novel),
       bodyDisplay: getComputedStyle(document.body).display
     }));
     assert.strictEqual(state.pwn, null, 'payloads ran: ' + JSON.stringify(state.pwn));
@@ -97,9 +97,9 @@ test('the sanitizer keeps editor formatting, strips the rest, and is idempotent'
         '<a><table><a>x</a></table></a>', '<p>a<div>b</div>c</p>', '<template><img src=x onerror=1></template>', '</div></div><img src=x onerror=1>'
       ];
       return {
-        cases: cases.map(([i, want]) => ({ i, want, got: sanitizeSceneHTML(i) })),
-        idem: [...cases.map(c => c[0]), ...nasty].map(i => { const once = sanitizeSceneHTML(i); return { i, once, twice: sanitizeSceneHTML(once) }; }),
-        nasty: nasty.map(i => sanitizeSceneHTML(i))
+        cases: cases.map(([i, want]) => ({ i, want, got: app.sanitizeSceneHTML(i) })),
+        idem: [...cases.map(c => c[0]), ...nasty].map(i => { const once = app.sanitizeSceneHTML(i); return { i, once, twice: app.sanitizeSceneHTML(once) }; }),
+        nasty: nasty.map(i => app.sanitizeSceneHTML(i))
       };
     });
     for (const c of res.cases) assert.strictEqual(c.got, c.want, `sanitize(${c.i})`);
@@ -144,7 +144,7 @@ test('shortcuts work on a Russian keyboard layout', async () => {
     // Ctrl+G → character graph
     await press('п', 'KeyG');
     assert.strictEqual(await page.evaluate(() => !document.getElementById('graphOverlay').classList.contains('hidden')), true, 'Ctrl+G');
-    await page.evaluate(() => closeGraph());
+    await page.evaluate(() => app.closeGraph());
     // Ctrl+\ and Ctrl+/ (the '/' key types '.' on a Russian layout) → panels
     await press('\\', 'Backslash');
     assert.strictEqual(await page.evaluate(() => document.getElementById('leftPanel').classList.contains('collapsed')), true, 'Ctrl+\\');
@@ -279,18 +279,18 @@ test('the app runs under the desktop CSP without violations', async () => {
     await page.evaluate(() => {
       document.querySelectorAll('.accordion').forEach(a => a.classList.add('open'));
       const ed = document.getElementById('editor');
-      openAddNote({ start: 0, end: 6, text: 'Привет', rect: ed.getBoundingClientRect() });
+      app.openAddNote({ start: 0, end: 6, text: 'Привет', rect: ed.getBoundingClientRect() });
       document.getElementById('npContent').value = 'заметка';
-      confirmAddNote();
-      openNoteCard(currentScene().notes[0].id);
-      toggleCorkboard(); toggleCorkboard();
-      openGraph(); closeGraph();
-      openMap(); closeMap();
-      openCompile(); compPreview = true; renderComp();
+      app.confirmAddNote();
+      app.openNoteCard(app.currentScene().notes[0].id);
+      app.toggleCorkboard(); app.toggleCorkboard();
+      app.openGraph(); app.closeGraph();
+      app.openMap(); app.closeMap();
+      app.openCompile(); document.getElementById('compPreviewBtn').click();
     });
     const signature = { pdf: '%PDF-', epub: 'PK', docx: 'PK', html: '<!DOCTYPE html>', txt: 'ТЕСТ' };
     for (const [kind, head] of Object.entries(signature)) {
-      const [download] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.evaluate(k => doCompExport(k), kind)]);
+      const [download] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.evaluate(k => app.doCompExport(k), kind)]);
       const bytes = await readFile(await download.path());
       assert.strictEqual(bytes.subarray(0, Buffer.byteLength(head)).toString('utf8'), head, kind + ' export');
     }
@@ -312,7 +312,7 @@ test('at the minimum window width the save indicator stays visible', async () =>
     await page.setViewportSize({ width: 1100, height: 600 });
     const m = await page.evaluate(() => {
       document.getElementById('winControls').style.display = 'flex';   // as in the desktop app
-      setCurrentNovel({ title: 'Война и мир. Том первый', chapters: [{ title: 'Глава', scenes: [{ title: 'Сцена', content: '<p>x</p>' }] }] },
+      app.setCurrentNovel({ title: 'Война и мир. Том первый', chapters: [{ title: 'Глава', scenes: [{ title: 'Сцена', content: '<p>x</p>' }] }] },
         '/novels/Война и мир — черновик 3.novel');
       const ind = document.getElementById('saveIndicator').getBoundingClientRect();
       const center = document.querySelector('.topbar-center').getBoundingClientRect();
@@ -339,12 +339,12 @@ test('a deleted scene or chapter comes back with Undo, in place and with its edi
     await openNovel(page, await writeTempNovel('undo.novel', fixture));
     const titles = () => page.$$eval('.tree-scene .ts-title', els => els.map(e => e.textContent));
     const chapters = () => page.$$eval('.tc-title', els => els.map(e => e.textContent));
-    const state = () => page.evaluate(() => ({ current: currentSceneId, dirty, text: document.getElementById('editor').textContent }));
+    const state = () => page.evaluate(() => ({ current: app.currentSceneId, dirty: app.dirty, text: document.getElementById('editor').textContent }));
     const toastUndo = () => page.locator('.toast-action.show .toast-btn');   // a retired toast fades out without .show
     const del = async sel => { await page.click(sel, { button: 'right' }); await page.click('#ctxMenu button.danger'); };
     // Undo right after a save (Ctrl+S) must leave the novel unsaved again
     const undo = async () => {
-      await page.evaluate(() => setSaved());
+      await page.evaluate(() => app.setSaved());
       await toastUndo().click();
       await toastUndo().waitFor({ state: 'detached' });   // Undo is spent: its toast goes away
       assert.strictEqual((await state()).dirty, true, 'Undo marks the novel unsaved');
@@ -365,7 +365,7 @@ test('a deleted scene or chapter comes back with Undo, in place and with its edi
     let s = await state();
     assert.strictEqual(s.current, 's2');
     assert.strictEqual(s.text, 'Вторая. Правка.', 'the typing done just before the delete survives');
-    assert.strictEqual(await page.evaluate(() => findScene('s2').scene.notes.length), 1);
+    assert.strictEqual(await page.evaluate(() => app.findScene('s2').scene.notes.length), 1);
 
     // a scene that is not open: the open one stays open
     await del('.tree-scene[data-scene-id="s3"]');
@@ -394,12 +394,12 @@ test('a deleted scene or chapter comes back with Undo, in place and with its edi
 
     // Undo after another novel was opened must not touch it, even one with the same ids
     await del('.tree-scene[data-scene-id="s2"]');
-    await page.evaluate(() => setCurrentNovel({ title: 'Другой', chapters: [{ id: 'c1', title: 'Икс', scenes: [{ id: 'y', title: 'Игрек', content: '<p>y</p>' }, { id: 'z', title: 'Зет', content: '<p>z</p>' }] }] }, null));
+    await page.evaluate(() => app.setCurrentNovel({ title: 'Другой', chapters: [{ id: 'c1', title: 'Икс', scenes: [{ id: 'y', title: 'Игрек', content: '<p>y</p>' }, { id: 'z', title: 'Зет', content: '<p>z</p>' }] }] }, null));
     await toastUndo().click();
     assert.deepStrictEqual(await titles(), ['Игрек', 'Зет']);
-    await page.evaluate(n => setCurrentNovel(n, null), fixture);
+    await page.evaluate(n => app.setCurrentNovel(n, null), fixture);
     await del('.tc-row[data-chapter-id="c2"]');
-    await page.evaluate(() => setCurrentNovel({ title: 'Третий', chapters: [{ id: 'b', title: 'Бэ', scenes: [{ id: 'b1', title: 'Бэ 1', content: '<p>b</p>' }] }] }, null));
+    await page.evaluate(() => app.setCurrentNovel({ title: 'Третий', chapters: [{ id: 'b', title: 'Бэ', scenes: [{ id: 'b1', title: 'Бэ 1', content: '<p>b</p>' }] }] }, null));
     await toastUndo().click();
     assert.deepStrictEqual(await chapters(), ['Бэ']);
     assert.deepStrictEqual(errors, []);

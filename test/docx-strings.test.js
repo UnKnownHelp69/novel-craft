@@ -6,12 +6,6 @@
  * opens the exported manuscript somewhere else. These builders are the last place the
  * text is still inspectable, so they are worth pinning precisely.
  *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * builders are lifted out and run in isolation, the same technique as
- * test/pdf-cyrillic.test.js and test/migrate-novel.test.js. They are not contiguous —
- * htmlToBlocks() sits between xmlEsc() and docxP() and is deliberately left out, since it
- * needs a real DOM — so there are three marker pairs and the test concatenates the slices.
- *
  * The builders take the compile settings as an explicit argument, so each test assigns the
  * fixture it needs to S (via withSettings) and hands that same object to the call. The
  * envelope builders these paragraph builders feed — buildDocxBodyXml() and the three fixed
@@ -19,36 +13,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-function slice(name) {
-  const startMark = `/* --- docx-strings:${name}:start ---`;
-  const endMark = `/* --- docx-strings:${name}:end --- */`;
-  const start = APP.indexOf(startMark);
-  const end = APP.indexOf(endMark);
-  assert.ok(start !== -1 && end > start,
-    `docx-strings:${name} markers missing from src/app.js — the code moved, update this test`);
-  return APP.slice(start, end);
-}
-
-function loadDocxBuilders() {
-  // compTocEntries lives outside the docx-strings markers but docxTOC calls it,
-  // so pull it in as a dependency from its own marker pair.
-  const compTocStart = APP.indexOf('/* --- comp-toc:start ---');
-  const compTocEnd = APP.indexOf('/* --- comp-toc:end --- */');
-  assert.ok(compTocStart !== -1 && compTocEnd > compTocStart,
-    'comp-toc markers missing from src/app.js — compTocEntries moved, update this test');
-  const compTocSrc = APP.slice(compTocStart, compTocEnd);
-  const src = compTocSrc + '\n' + ['esc', 'escAttr', 'xmlesc', 'builders'].map(slice).join('\n');
-  // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function(`'use strict';\n${src}\nreturn { esc, escAttr, xmlEsc, docxP, docxTOC, docxPageBreak };`)();
-}
-
-const { esc, escAttr, xmlEsc, docxP, docxTOC, docxPageBreak } = loadDocxBuilders();
+import { esc, escAttr } from '../src/js/lib/text.js';
+import { xmlEsc, docxP, docxTOC, docxPageBreak } from '../src/js/lib/docx.js';
 
 /* Mirrors defaultCompSettings() for the fields these builders read; each test overrides
    only what it is about, so an unrelated default changing cannot make a test lie. */

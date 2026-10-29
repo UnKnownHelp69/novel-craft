@@ -1,27 +1,12 @@
 /* shortcutKey() decides which key a keyboard shortcut was pressed with. e.key follows the
  * active layout, so on a Russian layout Ctrl+S used to arrive as 'ы' and do nothing; the
  * physical key (e.code) is the fallback for anything that is not plain ASCII, while Latin
- * layouts (AZERTY, Dvorak…) keep their own letters.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * helper is lifted out between the `shortcut-key` markers and fed plain event-like objects.
+ * layouts (AZERTY, Dvorak…) keep their own letters. It is fed plain event-like objects.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { shortcutKey } from '../src/js/lib/keys.js';
 
-const APP = readFileSync(join(import.meta.dirname, '..', 'src', 'app.js'), 'utf8');
-
-function loadShortcutKey() {
-  const start = APP.indexOf('/* --- shortcut-key:start ---');
-  const end = APP.indexOf('/* --- shortcut-key:end --- */');
-  assert.ok(start !== -1 && end > start,
-    'shortcut-key markers missing from src/app.js — the helper moved, update this test');
-  return new Function(`'use strict';\n${APP.slice(start, end)}\nreturn shortcutKey;`)();
-}
-
-const shortcutKey = loadShortcutKey();
 const ev = (key, code, shiftKey = false, extra = {}) => ({ key, code, shiftKey, ...extra });
 
 test('US layout letters, with and without Shift', () => {

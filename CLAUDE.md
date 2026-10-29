@@ -18,18 +18,19 @@ npm test           # node --test — the test/ suite (no test framework, node:te
 npm run test:e2e   # browser suites (e2e/browser.e2e.mjs, e2e/flows.e2e.mjs): the real src/ in Chromium via playwright-core
 npm run test:desktop  # desktop suite (e2e/desktop.e2e.mjs): the built app via tauri-driver (Linux)
 npm run dev        # tauri dev — run the app with a live-reloaded static frontend
+npm run serve      # the frontend alone in a browser (no backend) at http://127.0.0.1:1420
 npm run build      # tauri build — produce native binary + installers
 npm run icons      # regenerate src-tauri/icons from assets/app-icon.png
 npm run fonts      # download bundled Google Fonts (.woff2) for offline use (optional)
 ```
 
 There is **no JS build step / bundler** — the frontend in `src/` is served as-is
-(`frontendDist: "../src"`). Edit and reload.
+(`frontendDist: "../src"`) as native ES modules. Edit and reload.
 
 Quick checks after changing code:
 
 ```bash
-node --check src/app.js            # frontend syntax
+node --check src/js/tree.js        # frontend syntax, per module
 cd src-tauri && cargo check        # backend type-check (fast)
 ```
 
@@ -37,9 +38,10 @@ cd src-tauri && cargo check        # backend type-check (fast)
 
 ```
 src/                     Frontend (served directly, no bundler)
-  index.html             Static markup for the whole UI
+  index.html             Static markup for the whole UI; loads js/main.js as a module
   styles.css             Theme + layout (CSS custom properties in :root)
-  app.js                 ALL app logic (one file, plain JS, no modules)
+  js/                    App logic, plain ES modules (one per area, see below)
+  js/lib/                Pure logic: no DOM or app state at import time, imported by test/
   fonts/fonts.css        @font-face with system fallbacks
   fonts/pdf/*.ttf        IBM Plex Mono (OFL) — raw TrueType, embedded into PDF exports
 test/                    node:test suites (no framework)
@@ -51,21 +53,48 @@ src-tauri/               Rust backend
   tauri.conf.json        Window (frameless: decorations=false), bundle, withGlobalTauri
   capabilities/default.json  Permission grants for the main window
 assets/app-icon.png      Source icon (regenerate the set with `npm run icons`)
-scripts/                 Node helpers: make-icon.mjs, fetch-fonts.mjs
+scripts/                 Node helpers: serve.mjs, make-icon.mjs, fetch-fonts.mjs
 ```
+
+### Frontend modules (`src/js/`)
+
+| Module | What it holds |
+|---|---|
+| `main.js` | Entry point: calls every module's `init()` in a fixed order, then `startup()` |
+| `bridge.js` | `hasTauri`, `invoke`, `listen`, `pickPath` (native dialogs + the window shield) |
+| `dom.js`, `state.js` | `$`/`$$` and shared elements; the open novel, selection and `dirty`, with setters |
+| `dirty.js` | `markDirty`/`setSaved`, saved snapshots, the save indicator |
+| `tree.js` | Scene/chapter tree, selection, CRUD + undo, breadcrumb, scene metadata, reordering |
+| `novel-file.js` | New/open/load, `migrateNovel`, `setCurrentNovel`, recent files, title editing |
+| `editor.js` | Editor input/paste, toolbar, markdown mode, document font and size |
+| `entities.js`, `panels.js` | Characters/locations/races; counters, accordion, panel toggles, focus mode |
+| `context-menu.js`, `dialogs.js` | `showCtx` + the tree menu; modal, `toast`, `toastAction` |
+| `save.js`, `export.js`, `autosave.js`, `backups.js` | Save/Save As; quick exports; autosave + recovery; Restore from Backup |
+| `notes.js`, `corkboard.js`, `graph.js`, `map.js` | Margin notes; corkboard; relationship graph; world map |
+| `compile.js`, `compile-export.js` | The Compile dialog; building the HTML/TXT/PDF/EPUB/DOCX files |
+| `shortcuts.js`, `menu.js`, `window-controls.js`, `settings.js` | Keyboard shortcuts; native menu events; frameless window; app prefs |
+| `lib/*.js` | `text` (esc, uuid, countWords), `html` (sanitizer), `model`, `markdown`, `language`, `keys`, `compile-flow`, `zip`, `pdf`, `epub`, `docx` |
+
+A module only declares things when it is imported; anything that wires events goes in its
+`init()`, which `main.js` calls in order (listeners on the same target run in the order they
+were added). Imported bindings are read-only, so shared state that other modules change has a
+setter next to it (`setNovel`, `setCurrentSceneId`, `setDirty`, …). Circular imports between
+UI modules are fine as long as nothing calls into another module at import time. `lib/` must
+never import a UI module: node imports `lib/` directly in the tests.
 
 ### Frontend ↔ backend bridge
 
-`withGlobalTauri: true` exposes `window.__TAURI__`. `app.js` reads it once:
+`withGlobalTauri: true` exposes `window.__TAURI__`; `js/bridge.js` reads it once:
 
 ```js
-const hasTauri = !!window.__TAURI__;
-const invoke = hasTauri ? window.__TAURI__.core.invoke : async () => null;
+export const hasTauri = !!TAURI;
+export const invoke = hasTauri ? TAURI.core.invoke : async () => null;
 ```
 
 Every backend call is `invoke('command_name', { args })`. The app degrades
 gracefully in a plain browser (`hasTauri === false`) — file dialogs fall back to
-`<input type=file>` / download links — so `src/` can be opened directly for quick UI work.
+`<input type=file>` / download links — so `npm run serve` is enough for quick UI work.
+(Browsers do not load modules from `file://`, so `src/index.html` cannot be opened from disk.)
 
 ### Backend commands (`src-tauri/src/lib.rs`)
 
@@ -81,26 +110,27 @@ Window controls (frameless window): `minimize_window`, `maximize_window`,
 `unmaximize_window`, `close_window`, `is_maximized`, `set_decorations`,
 `set_window_title`. Recent files (stored as `recent.json` in app config dir):
 `get_recent_files`, `add_recent_file`. The native menu emits `menu` events
-(payload = item id, e.g. `"save"`, or `"recent:<path>"`) that `app.js` listens for.
+(payload = item id, e.g. `"save"`, or `"recent:<path>"`) that `js/menu.js` listens for.
 
 ### Data model
 
 **One `.novel` file = one novel** (JSON: `version, title, settings, chapters[],
-characters[], locations[], races[]`). In `app.js`:
+characters[], locations[], races[]`); chapters hold `scenes[]`, and a scene carries
+`content` (HTML) + `markdownContent`. In `js/state.js`:
 
 - `novel` — the currently-open novel object (or `null` = start menu / empty state).
 - `currentFilePath` — path of the open file (`null` = never saved).
-- `currentChapterId` — active chapter; chapters carry `content` (HTML) + `markdownContent`.
-- `refreshUI()` re-renders the whole UI from `novel`; guard null everywhere the
-  editor/panels touch `novel`.
+- `currentSceneId` — the scene in the editor; `currentChapterId` — its chapter.
+- `refreshUI()` (`novel-file.js`) re-renders the whole UI from `novel`; guard null everywhere
+  the editor/panels touch `novel`.
 
 ### Dirty-flag discipline (don't regress this)
 
 - `isLoadingContent` is set `true` around any *programmatic* editor mutation
-  (`loadChapterIntoEditor`, `refreshUI`, `toggleMarkdownMode`); `markDirty()` and the
+  (`loadSceneIntoEditor`, `refreshUI`, `toggleMarkdownMode`); `markDirty()` and the
   `input` handlers early-return while it is true.
 - The editor `input` handler only marks dirty when `normalizeHTML(content)` differs
-  from the per-chapter saved snapshot (`savedContent`/`savedMd`, refreshed by
+  from the per-scene saved snapshot (`savedContent`/`savedMd`, refreshed by
   `snapshotSaved()` on every save/load).
 - Set dirty only on real edits (text input, formatting, title/entity edits); never on
   focus/selection, mode switches, panel toggles, or chapter/novel switches.
@@ -117,7 +147,7 @@ under the pointer by then, unless that press turns into a drag.
 
 ## Conventions
 
-- Vanilla JS only in `app.js` — no frameworks, no bundler, no ES module imports.
+- Vanilla JS in native ES modules — no frameworks, no bundler, no npm packages in `src/`.
   Helpers: `$`/`$$` (query), `esc` (HTML-escape), `uuid`, `toast`, `confirmModal`/`promptModal`.
 - Theme colors live as CSS custom properties in `:root` (`styles.css`); reuse them
   (`--bg`, `--panel`, `--editor-bg`, `--text`, `--accent`, …) rather than hardcoding.
@@ -133,7 +163,7 @@ under the pointer by then, unless that press turns into a drag.
 `.novel` files may come from anyone, and the webview can reach the file system through the
 backend. Three layers keep a crafted file from running code:
 
-- **Scene HTML is sanitized** (`sanitizeSceneHTML`, allowlist in the `html-policy` block)
+- **Scene HTML is sanitized** (`sanitizeSceneHTML`, allowlist in `js/lib/html.js`)
   when a novel is loaded (`setCurrentNovel` → `sanitizeNovelHTML`), when HTML is pasted, and
   again in previews/exports. Parse untrusted HTML only with `parseInert()` (DOMParser) —
   never `document.createElement(...).innerHTML`, which loads images and fires their handlers
@@ -162,14 +192,17 @@ backend. Three layers keep a crafted file from running code:
 
 Prefer `node --check` + `npm test` + `cargo check` for fast feedback; run `npm run build`
 to confirm the full bundle. The `test/` suite uses Node's built-in `node:test` (no
-framework, no dependency) and covers pure logic only — `src/app.js` is a single browser
-script with no module system, so tests lift the helpers they need out of the source
-between marker comments. UI behavior still has to be validated by running `npm run dev`.
+framework, no dependency) and covers pure logic only: it imports `src/js/lib/` directly. The
+two functions it tests outside `lib/` (`migrateNovel`, `compileTXT`) sit between marker
+comments and are lifted out with stand-ins for their DOM-bound helpers
+(`test/helpers/lift.js`). UI behavior still has to be validated by running `npm run dev`.
 CI runs `npm test` and `npm run test:e2e` in the `quick-check` job on every PR, and
 `cargo test` + `npm run test:desktop` against a debug build in the `desktop-e2e` job.
 Browser-level behavior (sanitizer, paste, shortcuts, the app under the CSP) belongs in
 `e2e/browser.e2e.mjs`; anything needing the real backend, IPC or CSP in `e2e/desktop.e2e.mjs`.
+Both reach app internals through `app.<name>`, a live view of every module's exports
+(`exposeApp` in `e2e/support.mjs`), so a function they call must be exported.
 `e2e/flows.e2e.mjs` drives whole user flows black-box (clicks, keys, drags; the downloaded
-`.novel` is the oracle) and never touches app globals, so it must pass unchanged across a
-refactor of `app.js`. Its `{ todo: 'bug: …' }` tests document known bugs: when you fix one,
+`.novel` is the oracle) and never touches app internals, so it must pass unchanged across a
+refactor of the modules. Its `{ todo: 'bug: …' }` tests document known bugs: when you fix one,
 drop the `todo` so the test guards the fix.

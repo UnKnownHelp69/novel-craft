@@ -5,40 +5,10 @@
  * order, settings, chapter list, and a scene-lookup function and returns the
  * flat flow array that every export format consumes. chapterHeadingText()
  * formats chapter headings according to the numbering mode in settings.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md),
- * so the functions are lifted out between marker comments and run here in
- * isolation — the same technique as test/comp-toc.test.js,
- * test/pdf-cyrillic.test.js, test/migrate-novel.test.js,
- * test/zip-writer.test.js and test/docx-strings.test.js.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-function sliceMarker(name) {
-  const startMark = `/* --- ${name}:start ---`;
-  const endMark = `/* --- ${name}:end --- */`;
-  const start = APP.indexOf(startMark);
-  const end = APP.indexOf(endMark);
-  assert.ok(start !== -1 && end > start,
-    `${name} markers missing from src/app.js — the code moved, update this test`);
-  return APP.slice(start, end);
-}
-
-function loadBuildFlow() {
-  const buildFlowSrc = sliceMarker('build-flow');
-  const compTocSrc = sliceMarker('comp-toc');
-
-  const src = buildFlowSrc + '\n' + compTocSrc;
-  return new Function(`'use strict';\n${src}\nreturn { chapterHeadingText, buildFlow, compTocEntries };`)();
-}
-
-const { chapterHeadingText, buildFlow, compTocEntries } = loadBuildFlow();
+import { chapterHeadingText, buildFlow, compTocEntries } from '../src/js/lib/compile-flow.js';
 
 /* ============================================================
  * FIXTURE DATA

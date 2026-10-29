@@ -9,36 +9,10 @@
  * overlapping or unbalanced emphasis, including output that is not what a real markdown
  * parser would emit. They are here so a future rewrite has to notice it is changing
  * behaviour — not as a claim that the behaviour is correct. Each such test says so.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the two
- * functions are lifted out between the `mdtohtml` markers and run here in isolation — the
- * same technique as test/comp-toc.test.js, test/docx-strings.test.js and the rest.
- * inlineMd()'s only dependency is esc(), lifted from the `docx-strings:esc` pair it
- * already had from PR #18.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-function slice(name) {
-  const start = APP.indexOf(`/* --- ${name}:start ---`);
-  const end = APP.indexOf(`/* --- ${name}:end --- */`);
-  assert.ok(start !== -1 && end > start,
-    `${name} markers missing from src/app.js — the code moved, update this test`);
-  return APP.slice(start, end);
-}
-
-function loadMdToHtml() {
-  const src = slice('docx-strings:esc') + '\n' + slice('mdtohtml');
-  // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function(`'use strict';\n${src}\nreturn { mdToHtml, inlineMd };`)();
-}
-
-const { mdToHtml, inlineMd } = loadMdToHtml();
+import { mdToHtml, inlineMd } from '../src/js/lib/markdown.js';
 
 /* ---------- Headings ---------- */
 

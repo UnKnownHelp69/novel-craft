@@ -12,42 +12,11 @@
  * function, these tests pass a stub, which is what makes everything *around* the HTML
  * conversion testable without a DOM or a jsdom dependency (same pattern as
  * test/docx-package.test.js).
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * engine is lifted out between marker comments and run here in isolation — the same
- * technique as test/pdf-cyrillic.test.js, test/docx-package.test.js and the rest.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-function sliceMarker(name) {
-  const start = APP.indexOf(`/* --- ${name}:start ---`);
-  const end = APP.indexOf(`/* --- ${name}:end --- */`);
-  assert.ok(start !== -1 && end > start,
-    `${name} markers missing from src/app.js — the code moved, update this test`);
-  return APP.slice(start, end);
-}
-
-function load() {
-  const src = [
-    sliceMarker('pdf-text-core'),   // pdfLen / normalizeForPdf, the engine's only deps
-    sliceMarker('sep-text'),
-    sliceMarker('build-flow'),
-    sliceMarker('comp-toc'),
-    sliceMarker('pdf-layout'),
-    sliceMarker('pdf-pages'),
-  ].join('\n');
-  // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function(`'use strict';\n${src}\n` +
-    'return { createPdfLayout, buildPdfPages, buildFlow, compTocEntries, pdfLen, normalizeForPdf };')();
-}
-
-const { createPdfLayout, buildPdfPages, buildFlow, compTocEntries, pdfLen } = load();
+import { createPdfLayout, buildPdfPages, pdfLen } from '../src/js/lib/pdf.js';
+import { buildFlow, compTocEntries } from '../src/js/lib/compile-flow.js';
 
 /* The config exportCompPDF() computes for the app's defaults: A4, 12pt, normal margins,
    1.5 line spacing. Every number below is derived from these, so the assertions are about
