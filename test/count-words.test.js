@@ -2,26 +2,10 @@
  * bar, the corkboard and the compile totals. A word must start and end with a letter or a
  * digit — apostrophes and hyphens only count when they join letters — so a hyphen typed as
  * a dash (" - ", very common in Russian prose) is not a word of its own.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * helper is lifted out between the `count-words` markers and run here in isolation.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const APP = readFileSync(join(import.meta.dirname, '..', 'src', 'app.js'), 'utf8');
-
-function loadCountWords() {
-  const start = APP.indexOf('/* --- count-words:start ---');
-  const end = APP.indexOf('/* --- count-words:end --- */');
-  assert.ok(start !== -1 && end > start,
-    'count-words markers missing from src/app.js — the helper moved, update this test');
-  return new Function(`'use strict';\n${APP.slice(start, end)}\nreturn countWords;`)();
-}
-
-const countWords = loadCountWords();
+import { countWords } from '../src/js/lib/text.js';
 
 test('a hyphen used as a dash is not a word', () => {
   assert.strictEqual(countWords('Привет - мир'), 2);

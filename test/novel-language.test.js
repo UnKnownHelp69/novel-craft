@@ -5,30 +5,10 @@
  * the text". A wrong answer here is invisible in the app: it surfaces as an e-reader
  * hyphenating Russian with English rules, a screen reader using the wrong voice, or Word
  * spellchecking a whole manuscript as misspelt — so the rules are pinned below.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * helpers are lifted out between marker comments and run here in isolation — the same
- * technique as test/migrate-novel.test.js and the rest. They must not need anything else.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-function load() {
-  const start = APP.indexOf('/* --- novel-language:start ---');
-  const end = APP.indexOf('/* --- novel-language:end --- */');
-  assert.ok(start !== -1 && end > start,
-    'novel-language markers missing from src/app.js — the code moved, update this test');
-  // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function(`'use strict';\n${APP.slice(start, end)}\n` +
-    'return { NOVEL_LANGUAGES, detectLanguage, resolveLanguage };')();
-}
-
-const { NOVEL_LANGUAGES, detectLanguage, resolveLanguage } = load();
+import { NOVEL_LANGUAGES, detectLanguage, resolveLanguage } from '../src/js/lib/language.js';
 
 /* A made-up novel in the real shape: chapters -> scenes -> HTML content. */
 const novelOf = (title, scenes, language) => ({

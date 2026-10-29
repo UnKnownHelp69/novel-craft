@@ -5,25 +5,11 @@
  * on a 30k-word scene.
  *
  * The walk is DOM-free by contract (it only reads nodeType / nodeName / nodeValue /
- * childNodes), so it is lifted out between the `strip-html` markers and fed plain objects
- * that mimic a parsed tree.
+ * childNodes), so it is fed plain objects that mimic a parsed tree.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const APP = readFileSync(join(import.meta.dirname, '..', 'src', 'app.js'), 'utf8');
-
-function loadTextFromNode() {
-  const start = APP.indexOf('/* --- strip-html:start ---');
-  const end = APP.indexOf('/* --- strip-html:end --- */');
-  assert.ok(start !== -1 && end > start,
-    'strip-html markers missing from src/app.js — the helper moved, update this test');
-  return new Function(`'use strict';\n${APP.slice(start, end)}\nreturn textFromNode;`)();
-}
-
-const textFromNode = loadTextFromNode();
+import { textFromNode } from '../src/js/lib/html.js';
 
 // Minimal node-like builders: el('P', 'text', el('B', 'bold')) etc.
 const txt = value => ({ nodeType: 3, nodeName: '#text', nodeValue: value, childNodes: [] });

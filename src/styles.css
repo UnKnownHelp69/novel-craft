@@ -138,7 +138,7 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
 .win-btn.win-close:hover{background:#c0392b;color:#fff;}
 body.native-titlebar .win-controls{display:none;}
 /* A native file dialog is open (pickPath). The dialog runs off the main thread and cannot be
-   made modal on Linux, so this covers the whole window above every other layer; app.js
+   made modal on Linux, so this covers the whole window above every other layer; js/bridge.js
    swallows the keyboard. */
 body.native-dialog::after{content:'';position:fixed;inset:0;z-index:2147483647;cursor:progress;}
 
@@ -294,8 +294,8 @@ body.focus .scene-meta,body.focus .meta-show{display:none;}
 .hidden{display:none !important;}   /* !important: must beat the display:flex of the element's own class */
 
 /* Focus mode. The top bar collapses to zero height, so the only mouse way out is the exit
-   tab: parked above the editor area at top:-40px, app.js adds .peek while the pointer is at
-   the top edge. */
+   tab: parked above the editor area at top:-40px, js/panels.js adds .peek while the pointer
+   is at the top edge. */
 body.focus #topbar{transform:translateY(-100%);height:0;min-height:0;opacity:0;overflow:hidden;}
 body.focus #leftPanel,body.focus #rightPanel{width:0;min-width:0;opacity:0;pointer-events:none;}
 /* With the panels gone the column widens: 70% of the window, at most 850px. */
@@ -403,7 +403,7 @@ body.focus .exit-focus.peek{top:0;}
 
 /* ========= MARGIN NOTES ========= */
 .dropdown-sep{height:1px;background:var(--border);margin:4px 0;}
-/* CSS Custom Highlight API: app.js registers the ranges (CSS.highlights), so annotated text is
+/* CSS Custom Highlight API: js/notes.js registers the ranges (CSS.highlights), so annotated text is
    marked without touching the editor's DOM or its dirty state. */
 ::highlight(note-active){background-color:rgba(201,169,110,.2);}
 
@@ -544,7 +544,7 @@ body.focus .exit-focus.peek{top:0;}
 
 /* ========= CORKBOARD =========
    Sits on top of the editor area (z-index 6); corkboard-mode hides what is underneath.
-   Each card's slight tilt (--rot) is set by app.js from the scene id, so it stays the same
+   Each card's slight tilt (--rot) is set by js/corkboard.js from the scene id, so it stays the same
    across renders. */
 body.corkboard-mode .editor-scroll,body.corkboard-mode #exitFocus,body.corkboard-mode .scene-meta,body.corkboard-mode .meta-show{display:none;}
 .corkboard{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--bg);

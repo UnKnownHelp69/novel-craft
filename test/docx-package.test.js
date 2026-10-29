@@ -13,53 +13,16 @@
  * buildDocxBodyXml() takes it as an injected parameter. Production passes the real
  * function; these tests pass a stub returning a fixed block structure, which is what makes
  * everything *around* the HTML conversion testable without a DOM or a jsdom dependency.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * builders are lifted out between marker comments and run here in isolation — the same
- * technique as test/epub-xml.test.js, test/docx-strings.test.js, test/build-flow.test.js,
- * test/comp-toc.test.js, test/zip-writer.test.js and test/pdf-cyrillic.test.js.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { readZip } from './helpers/zip-reader.js';
-
-const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-function sliceMarker(name) {
-  const startMark = `/* --- ${name}:start ---`;
-  const endMark = `/* --- ${name}:end --- */`;
-  const start = APP.indexOf(startMark);
-  const end = APP.indexOf(endMark);
-  assert.ok(start !== -1 && end > start,
-    `${name} markers missing from src/app.js — the code moved, update this test`);
-  return APP.slice(start, end);
-}
-
-function load() {
-  const src = [
-    sliceMarker('docx-strings:esc'),
-    sliceMarker('docx-strings:xmlesc'),
-    sliceMarker('docx-strings:builders'),
-    sliceMarker('sep-text'),
-    sliceMarker('build-flow'),
-    sliceMarker('comp-toc'),
-    sliceMarker('zip-core'),
-  ].join('\n');
-
-  // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function(`'use strict';\n${src}\nreturn {
-    buildDocxBodyXml, buildDocxDocumentXml, buildDocxContentTypesXml, buildDocxRelsXml,
-    docxP, docxPageBreak, buildFlow, compTocEntries, sepText, makeZip
-  };`)();
-}
-
-const {
+import {
   buildDocxBodyXml, buildDocxDocumentXml, buildDocxContentTypesXml, buildDocxRelsXml,
-  docxP, docxPageBreak, buildFlow, compTocEntries, sepText, makeZip
-} = load();
+  docxP, docxPageBreak
+} from '../src/js/lib/docx.js';
+import { buildFlow, compTocEntries, sepText } from '../src/js/lib/compile-flow.js';
+import { makeZip } from '../src/js/lib/zip.js';
 
 /* Mirrors defaultCompSettings() for the fields these builders read; each test overrides
    only what it is about, so an unrelated default changing cannot make a test lie. */

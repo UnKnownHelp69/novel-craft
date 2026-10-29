@@ -8,6 +8,7 @@
     "test:e2e": "node --test e2e/browser.e2e.mjs e2e/flows.e2e.mjs",
     "test:desktop": "node --test e2e/desktop.e2e.mjs",
     "dev": "tauri dev",
+    "serve": "node scripts/serve.mjs",
     "build": "tauri build",
     "tauri": "tauri",
     "icons": "tauri icon assets/app-icon.png",

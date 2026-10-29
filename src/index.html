@@ -508,7 +508,7 @@
   <div id="toastHost" class="toast-host"></div>
 
   <!-- The CSP (tauri.conf.json) forbids inline scripts and on*= attributes: all event wiring
-       lives in app.js. -->
-  <script src="app.js"></script>
+       lives in js/. Modules do not load from file://, so serve src/ (`npm run serve`). -->
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>

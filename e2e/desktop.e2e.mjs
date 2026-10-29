@@ -16,7 +16,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ROOT, craftedNovel } from './support.mjs';
+import { ROOT, craftedNovel, exposeApp, APP_MODULES } from './support.mjs';
 
 const BIN = process.env.NOVELCRAFT_BIN || join(ROOT, 'src-tauri', 'target', 'debug', 'novelcraft');
 const has = cmd => { try { execFileSync('which', [cmd], { stdio: 'ignore' }); return true; } catch { return false; } };
@@ -27,6 +27,11 @@ const skip = process.platform !== 'linux' ? 'Linux only'
   : false;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+/* Visible native Save dialogs (GTK file choosers titled "Save…"). */
+const saveDialogs = () => {
+  try { return execFileSync('xdotool', ['search', '--onlyvisible', '--name', '^Save'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean).length; }
+  catch { return 0; }   // xdotool exits 1 when nothing matches
+};
 const WORK = mkdtempSync(join(tmpdir(), 'novelcraft-desktop-'));
 const CONFIG = join(WORK, 'config');
 const APP_CONFIG = join(CONFIG, 'com.novelcraft.desktop');
@@ -69,6 +74,7 @@ async function startApp() {
   const created = await wd('POST', '/session', { capabilities: { alwaysMatch: { 'tauri:options': { application: BIN } } } });
   session = created.sessionId;
   await sleep(2500);   // startup: recent menu, recovery check, last-file load
+  await execAsync(`const done = arguments[arguments.length - 1]; (${exposeApp})(arguments[0]).then(() => done(1));`, [APP_MODULES]);
 }
 
 test.before(async () => {
@@ -101,7 +107,7 @@ test('a backup whose file this session may not write is restored as unsaved', { 
   // startup shows the recovery prompt; accept it
   await exec(`document.getElementById('modalOk').click();`);
   await sleep(1500);
-  const st = await exec(`return { title: novel && novel.title, path: currentFilePath, indicator: document.getElementById('filePathIndicator').textContent, dirty };`);
+  const st = await exec(`return { title: app.novel && app.novel.title, path: app.currentFilePath, indicator: document.getElementById('filePathIndicator').textContent, dirty: app.dirty };`);
   assert.strictEqual(st.title, 'Recovered');
   assert.strictEqual(st.path, null, 'the remembered path must be dropped, not kept as an unwritable target');
   assert.strictEqual(st.indicator, '• Unsaved');
@@ -139,12 +145,12 @@ test('Open Recent entries from launch stay openable after the recent list moves 
 });
 
 test('a crafted .novel opens without running its script', { skip }, async () => {
-  await execAsync(`const done = arguments[arguments.length - 1]; loadFromPath(arguments[0]).then(() => done(1));`, [CRAFTED]);
+  await execAsync(`const done = arguments[arguments.length - 1]; app.loadFromPath(arguments[0]).then(() => done(1));`, [CRAFTED]);
   await sleep(1000);
   await exec(`document.querySelectorAll('.accordion').forEach(a => a.classList.add('open'));
-    openNoteCard('n1');
-    openCompile(); loadPreset(novel.settings.compilationPresets[0].id); compPreview = true; renderComp(); closeCompile();
-    openGraph(); openCharPanel(novel.characters[0]); closeGraph();`);
+    app.openNoteCard('n1');
+    app.openCompile(); app.loadPreset(app.novel.settings.compilationPresets[0].id); document.getElementById('compPreviewBtn').click(); app.closeCompile();
+    app.openGraph(); app.openCharPanel(app.novel.characters[0]); app.closeGraph();`);
   await sleep(1000);
   const st = await exec(`return { pwn: window.__pwn || null, title: document.title, editor: document.getElementById('editor').innerHTML };`);
   assert.strictEqual(st.pwn, null, 'payloads ran: ' + JSON.stringify(st.pwn));
@@ -164,7 +170,7 @@ test('CSP blocks inline handlers but the app keeps working under it', { skip }, 
   assert.ok(st.violations.some(v => v.startsWith('script-src')), 'the blocked handler should be reported');
   assert.ok(st.rules > 0, 'injected <style> rules must still apply');
   assert.notStrictEqual(st.attr, '', 'style attributes must still apply');
-  const glyphs = await execAsync(`const done = arguments[arguments.length - 1]; loadPdfFont('F1').then(f => done(f.numGlyphs), e => done('ERR ' + e.message));`);
+  const glyphs = await execAsync(`const done = arguments[arguments.length - 1]; app.loadPdfFont('F1').then(f => done(f.numGlyphs), e => done('ERR ' + e.message));`);
   assert.ok(typeof glyphs === 'number' && glyphs > 0, 'PDF font fetch (connect-src): ' + glyphs);
 });
 
@@ -193,18 +199,18 @@ test('a save keeps the version it replaces; Restore from Backup brings one back,
     const ed = document.getElementById('editor'); ed.focus();
     getSelection().selectAllChildren(ed); getSelection().collapseToEnd();
     document.execCommand('insertText', false, ' Вторая правка');
-    doSave().then(done);`), true);
+    app.doSave().then(done);`), true);
   assert.match(readFileSync(CRAFTED, 'utf8'), /Вторая правка/);
   assert.strictEqual((await invoke('list_backups', { path: CRAFTED })).v.length, 1, 'at most one backup per interval');
 
   // Restore the original through the dialog. It is the crafted file: it must load sanitized,
   // and the file as it is now must be backed up first even inside the interval.
-  await execAsync(`const done = arguments[arguments.length - 1]; openBackups().then(() => done(1));`);
+  await execAsync(`const done = arguments[arguments.length - 1]; app.openBackups().then(() => done(1));`);
   assert.strictEqual(await exec(`return document.querySelectorAll('#backupOverlay:not(.hidden) .backup-row').length;`), 1);
   await exec(`document.querySelector('#backupList .backup-row button').click();`);
   await sleep(1500);
   const st = await exec(`return { text: document.getElementById('editor').textContent, html: document.getElementById('editor').innerHTML,
-    dirty, path: currentFilePath, open: !document.getElementById('backupOverlay').classList.contains('hidden'), pwn: window.__pwn || null };`);
+    dirty: app.dirty, path: app.currentFilePath, open: !document.getElementById('backupOverlay').classList.contains('hidden'), pwn: window.__pwn || null };`);
   assert.match(st.text, /Привет/);
   assert.doesNotMatch(st.text, /Добавлено|Вторая правка/);
   assert.doesNotMatch(st.html, /onerror|<svg|<script|<style|<iframe|javascript:/i);
@@ -231,31 +237,32 @@ test('a save keeps the version it replaces; Restore from Backup brings one back,
 test('while a file dialog is open the window is shielded and the work stays unsaved', { skip: skip || (!has('xdotool') && 'xdotool is not installed') }, async () => {
   await startApp();
   await exec(`if (!document.getElementById('modalOverlay').classList.contains('hidden')) document.getElementById('modalCancel').click();
-    setCurrentNovel(newNovel('Shield'), null);`);
+    app.setCurrentNovel(app.newNovel('Shield'), null);`);
   await sleep(300);
   await exec(`document.getElementById('editor').focus(); document.execCommand('insertText', false, ' правка');`);
   await sleep(300);
-  await exec(`window.__saveAs = doSave(true);`);   // opens the native Save dialog
+  await exec(`window.__saveAs = app.doSave(true);`);   // opens the native Save dialog
   await sleep(2500);
   const during = await exec(`const b = document.getElementById('toggleLeft').getBoundingClientRect();
-    return { shield: document.body.classList.contains('native-dialog'), dirty,
+    return { shield: document.body.classList.contains('native-dialog'), dirty: app.dirty,
       overlay: getComputedStyle(document.body, '::after').position,
       hit: document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2).tagName };`);
   assert.deepStrictEqual(during, { shield: true, dirty: true, overlay: 'fixed', hit: 'BODY' },
     'shielded (clicks land on the overlay), and nothing counts as saved yet');
   // keyboard and close attempts behind the dialog are ignored: the keystroke never reaches
-  // the shortcut handler (or any other listener), so no second save starts
-  await exec(`const orig = window.doSave; window.__saves = 0; window.doSave = (...a) => (window.__saves++, orig(...a));
-    window.__reached = false; document.addEventListener('keydown', () => { window.__reached = true; });
+  // the shortcut handler (or any other listener), so no second save starts. A second save of
+  // this never-saved novel would open a second Save dialog, so the dialogs are counted.
+  await exec(`window.__reached = false; document.addEventListener('keydown', () => { window.__reached = true; });
     document.getElementById('editor').dispatchEvent(new KeyboardEvent('keydown', { key: 's', code: 'KeyS', ctrlKey: true, bubbles: true, cancelable: true }));
-    requestClose();`);
-  await sleep(500);
-  const still = await exec(`return { saves: window.__saves, reached: window.__reached,
-    closePrompt: !document.getElementById('closeOverlay').classList.contains('hidden'), dirty };`);
-  assert.deepStrictEqual(still, { saves: 0, reached: false, closePrompt: false, dirty: true });
+    app.requestClose();`);
+  await sleep(1500);
+  const still = await exec(`return { reached: window.__reached,
+    closePrompt: !document.getElementById('closeOverlay').classList.contains('hidden'), dirty: app.dirty };`);
+  still.saveDialogs = saveDialogs();
+  assert.deepStrictEqual(still, { reached: false, closePrompt: false, dirty: true, saveDialogs: 1 });
   execFileSync('sh', ['-c', 'xdotool search --sync --onlyvisible --name "Save" windowfocus --sync key Escape'], { timeout: 20000 });
   await sleep(1000);
-  const after = await exec(`return { shield: document.body.classList.contains('native-dialog'), dirty, indicator: document.getElementById('saveIndicator').textContent };`);
+  const after = await exec(`return { shield: document.body.classList.contains('native-dialog'), dirty: app.dirty, indicator: document.getElementById('saveIndicator').textContent };`);
   assert.deepStrictEqual(after, { shield: false, dirty: true, indicator: 'Unsaved' });
 });
 

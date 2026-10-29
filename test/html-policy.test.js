@@ -2,27 +2,11 @@
  * someone else's — and from the clipboard, and it lands in the live editor, where the app
  * can reach the file system. These tests pin the policy decisions; the DOM walk that applies
  * them is exercised in a real browser by e2e/browser.e2e.mjs.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * policy is lifted out between the `html-policy` markers. It is DOM-free by contract.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import * as P from '../src/js/lib/html.js';
 
-const APP = readFileSync(join(import.meta.dirname, '..', 'src', 'app.js'), 'utf8');
-
-function loadPolicy() {
-  const start = APP.indexOf('/* --- html-policy:start ---');
-  const end = APP.indexOf('/* --- html-policy:end --- */');
-  assert.ok(start !== -1 && end > start,
-    'html-policy markers missing from src/app.js — the policy moved, update this test');
-  return new Function(`'use strict';\n${APP.slice(start, end)}\n` +
-    'return { sceneTagAction, sceneAttrValue, sceneStyleValueOk, SCENE_KEEP_TAGS, SCENE_DROP_TAGS };')();
-}
-
-const P = loadPolicy();
 
 test('everything the editor and mdToHtml produce is kept', () => {
   for (const tag of ['p', 'br', 'div', 'span', 'b', 'strong', 'i', 'em', 'u', 's', 'font', 'h1', 'h2', 'h3', 'ul', 'ol', 'li', 'blockquote']) {

@@ -1,53 +1,26 @@
 /* Coverage for compileTXT() — the plain-text Compile export.
  *
- * Unlike the other export builders, compileTXT() reads the `comp` and `novel` globals
- * directly, and its scene text goes through stripHtml(), which needs a real DOM. So the
- * function is lifted out between the `compile-txt` markers together with the pure blocks
- * it calls (build-flow, comp-toc, sep-text, novel-language) and compFlow(), and run with
- * stand-ins for those globals passed in as parameters — the same technique as
- * test/migrate-novel.test.js.
+ * Unlike the other export builders, compileTXT() reads the compilation and the open novel
+ * from app state, and its scene text goes through stripHtml(), which needs a real DOM. So
+ * it is lifted out of src/js/compile-export.js together with compFlow() and run with
+ * stand-ins for those passed in as parameters (see test/helpers/lift.js); the pure helpers
+ * it calls are the real ones.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const ROOT = join(import.meta.dirname, '..');
-// Normalized so sliceFunction() finds '\n}\n' whatever line endings the checkout has.
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8').replace(/\r\n/g, '\n');
-
-function sliceMarker(name) {
-  const start = APP.indexOf(`/* --- ${name}:start ---`);
-  const end = APP.indexOf(`/* --- ${name}:end --- */`);
-  assert.ok(start !== -1 && end > start,
-    `${name} markers missing from src/app.js — the code moved, update this test`);
-  return APP.slice(start, end);
-}
-
-function sliceFunction(name) {
-  const start = APP.indexOf(`function ${name}(`);
-  const end = APP.indexOf('\n}\n', start) + 3;
-  assert.ok(start !== -1 && end > start, `${name}() not found in src/app.js — update this test`);
-  return APP.slice(start, end);
-}
+import { lift, liftFunction, compile as compileFn } from './helpers/lift.js';
+import { buildFlow, compTocEntries, sepText, tocLabel } from '../src/js/lib/compile-flow.js';
+import { resolveLanguage } from '../src/js/lib/language.js';
 
 /* Only text and block boundaries matter to compileTXT, so a regex is enough here. */
 const testStripHtml = html => String(html || '').replace(/<\/p>/g, '\n').replace(/<[^>]*>/g, '');
 
-function loadCompileTXT() {
-  const src = [
-    sliceMarker('novel-language'),
-    sliceMarker('sep-text'),
-    sliceMarker('build-flow'),
-    sliceMarker('comp-toc'),
-    sliceFunction('compFlow'),
-    sliceMarker('compile-txt'),
-  ].join('\n');
-  // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function('comp', 'novel', 'findScene', 'stripHtml',
-    `'use strict';\n${src}\nreturn compileTXT();`);
-}
-const run = loadCompileTXT();
+const compileTXT = compileFn(
+  ['comp', 'novel', 'findScene', 'stripHtml', 'buildFlow', 'compTocEntries', 'sepText', 'tocLabel', 'resolveLanguage'],
+  liftFunction('compile-export.js', 'compFlow') + lift('compile-export.js', 'compile-txt'),
+  'compileTXT()');
+const run = (comp, novel, findScene, stripHtml) =>
+  compileTXT(comp, novel, findScene, stripHtml, buildFlow, compTocEntries, sepText, tocLabel, resolveLanguage);
 
 /* A two-chapter novel and the matching compile list (one item per scene). */
 function fixture(language, chapterTitles) {

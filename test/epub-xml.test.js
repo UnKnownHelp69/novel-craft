@@ -11,51 +11,15 @@
  * time, are now computed once in exportCompEPUB() and handed in. That is the point of the
  * extraction, so several tests below assert the builders reproduce exactly what they were
  * given rather than minting anything of their own.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md), so the
- * builders are lifted out between marker comments and run here in isolation — the same
- * technique as test/build-flow.test.js, test/comp-toc.test.js, test/zip-writer.test.js,
- * test/docx-strings.test.js, test/pdf-cyrillic.test.js and test/migrate-novel.test.js.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  buildEpubContainerXml, buildEpubOpfXml, buildEpubNavXhtml, buildEpubNcxXml, buildEpubBookXhtml
+} from '../src/js/lib/epub.js';
+import { buildFlow, compTocEntries } from '../src/js/lib/compile-flow.js';
+import { makeZip } from '../src/js/lib/zip.js';
 import { readZip } from './helpers/zip-reader.js';
-
-const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-function sliceMarker(name) {
-  const startMark = `/* --- ${name}:start ---`;
-  const endMark = `/* --- ${name}:end --- */`;
-  const start = APP.indexOf(startMark);
-  const end = APP.indexOf(endMark);
-  assert.ok(start !== -1 && end > start,
-    `${name} markers missing from src/app.js — the code moved, update this test`);
-  return APP.slice(start, end);
-}
-
-function load() {
-  const src = [
-    sliceMarker('docx-strings:esc'),  // esc(); tocLabel() comes from comp-toc below
-    sliceMarker('epub-xml'),
-    sliceMarker('build-flow'),
-    sliceMarker('comp-toc'),
-    sliceMarker('zip-core'),
-  ].join('\n');
-
-  // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function(`'use strict';\n${src}\nreturn {
-    buildEpubContainerXml, buildEpubOpfXml, buildEpubNavXhtml, buildEpubNcxXml,
-    buildEpubBookXhtml, buildFlow, compTocEntries, makeZip
-  };`)();
-}
-
-const {
-  buildEpubContainerXml, buildEpubOpfXml, buildEpubNavXhtml, buildEpubNcxXml,
-  buildEpubBookXhtml, buildFlow, compTocEntries, makeZip
-} = load();
 
 /* Fixed stand-ins for the two values exportCompEPUB() computes once and passes down. */
 const UID = 'urn:uuid:11111111-2222-3333-4444-555555555555';

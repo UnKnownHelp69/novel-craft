@@ -8,32 +8,11 @@
  * inclusion (tocDepth and showTitle), plus the unconditional inclusion of parts
  * and chapters, so a future refactor cannot silently change what lands in the
  * TOC.
- *
- * src/app.js is a single browser script with no module system (see CLAUDE.md),
- * so the function is lifted out between the `comp-toc` markers and run here in
- * isolation — the same technique as test/pdf-cyrillic.test.js,
- * test/migrate-novel.test.js, test/zip-writer.test.js and
- * test/docx-strings.test.js.
  */
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-const ROOT = join(import.meta.dirname, '..');
-const APP = readFileSync(join(ROOT, 'src', 'app.js'), 'utf8');
-
-function loadCompToc() {
-  const start = APP.indexOf('/* --- comp-toc:start ---');
-  const end = APP.indexOf('/* --- comp-toc:end --- */');
-  assert.ok(start !== -1 && end > start,
-    'comp-toc markers missing from src/app.js — the function moved, update this test');
-  const src = APP.slice(start, end);
-  // A new Function body is sloppy-mode by default; src/app.js runs under 'use strict'.
-  return new Function(`'use strict';\n${src}\nreturn { compTocEntries, tocLabel, TOC_LABEL };`)();
-}
-
-const { compTocEntries, tocLabel, TOC_LABEL } = loadCompToc();
+import { compTocEntries, tocLabel, TOC_LABEL } from '../src/js/lib/compile-flow.js';
+import { NOVEL_LANGUAGES } from '../src/js/lib/language.js';
 
 /* A representative compilation flow covering every entry type the predicate
    cares about. Breaks should never appear in a TOC regardless of settings. */
@@ -145,10 +124,7 @@ test('tocLabel falls back to English for a language without its own label, or no
 });
 
 test('every language the Compile dialog offers has its own TOC label', () => {
-  // NOVEL_LANGUAGES lives in the novel-language block; read its codes straight from the source.
-  const m = /const NOVEL_LANGUAGES = (\[[^\n]*\]);/.exec(APP);
-  assert.ok(m, 'NOVEL_LANGUAGES not found in src/app.js — the code moved, update this test');
-  for (const [code] of new Function(`return ${m[1]}`)()) {
+  for (const [code] of NOVEL_LANGUAGES) {
     assert.ok(Object.hasOwn(TOC_LABEL, code), `no TOC label for "${code}"`);
   }
 });

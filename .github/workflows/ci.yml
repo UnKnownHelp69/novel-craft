@@ -48,7 +48,7 @@ jobs:
         run: npm ci
 
       - name: Check frontend syntax
-        run: node --check src/app.js
+        run: find src/js -name '*.js' -print0 | xargs -0 -n1 node --check
 
       - name: Run tests
         run: npm test
