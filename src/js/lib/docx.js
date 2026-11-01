@@ -17,18 +17,19 @@ export function xmlEsc(s) { return esc(String(s == null ? '' : s)); }
 const DOCX_LOCALE = { en: 'en-US', ru: 'ru-RU' };
 /* One <w:p>. w:jc "both" is justified; 720 twips = 1.27 cm, the same first-line indent as
    the HTML/EPUB CSS; w:after 120 twips = 6 pt. A '\n' in a run becomes a <w:br/>;
-   xml:space="preserve" keeps leading/trailing spaces. */
+   xml:space="preserve" keeps leading/trailing spaces. The children of <w:pPr> are a schema
+   sequence (spacing, ind, then jc), and so are those of <w:rPr> (b, i, sz, lang). */
 export function docxP(runs, opts, settings) {
   opts = opts || {};
   const s = settings;
   let ppr = '';
-  const jc = opts.align === 'center' ? 'center' : (s.align === 'justify' ? 'both' : 'left');
-  ppr += `<w:jc w:val="${jc}"/>`;
   const sp = [];
   if (s.lineSpacing && s.lineSpacing !== 1) sp.push(`w:line="${Math.round(s.lineSpacing * 240)}" w:lineRule="auto"`);
   if (s.paraSpacing === 'space') sp.push('w:after="120"');
   if (sp.length) ppr += `<w:spacing ${sp.join(' ')}/>`;
   if (s.indent === 'indent' && !opts.noIndent) ppr += '<w:ind w:firstLine="720"/>';
+  const jc = opts.align === 'center' ? 'center' : (s.align === 'justify' ? 'both' : 'left');
+  ppr += `<w:jc w:val="${jc}"/>`;
   let rs = '';
   (runs || []).forEach(r => {
     const segs = String(r.text == null ? '' : r.text).split('\n');
