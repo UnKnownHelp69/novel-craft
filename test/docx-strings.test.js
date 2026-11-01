@@ -145,6 +145,14 @@ test('docxP first-line indent respects the setting and the noIndent override', (
   assert.ok(!/<w:ind/.test(docxP([{ text: 'x' }], {}, S)));
 });
 
+test('docxP writes paragraph properties in schema order: spacing, ind, then jc', () => {
+  // CT_PPrBase is an xsd:sequence. Word tolerates a wrong order, but schema validators reject
+  // the file and stricter converters drop the out-of-order properties (issue #95).
+  withSettings({ align: 'justify', lineSpacing: 2, paraSpacing: 'space', indent: 'indent' });
+  const ppr = docxP([{ text: 'x' }], {}, S).match(/<w:pPr>(.*?)<\/w:pPr>/)[1];
+  assert.deepStrictEqual(ppr.match(/<w:\w+/g), ['<w:spacing', '<w:ind', '<w:jc'], ppr);
+});
+
 /* ---------- docxP: runs ---------- */
 
 test('docxP bold and italic apply per run, and opts force them on every run', () => {
