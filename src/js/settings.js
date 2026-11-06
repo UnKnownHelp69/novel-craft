@@ -42,7 +42,8 @@ function nativeMenuLabels() {
     export_txt: t('nativeMenu.exportTxt'), export_html: t('nativeMenu.exportHtml'), export_md: t('nativeMenu.exportMd'),
     quit: t('nativeMenu.quit'), undo: t('nativeMenu.undo'), redo: t('nativeMenu.redo'), cut: t('nativeMenu.cut'),
     copy: t('nativeMenu.copy'), paste: t('nativeMenu.paste'), select_all: t('nativeMenu.selectAll'),
-    toggle_focus: t('nativeMenu.toggleFocus'), toggle_panels: t('nativeMenu.togglePanels'), about: t('nativeMenu.about')
+    toggle_focus: t('nativeMenu.toggleFocus'), toggle_panels: t('nativeMenu.togglePanels'), about: t('nativeMenu.about'),
+    check_updates: t('nativeMenu.checkUpdates')
   };
 }
 

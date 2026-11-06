@@ -73,6 +73,7 @@ scripts/                 Node helpers: serve.mjs, make-icon.mjs, fetch-fonts.mjs
 | `notes.js`, `corkboard.js`, `graph.js`, `map.js` | Margin notes; corkboard; relationship graph; world map |
 | `compile.js`, `compile-export.js` | The Compile dialog; building the HTML/TXT/PDF/EPUB/DOCX files |
 | `shortcuts.js`, `menu.js`, `window-controls.js`, `settings.js` | Keyboard shortcuts; native menu events; frameless window; app prefs |
+| `updates.js` | In-app updates: quiet check at startup, Help ▸ Check for Updates…, save before install |
 | `lib/*.js` | `text` (esc, uuid, countWords), `html` (sanitizer), `model`, `markdown`, `language`, `keys`, `compile-flow`, `zip`, `pdf`, `epub`, `docx` |
 | `i18n/` | Interface translations: `index.js` (`t`, `applyI18n`, `LOCALES`), one dictionary per language (`en.js`, `ru.js`) |
 
@@ -114,6 +115,10 @@ Window controls (frameless window): `minimize_window`, `maximize_window`,
 `get_recent_files`, `add_recent_file`. The native menu emits `menu` events
 (payload = item id, e.g. `"save"`, or `"recent:<path>"`) that `js/menu.js` listens for;
 `set_menu_labels` rebuilds it with labels in the interface language (sent by `js/settings.js`).
+Updates (`tauri-plugin-updater`): `check_update` asks the endpoint in `tauri.conf.json`
+(`latest.json` of the newest regular GitHub release) and keeps what it found; `install_update`
+installs only that, after checking its signature against `plugins.updater.pubkey`, and restarts.
+The private key is a repository secret; see RELEASING.md, "The updater key".
 
 ### Data model
 

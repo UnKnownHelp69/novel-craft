@@ -14,6 +14,7 @@ import { doExportNotes } from './notes.js';
 import { openCompile } from './compile.js';
 import { openBackups } from './backups.js';
 import { refreshMaxIcon, requestClose } from './window-controls.js';
+import { checkForUpdates } from './updates.js';
 import { t } from './i18n/index.js';
 
 export function init() {
@@ -42,6 +43,7 @@ export function init() {
         case 'redo': document.execCommand('redo'); break;
         case 'toggle_focus': setFocus(!focusMode); break;
         case 'toggle_panels': $('#toggleLeft').click(); $('#toggleRight').click(); break;
+        case 'check_updates': checkForUpdates({ manual: true }); break;
         case 'about': confirmModal(t('menu.aboutTitle'), t('menu.aboutBody'), () => {}); break;
       }
     });
