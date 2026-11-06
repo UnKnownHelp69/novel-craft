@@ -1,6 +1,6 @@
 /* Corkboard: the scenes of a chapter as index cards, filtered, sorted and reordered by drag. */
 import { $, $$ } from './dom.js';
-import { esc, hashStr } from './lib/text.js';
+import { esc, escAttr, hashStr } from './lib/text.js';
 import { currentSceneId, novel } from './state.js';
 import { markDirty } from './dirty.js';
 import {
@@ -10,6 +10,7 @@ import {
 } from './tree.js';
 import { toast } from './dialogs.js';
 import { fmtNoteDate } from './notes.js';
+import { t } from './i18n/index.js';
 
 export let corkboardOpen = false;
 let corkZoomLevel = 1;          // 0 = small, 1 = medium, 2 = large
@@ -19,8 +20,8 @@ let corkSort = 'order';         // display only; drops always edit the real scen
 let corkDrag = null;
 let suppressCorkClick = false;  // swallows the click that follows a drop
 
-function charName(id) { const c = novel && novel.characters.find(x => x.id === id); return c ? (c.name || '(unnamed)') : ''; }
-function locName(id) { const l = novel && novel.locations.find(x => x.id === id); return l ? (l.name || '(unnamed)') : ''; }
+function charName(id) { const c = novel && novel.characters.find(x => x.id === id); return c ? (c.name || t('cork.unnamed')) : ''; }
+function locName(id) { const l = novel && novel.locations.find(x => x.id === id); return l ? (l.name || t('cork.unnamed')) : ''; }
 
 function openCorkboard() {
   if (!novel) return;
@@ -29,7 +30,7 @@ function openCorkboard() {
   document.body.classList.add('corkboard-mode');
   $('#corkboard').classList.remove('hidden');
   $('#btnCorkboard').classList.add('active');
-  fillSelect($('#corkPov'), [['', 'All POV'], ...novel.characters.map(c => [c.id, c.name || '(unnamed)'])], corkFilterPov);
+  fillSelect($('#corkPov'), [['', t('cork.allPov')], ...novel.characters.map(c => [c.id, c.name || t('cork.unnamed')])], corkFilterPov);
   renderCorkboard();
 }
 export function closeCorkboard() {
@@ -62,14 +63,14 @@ export function renderCorkboard() {
     const group = document.createElement('div');
     group.className = 'cork-group';
     group.dataset.chapterId = c.id;
-    group.innerHTML = `<div class="cork-chap">📁 ${esc(c.title)} <span class="cork-count">${(c.scenes || []).length} scenes</span></div>`;
+    group.innerHTML = `<div class="cork-chap">📁 ${esc(c.title)} <span class="cork-count">${esc(t('cork.sceneCount', { n: (c.scenes || []).length }))}</span></div>`;
     const cards = document.createElement('div');
     cards.className = 'cork-cards';
     sortScenes((c.scenes || []).filter(scenePasses)).forEach(s => cards.appendChild(buildSceneCard(s, c)));
     const ghost = document.createElement('div');
     ghost.className = 'cork-card cork-ghost';
     ghost.dataset.chapterId = c.id;
-    ghost.innerHTML = '<div class="cg-plus">＋</div><div>Add scene</div>';
+    ghost.innerHTML = `<div class="cg-plus">＋</div><div>${esc(t('cork.addScene'))}</div>`;
     ghost.onclick = () => { if (addScene(c.id)) renderCorkboard(); };
     cards.appendChild(ghost);
     group.appendChild(cards);
@@ -88,13 +89,13 @@ function buildSceneCard(s, c) {
   const pov = s.povCharacter ? `<div class="cc-meta">👤 ${esc(charName(s.povCharacter))}</div>` : '';
   const loc = s.location ? `<div class="cc-meta">📍 ${esc(locName(s.location))}</div>` : '';
   card.innerHTML =
-    `<div class="cc-badge" title="Click to cycle status"><span class="cc-dot"></span>${st[1]}</div>
+    `<div class="cc-badge" title="${escAttr(t('cork.cycleStatus'))}"><span class="cc-dot"></span>${esc(t(st[1]))}</div>
      <div class="cc-title">${esc(s.title)}</div>
      <div class="cc-divider"></div>
      ${pov}${loc}
-     <div class="cc-meta">${tm[2]} ${tm[1]}</div>
-     <div class="cc-foot"><span>${s.wordCount || 0} words</span><span class="cc-date">${fmtNoteDate(s.modifiedAt || s.createdAt)}</span></div>
-     <div class="cc-actions"><button class="cc-edit" title="Open in editor">Edit</button><button class="cc-del" title="Delete scene">Delete</button></div>`;
+     <div class="cc-meta">${tm[2]} ${esc(t(tm[1]))}</div>
+     <div class="cc-foot"><span>${esc(t('cork.wordCount', { n: s.wordCount || 0 }))}</span><span class="cc-date">${fmtNoteDate(s.modifiedAt || s.createdAt)}</span></div>
+     <div class="cc-actions"><button class="cc-edit" title="${escAttr(t('cork.openInEditor'))}">${esc(t('common.edit'))}</button><button class="cc-del" title="${escAttr(t('cork.deleteScene'))}">${esc(t('common.delete'))}</button></div>`;
   // A single click opens the scene only after 230ms, so a double-click on the title can
   // rename it instead of leaving the corkboard.
   let clickTimer = null;
@@ -124,7 +125,7 @@ function applyCorkDrop(sceneId, target) {
   if (target.kind === 'card') {
     const g = findScene(target.id);
     if (!g || target.id === sceneId) return;
-    if (g.chapter.id !== from.id && from.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+    if (g.chapter.id !== from.id && from.scenes.length === 1) { toast(t('cork.keepOneScene')); return; }
     const idx = from.scenes.findIndex(s => s.id === sceneId);
     const [moved] = from.scenes.splice(idx, 1);
     let di = g.chapter.scenes.findIndex(s => s.id === target.id);
@@ -133,7 +134,7 @@ function applyCorkDrop(sceneId, target) {
   } else {
     const dest = findChapter(target.id);
     if (!dest || dest.id === from.id) return;
-    if (from.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+    if (from.scenes.length === 1) { toast(t('cork.keepOneScene')); return; }
     const idx = from.scenes.findIndex(s => s.id === sceneId);
     const [moved] = from.scenes.splice(idx, 1);
     dest.scenes.push(moved);

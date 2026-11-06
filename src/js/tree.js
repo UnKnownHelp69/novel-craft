@@ -20,19 +20,23 @@ import {
   closeAddNote, reconcileNotes, renderNoteCard, renderNotes, setOpenNoteId
 } from './notes.js';
 import { corkboardOpen, renderCorkboard } from './corkboard.js';
+import { t } from './i18n/index.js';
 
-// [id stored in the file, label, icon]; ids the file may hold that are not listed fall back
-// to the last entry ('unknown') in timeMeta().
+// [id stored in the file, label key, icon]; ids the file may hold that are not listed fall back
+// to the last entry ('unknown') in timeMeta(). The label is t(key), looked up where it is shown
+// (timeLabel), so it follows the interface language.
 export const TIME_OF_DAY = [
-  ['morning', 'Morning', '🌅'], ['afternoon', 'Afternoon', '🌞'], ['evening', 'Evening', '🌆'],
-  ['night', 'Night', '🌙'], ['dawn', 'Dawn', '🌄'], ['dusk', 'Dusk', '🌇'], ['unknown', 'Unknown', '❓']
+  ['morning', 'tree.timeMorning', '🌅'], ['afternoon', 'tree.timeAfternoon', '🌞'], ['evening', 'tree.timeEvening', '🌆'],
+  ['night', 'tree.timeNight', '🌙'], ['dawn', 'tree.timeDawn', '🌄'], ['dusk', 'tree.timeDusk', '🌇'], ['unknown', 'tree.timeUnknown', '❓']
 ];
-// [id, label, colour]; unknown ids fall back to 'draft' in statusMeta().
+// [id, label key, colour]; unknown ids fall back to 'draft' in statusMeta().
 export const SCENE_STATUS = [
-  ['draft', 'Draft', '#8f887c'], ['review', 'Review', '#e6b422'], ['done', 'Done', '#5cb85c']
+  ['draft', 'tree.statusDraft', '#8f887c'], ['review', 'tree.statusReview', '#e6b422'], ['done', 'tree.statusDone', '#5cb85c']
 ];
-export function timeMeta(id) { return TIME_OF_DAY.find(t => t[0] === id) || TIME_OF_DAY[6]; }
+export function timeMeta(id) { return TIME_OF_DAY.find(x => x[0] === id) || TIME_OF_DAY[6]; }
 export function statusMeta(id) { return SCENE_STATUS.find(s => s[0] === id) || SCENE_STATUS[0]; }
+export function timeLabel(id) { return t(timeMeta(id)[1]); }
+export function statusLabel(id) { return t(statusMeta(id)[1]); }
 
 /* currentChapter/currentScene derive from currentSceneId so a stale
    currentChapterId (after a drag/move) can never disagree with the loaded scene. */
@@ -76,17 +80,17 @@ export function renderTree() {
     chLi.dataset.chapterId = c.id;
     chLi.innerHTML =
       `<div class="tc-row" data-chapter-id="${escAttr(String(c.id))}">
-         <button class="tc-caret" title="Expand / collapse">▾</button>
+         <button class="tc-caret" title="${escAttr(t('tree.expandCollapse'))}">▾</button>
          <span class="tc-folder">📁</span>
          <span class="tc-num">${ci + 1}.</span>
          <span class="tc-title">${esc(c.title)}</span>
          <span class="tc-words">${c.wordCount}</span>
-         <button class="tc-add" title="Add scene to this chapter">＋</button>
+         <button class="tc-add" title="${escAttr(t('tree.addSceneToChapter'))}">＋</button>
        </div>
        <ul class="tc-scenes"></ul>`;
     const sceneUl = chLi.querySelector('.tc-scenes');
     (c.scenes || []).forEach(s => {
-      const st = statusMeta(s.status);   // constants, never file data, so safe unescaped below
+      const st = statusMeta(s.status);   // the colour is a constant, never file data, so safe unescaped below
       const li = document.createElement('li');
       li.className = 'tree-scene' + (s.id === currentSceneId ? ' active' : '');
       li.dataset.sceneId = s.id;
@@ -95,7 +99,7 @@ export function renderTree() {
         `<span class="ts-icon">🎬</span>
          <span class="ts-title">${esc(s.title)}</span>
          <span class="ts-words">${s.wordCount || 0}</span>
-         <span class="ts-status" style="--sc:${st[2]}" title="${st[1]}"></span>`;
+         <span class="ts-status" style="--sc:${st[2]}" title="${escAttr(t(st[1]))}"></span>`;
       sceneUl.appendChild(li);
     });
     chapterList.appendChild(chLi);
@@ -172,7 +176,7 @@ export function addScene(chapterId) {
   renderNotes();
   renderNoteCard();
   markDirty();
-  toast('Scene added');
+  toast(t('tree.sceneAdded'));
   return s;
 }
 export function duplicateScene(sceneId) {
@@ -180,13 +184,13 @@ export function duplicateScene(sceneId) {
   const f = findScene(sceneId);
   if (!f) return;
   const now = new Date().toISOString();
-  const copy = { ...f.scene, id: uuid(), title: f.scene.title + ' (copy)', createdAt: now, modifiedAt: now };
+  const copy = { ...f.scene, id: uuid(), title: t('tree.copyTitle', { title: f.scene.title }), createdAt: now, modifiedAt: now };
   copy.notes = (f.scene.notes || []).map(n => ({ ...n, id: uuid() }));
   const idx = f.chapter.scenes.findIndex(s => s.id === sceneId);
   f.chapter.scenes.splice(idx + 1, 0, copy);
   renderTree();
   markDirty();
-  toast('Scene duplicated');
+  toast(t('tree.sceneDuplicated'));
 }
 /* Re-render everything a structural change (delete / undo) can affect. */
 function refreshAfterStructureChange() {
@@ -206,13 +210,13 @@ function refreshAfterStructureChange() {
 let dismissUndo = null;
 function offerUndo(msg, onUndo) {
   if (dismissUndo) dismissUndo();
-  dismissUndo = toastAction(msg, 'Undo', onUndo);
+  dismissUndo = toastAction(msg, t('tree.undo'), onUndo);
 }
 export function deleteScene(sceneId) {
   const f = findScene(sceneId);
   if (!f) return;
   const c = f.chapter;
-  if (c.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+  if (c.scenes.length === 1) { toast(t('tree.keepOneScene')); return; }
   const owner = novel;
   const wasCurrent = currentSceneId === sceneId;
   if (wasCurrent) saveCurrentScene();          // what Undo brings back includes the latest typing
@@ -221,7 +225,7 @@ export function deleteScene(sceneId) {
   if (wasCurrent) { setCurrentSceneId(c.scenes[Math.max(0, idx - 1)].id); setCurrentChapterId(c.id); }
   refreshAfterStructureChange();
   markDirty();
-  offerUndo(`Scene “${removed.title}” deleted`, () => {
+  offerUndo(t('tree.sceneDeleted', { title: removed.title }), () => {
     if (novel !== owner || findScene(removed.id) || !findChapter(c.id)) return;
     c.scenes.splice(Math.min(idx, c.scenes.length), 0, removed);
     if (wasCurrent) selectScene(removed.id); else refreshAfterStructureChange();
@@ -232,7 +236,7 @@ export function deleteScene(sceneId) {
 export function renameScene(sceneId) {
   const f = findScene(sceneId);
   if (!f) return;
-  promptModal('Rename scene', 'New title:', f.scene.title, v => {
+  promptModal(t('tree.renameScene'), t('tree.newTitle'), f.scene.title, v => {
     if (!v || v === f.scene.title) return;
     f.scene.title = v;
     renderTree(); updateBreadcrumb();
@@ -244,7 +248,7 @@ export function moveSceneToChapter(sceneId, chapterId) {
   const f = findScene(sceneId);
   const dest = findChapter(chapterId);
   if (!f || !dest || f.chapter.id === chapterId) return;
-  if (f.chapter.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+  if (f.chapter.scenes.length === 1) { toast(t('tree.keepOneScene')); return; }
   const idx = f.chapter.scenes.findIndex(s => s.id === sceneId);
   const [moved] = f.chapter.scenes.splice(idx, 1);
   dest.scenes.push(moved);
@@ -252,7 +256,7 @@ export function moveSceneToChapter(sceneId, chapterId) {
   renderTree(); updateBreadcrumb(); updateCounters();
   if (corkboardOpen) renderCorkboard();
   markDirty();
-  toast('Scene moved to ' + dest.title);
+  toast(t('tree.sceneMovedTo', { title: dest.title }));
 }
 
 /* ---- chapter CRUD ---- */
@@ -270,13 +274,13 @@ function addChapter() {
   renderNotes();
   renderNoteCard();
   markDirty();
-  toast('Chapter added');
+  toast(t('tree.chapterAdded'));
 }
 export function duplicateChapter(id) {
   saveCurrentScene();
   const src = findChapter(id);
   if (!src) return;
-  const copy = { ...src, id: uuid(), title: src.title + ' (copy)' };
+  const copy = { ...src, id: uuid(), title: t('tree.copyTitle', { title: src.title }) };
   copy.scenes = (src.scenes || []).map(s => ({
     ...s, id: uuid(), notes: (s.notes || []).map(n => ({ ...n, id: uuid() }))
   }));
@@ -284,10 +288,10 @@ export function duplicateChapter(id) {
   novel.chapters.splice(idx + 1, 0, copy);
   renderTree();
   markDirty();
-  toast('Chapter duplicated');
+  toast(t('tree.chapterDuplicated'));
 }
 export function deleteChapter(id) {
-  if (novel.chapters.length === 1) { toast('Cannot delete the last chapter'); return; }
+  if (novel.chapters.length === 1) { toast(t('tree.cannotDeleteLastChapter')); return; }
   const idx = novel.chapters.findIndex(c => c.id === id);
   if (idx === -1) return;
   const owner = novel;
@@ -302,7 +306,7 @@ export function deleteChapter(id) {
   }
   refreshAfterStructureChange();
   markDirty();
-  offerUndo(`Chapter “${removed.title}” deleted`, () => {
+  offerUndo(t('tree.chapterDeleted', { title: removed.title }), () => {
     if (novel !== owner || findChapter(removed.id)) return;
     novel.chapters.splice(Math.min(idx, novel.chapters.length), 0, removed);
     if (wasCurrent && findScene(prevSceneId)) selectScene(prevSceneId); else refreshAfterStructureChange();
@@ -313,7 +317,7 @@ export function deleteChapter(id) {
 export function renameChapter(id) {
   const c = findChapter(id);
   if (!c) return;
-  promptModal('Rename chapter', 'New title:', c.title, val => {
+  promptModal(t('tree.renameChapter'), t('tree.newTitle'), c.title, val => {
     if (!val || val === c.title) return;
     c.title = val;
     renderTree(); updateBreadcrumb();
@@ -340,7 +344,7 @@ function updateBreadcrumb() {
     if (handler) b.onclick = () => { if (document.activeElement === nvTitle) nvTitle.blur(); handler(); };
     return b;
   };
-  bc.appendChild(part(novel.title || 'Untitled Novel', 'bc-novel', () => { if (novel) nvTitle.dispatchEvent(new MouseEvent('dblclick')); }));
+  bc.appendChild(part(novel.title || t('model.untitledNovel'), 'bc-novel', () => { if (novel) nvTitle.dispatchEvent(new MouseEvent('dblclick')); }));
   bc.appendChild(sep());
   bc.appendChild(part(c.title, 'bc-chapter', () => selectChapter(c.id)));
   if (s) { bc.appendChild(sep()); bc.appendChild(part(s.title, 'bc-scene', () => renameScene(s.id))); }
@@ -366,10 +370,10 @@ export function updateSceneMeta() {
   if (metaHidden) { bar.classList.add('hidden'); if (showBtn) showBtn.classList.remove('hidden'); return; }
   if (showBtn) showBtn.classList.add('hidden');
   bar.classList.remove('hidden');
-  fillSelect($('#metaPov'), [['', '👤 POV: —'], ...novel.characters.map(c => [c.id, '👤 ' + (c.name || '(unnamed)')])], s.povCharacter || '');
-  fillSelect($('#metaLoc'), [['', '📍 Location: —'], ...novel.locations.map(l => [l.id, '📍 ' + (l.name || '(unnamed)')])], s.location || '');
-  fillSelect($('#metaTime'), TIME_OF_DAY.map(t => [t[0], t[2] + ' ' + t[1]]), s.timeOfDay || 'unknown');
-  fillSelect($('#metaStatus'), SCENE_STATUS.map(x => [x[0], x[1]]), s.status || 'draft');
+  fillSelect($('#metaPov'), [['', '👤 ' + t('tree.povNone')], ...novel.characters.map(c => [c.id, '👤 ' + (c.name || t('entities.unnamed'))])], s.povCharacter || '');
+  fillSelect($('#metaLoc'), [['', '📍 ' + t('tree.locationNone')], ...novel.locations.map(l => [l.id, '📍 ' + (l.name || t('entities.unnamed'))])], s.location || '');
+  fillSelect($('#metaTime'), TIME_OF_DAY.map(x => [x[0], x[2] + ' ' + t(x[1])]), s.timeOfDay || 'unknown');
+  fillSelect($('#metaStatus'), SCENE_STATUS.map(x => [x[0], t(x[1])]), s.status || 'draft');
 }
 let metaHidden = false;
 function bindSceneMeta() {
@@ -410,7 +414,7 @@ function applySceneDrop(sceneId, target) {
   if (target.kind === 'scene') {
     const g = findScene(target.id);
     if (!g || target.id === sceneId) return;
-    if (g.chapter.id !== from.id && from.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+    if (g.chapter.id !== from.id && from.scenes.length === 1) { toast(t('tree.keepOneScene')); return; }
     const idx = from.scenes.findIndex(s => s.id === sceneId);
     const [moved] = from.scenes.splice(idx, 1);
     const dest = g.chapter;
@@ -420,7 +424,7 @@ function applySceneDrop(sceneId, target) {
   } else if (target.kind === 'chapter-into') {
     const dest = findChapter(target.id);
     if (!dest || dest.id === from.id) return;
-    if (from.scenes.length === 1) { toast('A chapter must keep at least one scene'); return; }
+    if (from.scenes.length === 1) { toast(t('tree.keepOneScene')); return; }
     const idx = from.scenes.findIndex(s => s.id === sceneId);
     const [moved] = from.scenes.splice(idx, 1);
     dest.scenes.push(moved);

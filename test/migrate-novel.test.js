@@ -19,6 +19,7 @@ import assert from 'node:assert';
 import { lift, compile } from './helpers/lift.js';
 import { uuid, countWords } from '../src/js/lib/text.js';
 import { nowISO, blankScene, blankChapter, blankWorldMap, newNovel } from '../src/js/lib/model.js';
+import { t } from '../src/js/i18n/index.js';
 
 /* Node stand-ins for the two DOM-bound helpers migrateNovel reaches for. stripHtml is the
    production helper's behaviour minus the DOM (the real one parses with DOMParser, which
@@ -29,9 +30,9 @@ const testStripHtml = html => String(html || '').replace(/<[^>]*>/g, ' ');
 const testToast = () => {};
 
 const migrateNovel = compile(
-  ['uuid', 'countWords', 'nowISO', 'blankScene', 'blankChapter', 'blankWorldMap', 'newNovel', 'stripHtml', 'toast'],
+  ['uuid', 'countWords', 'nowISO', 'blankScene', 'blankChapter', 'blankWorldMap', 'newNovel', 'stripHtml', 'toast', 't'],
   lift('novel-file.js', 'migrate-novel'), 'migrateNovel'
-)(uuid, countWords, nowISO, blankScene, blankChapter, blankWorldMap, newNovel, testStripHtml, testToast);
+)(uuid, countWords, nowISO, blankScene, blankChapter, blankWorldMap, newNovel, testStripHtml, testToast, t);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isId = v => typeof v === 'string' && UUID_RE.test(v);
 

@@ -150,6 +150,20 @@ from disk: browsers refuse to load ES modules (and the `fetch()` of the PDF font
 URLs. `npm run serve -- --csp` sends the desktop app's Content-Security-Policy as well, and
 `PORT=…` picks another port.
 
+### Translations
+
+Interface text lives in `src/js/i18n/`: `index.js` (`t()`, `applyI18n()`, the `LOCALES` list) and one
+dictionary per language (`en.js`, the reference, and `ru.js`). Code uses `t('area.key', params)`,
+`index.html` uses `data-i18n="key"` (and `data-i18n-title`, `-placeholder`, `-aria-label`). Plurals
+are objects of [`Intl.PluralRules`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/PluralRules)
+forms (`{ one, few, many, other }`) filled by `t(key, { n })`.
+
+**To add a language:** copy `en.js` to `<code>.js`, translate the values (keys and `{placeholders}`
+stay as they are; give every plural form the language uses), import it in `index.js` and add one
+line to `LOCALES` with the language's own name. It then appears in *Settings ▸ Interface language*
+and in the native menu. `npm test` checks that the new dictionary has every key, the same
+placeholders and all plural forms.
+
 ### Tests
 
 | Command | What it runs | Needs |

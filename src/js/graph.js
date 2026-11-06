@@ -8,15 +8,17 @@ import { safeColor } from './novel-file.js';
 import { ENTITY_DEFS, renderEntities } from './entities.js';
 import { ctx, ctxItem, showCtx } from './context-menu.js';
 import { confirmModal, promptModal, toast } from './dialogs.js';
+import { t } from './i18n/index.js';
 
+/* [type, label key, colour]: labels are looked up with t() where they are rendered. */
 const REL_TYPES = [
-  ['family', 'Family', '#e74c3c'], ['friend', 'Friend', '#2ecc71'], ['enemy', 'Enemy', '#e67e22'],
-  ['romance', 'Romance', '#e91e63'], ['colleague', 'Colleague', '#3498db'], ['mentor', 'Mentor', '#9b59b6'],
-  ['rival', 'Rival', '#d35400'], ['custom', 'Custom', '#c9a96e']
+  ['family', 'graph.relFamily', '#e74c3c'], ['friend', 'graph.relFriend', '#2ecc71'], ['enemy', 'graph.relEnemy', '#e67e22'],
+  ['romance', 'graph.relRomance', '#e91e63'], ['colleague', 'graph.relColleague', '#3498db'], ['mentor', 'graph.relMentor', '#9b59b6'],
+  ['rival', 'graph.relRival', '#d35400'], ['custom', 'graph.relCustom', '#c9a96e']
 ];
-const REL_STATUS = [['active', 'Active'], ['past', 'Past'], ['secret', 'Secret'], ['oneSided', 'One-sided']];
-function relColor(t) { const r = REL_TYPES.find(x => x[0] === t); return r ? r[2] : '#c9a96e'; }
-function relTypeName(t) { const r = REL_TYPES.find(x => x[0] === t); return r ? r[1] : 'Custom'; }
+const REL_STATUS = [['active', 'graph.statusActive'], ['past', 'graph.statusPast'], ['secret', 'graph.statusSecret'], ['oneSided', 'graph.statusOneSided']];
+function relColor(type) { const r = REL_TYPES.find(x => x[0] === type); return r ? r[2] : '#c9a96e'; }
+function relTypeName(type) { const r = REL_TYPES.find(x => x[0] === type); return t(r ? r[1] : 'graph.relCustom'); }
 
 /* Coordinates: character.graphPosition {x,y} (saved in the .novel) is in world units, CSS px at
    zoom 1 around an arbitrary origin. gView maps world to canvas CSS px: screen = world*zoom + (x,y)
@@ -78,7 +80,7 @@ export function openGraph() {
   gCtx = gCanvas.getContext('2d');
   if (!gEventsInit) { initGraphEvents(); gEventsInit = true; }   // once; window handlers bail while closed
   ensureGraphPositions();
-  fillSelect($('#graphFilter'), [['all', 'Show All'], ['main', 'Main Characters Only'], ['withrel', 'With Relationships'], ['withoutrel', 'Without Relationships']], gFilter);
+  fillSelect($('#graphFilter'), [['all', t('graph.filterAll')], ['main', t('graph.filterMain')], ['withrel', t('graph.filterWithRel')], ['withoutrel', t('graph.filterWithoutRel')]], gFilter);
   renderLegend();
   gSelected = null; gPanelRel = null;
   $('#graphPanel').classList.add('hidden');
@@ -192,7 +194,7 @@ function drawNode(ch, connected) {
   // name: fixed 14px at every zoom so it stays legible
   gCtx.globalAlpha = faded ? 0.3 : 1;
   gCtx.fillStyle = '#ffffff'; gCtx.font = '14px Inter, sans-serif'; gCtx.textBaseline = 'top';
-  gCtx.fillText(ch.name || '(unnamed)', p.x, p.y + r + 4);
+  gCtx.fillText(ch.name || t('graph.unnamed'), p.x, p.y + r + 4);
   gCtx.restore();
 }
 function nodeAt(sx, sy) {   // screen coords; last-drawn (topmost) node wins
@@ -269,9 +271,9 @@ function initGraphEvents() {
     if (!node) return;
     e.preventDefault();
     ctx.innerHTML = '';
-    ctx.appendChild(ctxItem('Edit Character', () => openCharPanel(node)));
-    ctx.appendChild(ctxItem('Add Relationship', () => openRelPanel(null, node.id)));
-    ctx.appendChild(ctxItem('Hide from Graph', () => { node.hiddenInGraph = true; markDirty(); drawGraph(); }));
+    ctx.appendChild(ctxItem(t('graph.editCharacter'), () => openCharPanel(node)));
+    ctx.appendChild(ctxItem(t('graph.addRelationship'), () => openRelPanel(null, node.id)));
+    ctx.appendChild(ctxItem(t('graph.hideFromGraph'), () => { node.hiddenInGraph = true; markDirty(); drawGraph(); }));
     showCtx(Math.min(e.clientX, innerWidth - 190), e.clientY);
   });
 }
@@ -289,38 +291,38 @@ function openRelPanel(rel, aId, bId) {
   gPanelRel = rel;
   const a = novel.characters.find(c => c.id === (rel ? findRelSource(rel).id : aId));
   const b = novel.characters.find(c => c.id === (rel ? rel.targetCharacterId : bId));
-  const charOpts = novel.characters.map(c => [c.id, c.name || '(unnamed)']);
+  const charOpts = novel.characters.map(c => [c.id, c.name || t('graph.unnamed')]);
   const dots = n => '●'.repeat(n) + '○'.repeat(10 - n);
   panel.classList.remove('hidden');
   panel.innerHTML =
-    `<div class="gp-head">${rel ? 'Edit Relationship' : 'Add Relationship'}<button class="gp-x" id="gpClose">✕</button></div>
-     <label class="field-label">Character A</label>
+    `<div class="gp-head">${esc(t(rel ? 'graph.editRelationship' : 'graph.addRelationship'))}<button class="gp-x" id="gpClose">✕</button></div>
+     <label class="field-label">${esc(t('graph.characterA'))}</label>
      <select id="relA" class="control" ${rel ? 'disabled' : ''}></select>
-     <label class="field-label">Character B</label>
+     <label class="field-label">${esc(t('graph.characterB'))}</label>
      <select id="relB" class="control" ${rel ? 'disabled' : ''}></select>
-     <label class="field-label">Relationship type</label>
+     <label class="field-label">${esc(t('graph.relType'))}</label>
      <select id="relType" class="control"></select>
-     <label class="field-label">Subtype</label>
-     <input type="text" id="relSubtype" class="control" placeholder="e.g. father, best friend" />
-     <label class="field-label">Description</label>
+     <label class="field-label">${esc(t('graph.subtype'))}</label>
+     <input type="text" id="relSubtype" class="control" placeholder="${escAttr(t('graph.subtypePlaceholder'))}" />
+     <label class="field-label">${esc(t('graph.description'))}</label>
      <textarea id="relDesc" class="control" rows="2"></textarea>
-     <label class="field-label">Strength: <span id="relStrengthDots">${dots(rel ? rel.strength : 5)}</span></label>
+     <label class="field-label">${esc(t('graph.strength'))} <span id="relStrengthDots">${dots(rel ? rel.strength : 5)}</span></label>
      <input type="range" id="relStrength" class="slider" min="1" max="10" value="${rel ? rel.strength : 5}" />
-     <label class="field-label">Status</label>
+     <label class="field-label">${esc(t('graph.status'))}</label>
      <select id="relStatus" class="control"></select>
-     <label class="field-label">First appears in</label>
-     <input type="text" id="relStart" class="control" placeholder="e.g. Chapter 3, Scene 2" />
-     <label class="field-label">Notes</label>
+     <label class="field-label">${esc(t('graph.firstAppears'))}</label>
+     <input type="text" id="relStart" class="control" placeholder="${escAttr(t('graph.firstAppearsPlaceholder'))}" />
+     <label class="field-label">${esc(t('graph.notes'))}</label>
      <textarea id="relNotes" class="control" rows="2"></textarea>
      <div class="gp-actions">
-       ${rel ? '<button class="tbtn nc-danger" id="relDelete">Delete</button>' : ''}
-       <button class="tbtn subtle" id="relCancel">Cancel</button>
-       <button class="tbtn accent" id="relSave">Save</button>
+       ${rel ? `<button class="tbtn nc-danger" id="relDelete">${esc(t('common.delete'))}</button>` : ''}
+       <button class="tbtn subtle" id="relCancel">${esc(t('common.cancel'))}</button>
+       <button class="tbtn accent" id="relSave">${esc(t('common.save'))}</button>
      </div>`;
   fillSelect($('#relA'), charOpts, a ? a.id : (aId || (charOpts[0] && charOpts[0][0])));
   fillSelect($('#relB'), charOpts, b ? b.id : (bId || (charOpts[1] && charOpts[1][0])));
-  fillSelect($('#relType'), REL_TYPES.map(t => [t[0], t[1]]), rel ? rel.type : 'friend');
-  fillSelect($('#relStatus'), REL_STATUS, rel ? rel.status : 'active');
+  fillSelect($('#relType'), REL_TYPES.map(r => [r[0], t(r[1])]), rel ? rel.type : 'friend');
+  fillSelect($('#relStatus'), REL_STATUS.map(([v, k]) => [v, t(k)]), rel ? rel.status : 'active');
   $('#relSubtype').value = rel ? (rel.subtype || '') : '';
   $('#relDesc').value = rel ? (rel.description || '') : '';
   $('#relStart').value = rel ? (rel.startedAt || '') : '';
@@ -334,7 +336,7 @@ function openRelPanel(rel, aId, bId) {
 function findRelSource(rel) { return novel.characters.find(c => (c.relationships || []).some(r => r.id === rel.id)); }
 function saveRelFromPanel(rel) {
   const aId = $('#relA').value, bId = $('#relB').value;
-  if (aId === bId) { toast('Pick two different characters'); return; }
+  if (aId === bId) { toast(t('graph.pickTwo')); return; }
   const data = {
     targetCharacterId: bId,
     type: $('#relType').value,
@@ -353,12 +355,12 @@ function saveRelFromPanel(rel) {
       const na = novel.characters.find(c => c.id === aId);
       na.relationships = na.relationships || []; na.relationships.push(rel);
     }
-    toast('Relationship updated');
+    toast(t('graph.relUpdated'));
   } else {
     const a = novel.characters.find(c => c.id === aId);
     a.relationships = a.relationships || [];
     a.relationships.push({ id: uuid(), ...data });
-    toast('Relationship added');
+    toast(t('graph.relAdded'));
   }
   markDirty();
   $('#graphPanel').classList.add('hidden');
@@ -366,35 +368,35 @@ function saveRelFromPanel(rel) {
   drawGraph();
 }
 function deleteRel(rel) {
-  confirmModal('Delete relationship', 'Delete this relationship?', () => {
+  confirmModal(t('graph.deleteRelTitle'), t('graph.deleteRelBody'), () => {
     const src = findRelSource(rel);
     if (src) src.relationships = src.relationships.filter(r => r.id !== rel.id);
     markDirty(); $('#graphPanel').classList.add('hidden'); renderEntities('characters'); drawGraph();
-    toast('Relationship deleted');
+    toast(t('graph.relDeleted'));
   });
 }
 export function openCharPanel(ch) {
   const panel = $('#graphPanel');
   panel.classList.remove('hidden');
   const rels = (ch.relationships || []).map(r => {
-    const t = novel.characters.find(c => c.id === r.targetCharacterId);
-    return `<li><span class="gp-reldot" style="background:${relColor(r.type)}"></span>${esc(r.subtype || relTypeName(r.type))} → ${esc(t ? (t.name || '(unnamed)') : '?')}</li>`;
-  }).join('') || '<li class="gp-empty">No relationships yet</li>';
+    const tgt = novel.characters.find(c => c.id === r.targetCharacterId);
+    return `<li><span class="gp-reldot" style="background:${relColor(r.type)}"></span>${esc(r.subtype || relTypeName(r.type))} → ${esc(tgt ? (tgt.name || t('graph.unnamed')) : '?')}</li>`;
+  }).join('') || `<li class="gp-empty">${esc(t('graph.noRelationships'))}</li>`;
   panel.innerHTML =
-    `<div class="gp-head">Character<button class="gp-x" id="gpClose">✕</button></div>
-     <label class="field-label">Name</label>
+    `<div class="gp-head">${esc(t('graph.character'))}<button class="gp-x" id="gpClose">✕</button></div>
+     <label class="field-label">${esc(t('graph.name'))}</label>
      <input type="text" id="gcName" class="control" value="${escAttr(ch.name || '')}" />
-     <label class="field-label">Role</label>
+     <label class="field-label">${esc(t('graph.role'))}</label>
      <select id="gcRole" class="control"></select>
-     <label class="field-label">Node colour</label>
+     <label class="field-label">${esc(t('graph.nodeColour'))}</label>
      <input type="color" id="gcColor" class="nt-color" value="${safeColor(ch.color, '#c9a96e')}" />
-     <div class="gp-rels"><div class="field-label">Relationships</div><ul>${rels}</ul></div>
+     <div class="gp-rels"><div class="field-label">${esc(t('graph.relationships'))}</div><ul>${rels}</ul></div>
      <div class="gp-actions">
-       <button class="tbtn" id="gcAddRel">Add Relationship</button>
-       <button class="tbtn subtle" id="gcProfile">View Full Profile</button>
-       <button class="tbtn accent" id="gcSave">Save</button>
+       <button class="tbtn" id="gcAddRel">${esc(t('graph.addRelationship'))}</button>
+       <button class="tbtn subtle" id="gcProfile">${esc(t('graph.viewProfile'))}</button>
+       <button class="tbtn accent" id="gcSave">${esc(t('common.save'))}</button>
      </div>`;
-  fillSelect($('#gcRole'), [['main', 'Main'], ['supporting', 'Supporting'], ['minor', 'Minor']], ch.role || 'main');
+  fillSelect($('#gcRole'), [['main', t('graph.roleMain')], ['supporting', t('graph.roleSupporting')], ['minor', t('graph.roleMinor')]], ch.role || 'main');
   $('#gpClose').onclick = () => panel.classList.add('hidden');
   $('#gcColor').oninput = e => { ch.color = e.target.value; markDirty(); drawGraph(); };
   $('#gcAddRel').onclick = () => openRelPanel(null, ch.id);
@@ -404,7 +406,7 @@ export function openCharPanel(ch) {
     ch.role = $('#gcRole').value;
     markDirty(); renderEntities('characters'); drawGraph();
     panel.classList.add('hidden');
-    toast('Character updated');
+    toast(t('graph.charUpdated'));
   };
 }
 /* Relies on #charList rendering one .entity per character in novel.characters order. */
@@ -468,7 +470,7 @@ function animateTo() {
 
 export function renderLegend() {
   const body = $('#legendBody');
-  body.innerHTML = REL_TYPES.map(t => `<div class="lg-row"><span class="lg-line" style="background:${t[2]}"></span>${t[1]}</div>`).join('');
+  body.innerHTML = REL_TYPES.map(r => `<div class="lg-row"><span class="lg-line" style="background:${r[2]}"></span>${esc(t(r[1]))}</div>`).join('');
 }
 
 function exportGraphPng() {
@@ -477,7 +479,7 @@ function exportGraphPng() {
   const name = (novel.title || 'novel') + '-graph.png';
   const a = document.createElement('a');
   a.href = url; a.download = name; a.click();
-  toast('Graph exported (' + name + ')');
+  toast(t('graph.exported', { name }));
 }
 
 export function init() {
@@ -486,16 +488,16 @@ export function init() {
   $('#graphClose').addEventListener('click', closeGraph);
   $('#graphOverlay').addEventListener('mousedown', e => { if (e.target === $('#graphOverlay')) closeGraph(); });
   $('#graphAddChar').addEventListener('click', () => {
-    promptModal('Add character', 'Character name:', '', name => {
+    promptModal(t('graph.addCharTitle'), t('graph.addCharBody'), '', name => {
       if (!name) return;
       const c = ENTITY_DEFS.characters.empty(); c.name = name;
       c.graphPosition = { x: Math.random() * 200 - 100, y: Math.random() * 200 - 100 };
       novel.characters.push(c);
       markDirty(); renderEntities('characters'); renderLegend(); drawGraph();
-      toast('Character added');
+      toast(t('graph.charAdded'));
     });
   });
-  $('#graphAddRel').addEventListener('click', () => { if (novel.characters.length < 2) { toast('Add at least two characters first'); return; } openRelPanel(null, novel.characters[0].id, novel.characters[1].id); });
+  $('#graphAddRel').addEventListener('click', () => { if (novel.characters.length < 2) { toast(t('graph.needTwoChars')); return; } openRelPanel(null, novel.characters[0].id, novel.characters[1].id); });
   // the layout select is an action menu: run the layout, then show 'manual' again so it can be re-picked
   $('#graphLayout').addEventListener('change', e => {
     if (e.target.value === 'auto') forceLayout();
@@ -505,6 +507,6 @@ export function init() {
   $('#graphFilter').addEventListener('change', e => { gFilter = e.target.value; gSelected = null; drawGraph(); });
   $('#graphExport').addEventListener('click', exportGraphPng);
   $('#graphReset').addEventListener('click', () => { novel.characters.forEach(c => (c.graphPosition = null)); ensureGraphPositions(); forceLayout(); });
-  $('#legendToggle').addEventListener('click', () => { const b = $('#legendBody'); const hidden = b.classList.toggle('collapsed'); $('#legendToggle').textContent = 'Legend ' + (hidden ? '▴' : '▾'); });
+  $('#legendToggle').addEventListener('click', () => { const b = $('#legendBody'); const hidden = b.classList.toggle('collapsed'); $('#legendToggle').textContent = t('graph.legend') + ' ' + (hidden ? '▴' : '▾'); });
   addEventListener('resize', () => { if (graphOpen) gResize(); });
 }

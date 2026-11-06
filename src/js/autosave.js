@@ -8,6 +8,7 @@ import {
   flushNovel, serializeNovel, setCurrentNovel, updateFilePathIndicator
 } from './novel-file.js';
 import { confirmModal, toast } from './dialogs.js';
+import { t } from './i18n/index.js';
 
 const LS_KEY = 'novelcraft:autosave';
 let backupFailed = false;   // show the quota toast once, not every 10s, until a backup succeeds again
@@ -25,7 +26,7 @@ export function localBackup() {
       backupFailed = false;
     } catch (_) {
       if (!backupFailed) {
-        toast('Novel too large for auto-backup. Save manually!');
+        toast(t('autosave.tooLarge'));
         backupFailed = true;
       }
     }
@@ -69,8 +70,7 @@ export async function checkRecovery() {
     let settled = false;
     const done = v => { if (settled) return; settled = true; cancel.removeEventListener('click', onCancel); res(v); };
     const onCancel = () => done('declined');   // keep the backup untouched; just go to the start menu
-    confirmModal('Recover unsaved work',
-      'Unsaved changes from a previous session were found. Restore them?',
+    confirmModal(t('autosave.recoverTitle'), t('autosave.recoverBody'),
       async () => {
         // The backup remembers where the novel lived, but this session may only write there
         // if the user opened or saved that file before (the backend's allowlist). If it can't
@@ -81,11 +81,11 @@ export async function checkRecovery() {
         }
         try {
           setCurrentNovel(payload, path); markDirty();
-          toast(path || !data.path ? 'Recovered' : 'Recovered as unsaved — use Save to choose where to keep it');
+          toast(path || !data.path ? t('autosave.recovered') : t('autosave.recoveredUnsaved'));
           done('restored');
         } catch (e) {
           console.error('Recovery restore failed:', e);
-          toast('Could not restore backup — the saved data appears corrupted');
+          toast(t('autosave.restoreFailed'));
           done('declined');   // leave the start menu; the backup is kept for inspection
         }
       });

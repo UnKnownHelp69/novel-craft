@@ -6,6 +6,8 @@ import {
   addScene, deleteChapter, deleteScene, duplicateChapter, duplicateScene, moveSceneToChapter,
   renameChapter, renameScene, setAllCollapsed
 } from './tree.js';
+import { esc } from './lib/text.js';
+import { t } from './i18n/index.js';
 
 export const ctx = $('#ctxMenu');
 function hideCtx() { ctx.classList.add('hidden'); ctx.innerHTML = ''; }
@@ -48,14 +50,14 @@ export function init() {
     ctx.innerHTML = '';
     if (sceneEl) {
       const id = sceneEl.dataset.sceneId;
-      ctx.appendChild(ctxItem('Rename', () => renameScene(id)));
-      ctx.appendChild(ctxItem('Duplicate', () => duplicateScene(id)));
-      ctx.appendChild(ctxItem('Delete', () => deleteScene(id), 'danger'));
+      ctx.appendChild(ctxItem(t('common.rename'), () => renameScene(id)));
+      ctx.appendChild(ctxItem(t('ctx.duplicate'), () => duplicateScene(id)));
+      ctx.appendChild(ctxItem(t('common.delete'), () => deleteScene(id), 'danger'));
       const others = novel.chapters.filter(c => !(c.scenes || []).some(s => s.id === id));
       if (others.length) {
         const sub = document.createElement('div');
         sub.className = 'ctx-sub';
-        sub.innerHTML = '<button class="ctx-sub-head">Move to Chapter ▸</button>';
+        sub.innerHTML = `<button class="ctx-sub-head">${esc(t('ctx.moveToChapter'))} ▸</button>`;
         const list = document.createElement('div');
         list.className = 'ctx-sub-menu';
         others.forEach(c => list.appendChild(ctxItem(c.title, () => moveSceneToChapter(id, c.id))));
@@ -64,12 +66,12 @@ export function init() {
       }
     } else {
       const id = chapRow.dataset.chapterId;
-      ctx.appendChild(ctxItem('Rename', () => renameChapter(id)));
-      ctx.appendChild(ctxItem('Duplicate', () => duplicateChapter(id)));
-      ctx.appendChild(ctxItem('Add Scene', () => addScene(id)));
-      ctx.appendChild(ctxItem('Delete', () => deleteChapter(id), 'danger'));
-      ctx.appendChild(ctxItem('Collapse All', () => setAllCollapsed(true)));
-      ctx.appendChild(ctxItem('Expand All', () => setAllCollapsed(false)));
+      ctx.appendChild(ctxItem(t('common.rename'), () => renameChapter(id)));
+      ctx.appendChild(ctxItem(t('ctx.duplicate'), () => duplicateChapter(id)));
+      ctx.appendChild(ctxItem(t('ctx.addScene'), () => addScene(id)));
+      ctx.appendChild(ctxItem(t('common.delete'), () => deleteChapter(id), 'danger'));
+      ctx.appendChild(ctxItem(t('ctx.collapseAll'), () => setAllCollapsed(true)));
+      ctx.appendChild(ctxItem(t('ctx.expandAll'), () => setAllCollapsed(false)));
     }
     showCtx(Math.min(e.clientX, innerWidth - 190), e.clientY);   // 190px: room for the menu (showCtx only fits it vertically)
   });

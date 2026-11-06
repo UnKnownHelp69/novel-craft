@@ -11,16 +11,18 @@ import { mdMode } from './editor.js';
 import { confirmModal, toast } from './dialogs.js';
 import { downloadFile } from './export.js';
 import { loadPrefs, savePrefs } from './settings.js';
+import { t, fmtDate } from './i18n/index.js';
 
 const DEFAULT_NOTE_TYPES = [
-  { id: 'fix',       name: 'Fix',        color: '#e6b422', icon: '🟡' },
-  { id: 'factcheck', name: 'Fact-check', color: '#4a90d9', icon: '🔵' },
-  { id: 'expand',    name: 'Expand',     color: '#5cb85c', icon: '🟢' },
-  { id: 'move',      name: 'Move',       color: '#9b59b6', icon: '🟣' },
-  { id: 'idea',      name: 'Idea',       color: '#e74c3c', icon: '🔴' }
+  { id: 'fix',       nameKey: 'notes.typeFix',       color: '#e6b422', icon: '🟡' },
+  { id: 'factcheck', nameKey: 'notes.typeFactcheck', color: '#4a90d9', icon: '🔵' },
+  { id: 'expand',    nameKey: 'notes.typeExpand',    color: '#5cb85c', icon: '🟢' },
+  { id: 'move',      nameKey: 'notes.typeMove',      color: '#9b59b6', icon: '🟣' },
+  { id: 'idea',      nameKey: 'notes.typeIdea',      color: '#e74c3c', icon: '🔴' }
 ];
 const NOTE_FALLBACK_ID = 'idea';
 
+/* Default types are shown by nameKey (UI language); a custom type's name is the user's own. */
 /* display prefs are app-level (localStorage), colors of default types are per-novel */
 let noteDisplay = { showMargin: true, highlightAnno: true, autoResolveEdit: false };
 export let openNoteId = null;             // id of the note whose card is open
@@ -40,14 +42,14 @@ export const notePopup = $('#notePopup');
    colour-checked by migrateNovel on load. */
 function getNoteTypes() {
   const overrides = (novel && novel.settings && novel.settings.noteTypeColors) || {};
-  const defs = DEFAULT_NOTE_TYPES.map(t => ({ ...t, color: overrides[t.id] || t.color, isDefault: true }));
+  const defs = DEFAULT_NOTE_TYPES.map(ty => ({ ...ty, name: t(ty.nameKey), color: overrides[ty.id] || ty.color, isDefault: true }));
   const custom = ((novel && novel.settings && novel.settings.customNoteTypes) || [])
-    .map(t => ({ ...t, isDefault: false }));
+    .map(ty => ({ ...ty, isDefault: false }));
   return [...defs, ...custom];
 }
 function getNoteType(id) {
   const all = getNoteTypes();
-  return all.find(t => t.id === id) || all.find(t => t.id === NOTE_FALLBACK_ID) || all[0];
+  return all.find(ty => ty.id === id) || all.find(ty => ty.id === NOTE_FALLBACK_ID) || all[0];
 }
 function chapterNotes() { const s = currentScene(); return (s && s.notes) || []; }  // despite the name: notes live on scenes
 /* Coalesces dot/highlight/card layout into one frame; called on every keystroke and resize. */
@@ -140,11 +142,11 @@ export function fmtNoteDate(iso) {
   const d = new Date(iso);
   if (isNaN(d)) return '';
   const diff = (Date.now() - d.getTime()) / 1000;
-  if (diff < 60) return 'just now';
-  if (diff < 3600) return Math.floor(diff / 60) + ' min ago';
-  if (diff < 86400) return Math.floor(diff / 3600) + ' h ago';
-  if (diff < 172800) return 'yesterday';
-  return d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+  if (diff < 60) return t('notes.justNow');
+  if (diff < 3600) return t('notes.minAgo', { n: Math.floor(diff / 60) });
+  if (diff < 86400) return t('notes.hoursAgo', { n: Math.floor(diff / 3600) });
+  if (diff < 172800) return t('notes.yesterday');
+  return fmtDate(d, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 function buildTypeOptions(select, selectedId) {
   select.innerHTML = '';
@@ -180,7 +182,7 @@ function positionFloat(el, rect) {
 /* ---- add-note popup ---- */
 export function openAddNote(sel) {
   const s = sel || getSelectionInEditor();
-  if (!s) { toast('Select text to annotate'); return; }
+  if (!s) { toast(t('notes.selectText')); return; }
   if (!novel || !currentScene()) return;
   pendingSelection = s;
   buildTypeOptions($('#npType'));
@@ -208,7 +210,7 @@ export function confirmAddNote() {
   closeAddNote();
   markDirty();
   renderNotes();
-  toast('Note added');
+  toast(t('notes.added'));
 }
 
 /* editor right-click -> "Add Note" */
@@ -260,7 +262,7 @@ function showDotTooltip(dot, nt) {
   dotTip = document.createElement('div');
   dotTip.className = 'note-tip';
   dotTip.innerHTML = `<b style="color:${safeColor(ty.color, '#c9a96e')}">${esc(ty.icon || '')} ${esc(ty.name)}</b>` +
-    `<div class="nt-content">${esc((nt.content || '(no text)').slice(0, 50))}</div>` +
+    `<div class="nt-content">${esc((nt.content || t('notes.noText')).slice(0, 50))}</div>` +
     `<div class="nt-date">${fmtNoteDate(nt.createdAt)}</div>`;
   document.body.appendChild(dotTip);
   const r = dot.getBoundingClientRect();
@@ -348,8 +350,8 @@ export function renderNoteCard() {
        <div class="nc-head"><select id="ncType" class="control"></select></div>
        <textarea id="ncEditBody" class="control nc-editbody" rows="4"></textarea>
        <div class="nc-actions">
-         <button id="ncCancelEdit" class="tbtn subtle">Cancel</button>
-         <button id="ncSaveEdit" class="tbtn accent">Save</button>
+         <button id="ncCancelEdit" class="tbtn subtle">${esc(t('common.cancel'))}</button>
+         <button id="ncSaveEdit" class="tbtn accent">${esc(t('common.save'))}</button>
        </div>`;
     buildTypeOptions($('#ncType'), nt.typeId);
     $('#ncEditBody').value = nt.content || '';
@@ -357,7 +359,7 @@ export function renderNoteCard() {
       nt.typeId = $('#ncType').value;
       nt.content = $('#ncEditBody').value.trim();
       noteEditing = false; markDirty(); renderNoteCard(); renderNotes();
-      toast('Note updated');
+      toast(t('notes.updated'));
     };
     $('#ncCancelEdit').onclick = () => { noteEditing = false; renderNoteCard(); };
     setTimeout(() => $('#ncEditBody').focus(), 20);
@@ -366,15 +368,15 @@ export function renderNoteCard() {
       `<div class="nc-arrow"></div>
        <div class="nc-head">
          <span class="note-badge" style="--nc:${safeColor(ty.color, '#c9a96e')}">${esc(ty.icon || '•')} ${esc(ty.name)}</span>
-         ${nt.positionLost ? '<span class="nc-warn" title="Position may be inaccurate">⚠️</span>' : ''}
+         ${nt.positionLost ? `<span class="nc-warn" title="${escAttr(t('notes.positionInaccurate'))}">⚠️</span>` : ''}
        </div>
        <div class="nc-quote">“${esc(nt.selectedText || '')}”</div>
-       <div class="nc-body">${(esc(nt.content || '').replace(/\n/g, '<br>')) || '<span class="nc-empty">(no text)</span>'}</div>
-       <div class="nc-time">${fmtNoteDate(nt.createdAt)}${nt.resolved ? ' · ✓ resolved' : ''}</div>
+       <div class="nc-body">${(esc(nt.content || '').replace(/\n/g, '<br>')) || `<span class="nc-empty">${esc(t('notes.noText'))}</span>`}</div>
+       <div class="nc-time">${fmtNoteDate(nt.createdAt)}${nt.resolved ? ' · ' + esc(t('notes.resolvedMark')) : ''}</div>
        <div class="nc-actions">
-         <button id="ncResolve" class="tbtn">${nt.resolved ? 'Unresolve' : '✓ Resolve'}</button>
-         <button id="ncEdit" class="tbtn">✎ Edit</button>
-         <button id="ncDelete" class="tbtn nc-danger">🗑 Delete</button>
+         <button id="ncResolve" class="tbtn">${esc(nt.resolved ? t('notes.unresolve') : t('notes.resolve'))}</button>
+         <button id="ncEdit" class="tbtn">✎ ${esc(t('common.edit'))}</button>
+         <button id="ncDelete" class="tbtn nc-danger">🗑 ${esc(t('common.delete'))}</button>
        </div>`;
     $('#ncResolve').onclick = () => toggleResolve(nt.id);
     $('#ncEdit').onclick = () => { noteEditing = true; renderNoteCard(); };
@@ -412,16 +414,16 @@ function toggleResolve(id) {
   nt.resolved = !nt.resolved;
   if (!nt.resolved) delete nt.resolveReason;
   markDirty(); renderNoteCard(); renderNotes();
-  toast(nt.resolved ? 'Note resolved' : 'Note reopened');
+  toast(nt.resolved ? t('notes.resolved') : t('notes.reopened'));
 }
 function deleteNote(id) {
-  confirmModal('Delete note', 'Delete this note? This cannot be undone.', () => {
+  confirmModal(t('notes.deleteTitle'), t('notes.deleteBody'), () => {
     const c = currentScene();
     if (!c) return;
     c.notes = (c.notes || []).filter(n => n.id !== id);
     if (openNoteId === id) closeNoteCard();
     markDirty(); renderNotes();
-    toast('Note deleted');
+    toast(t('notes.deleted'));
   });
 }
 
@@ -433,7 +435,7 @@ function renderFilterPills() {
   const notes = chapterNotes();
   const all = document.createElement('button');
   all.className = 'filter-pill all' + (noteTypeFilter.size === 0 ? ' active' : '');
-  all.textContent = `All (${notes.length})`;
+  all.textContent = t('notes.filterAll', { n: notes.length });
   all.onclick = () => { noteTypeFilter.clear(); renderNotes(); };
   host.appendChild(all);
   getNoteTypes().forEach(ty => {
@@ -453,7 +455,7 @@ function renderNotesPanel() {
   if (!novel) return;
   const notes = filteredNotes();
   if (!notes.length) {
-    host.innerHTML = '<div class="note-empty"><div class="ne-icon">📝</div><p>No notes in this chapter</p></div>';
+    host.innerHTML = `<div class="note-empty"><div class="ne-icon">📝</div><p>${esc(t('notes.empty'))}</p></div>`;
     return;
   }
   notes.forEach(nt => {
@@ -466,7 +468,7 @@ function renderNotesPanel() {
        <div class="nl-main">
          <div class="nl-top">
            <span class="nl-type">${esc(ty.icon || '•')} ${esc(ty.name)}</span>
-           ${nt.positionLost ? '<span class="nl-warn" title="Position may be inaccurate">⚠️</span>' : ''}
+           ${nt.positionLost ? `<span class="nl-warn" title="${escAttr(t('notes.positionInaccurate'))}">⚠️</span>` : ''}
            ${nt.resolved ? '<span class="nl-check">✓</span>' : ''}
          </div>
          <div class="nl-quote">“${esc((nt.selectedText || '').slice(0, 40))}${(nt.selectedText || '').length > 40 ? '…' : ''}”</div>
@@ -493,8 +495,8 @@ function setNoteTypeColor(ty, color) {
   if (!novel) return;
   if (ty.isDefault) { novel.settings.noteTypeColors[ty.id] = color; }
   else {
-    const t = novel.settings.customNoteTypes.find(x => x.id === ty.id);
-    if (t) t.color = color;
+    const ct = novel.settings.customNoteTypes.find(x => x.id === ty.id);
+    if (ct) ct.color = color;
   }
   markDirty();
   ensureHighlightStyles();
@@ -502,32 +504,32 @@ function setNoteTypeColor(ty, color) {
   renderNotes();
 }
 function deleteCustomType(ty) {
-  confirmModal('Delete type', `Delete the “${ty.name}” type? Its notes will become “Idea”.`, () => {
-    novel.settings.customNoteTypes = novel.settings.customNoteTypes.filter(t => t.id !== ty.id);
+  confirmModal(t('notes.deleteTypeTitle'), t('notes.deleteTypeBody', { name: ty.name }), () => {
+    novel.settings.customNoteTypes = novel.settings.customNoteTypes.filter(x => x.id !== ty.id);
     novel.chapters.forEach(c => (c.scenes || []).forEach(s => (s.notes || []).forEach(n => { if (n.typeId === ty.id) n.typeId = NOTE_FALLBACK_ID; })));
     noteTypeFilter.delete(ty.id);
     markDirty();
     ensureHighlightStyles();
     renderNoteTypeSettings();
     renderNotes();
-    toast('Type deleted');
+    toast(t('notes.typeDeleted'));
   });
 }
 export function renderNoteTypeSettings() {
   const host = $('#noteTypeList');
   if (!host) return;
   host.innerHTML = '';
-  if (!novel) { host.innerHTML = '<div class="empty-msg">Open a novel</div>'; return; }
+  if (!novel) { host.innerHTML = `<div class="empty-msg">${esc(t('notes.openNovel'))}</div>`; return; }
   getNoteTypes().forEach(ty => {
     const row = document.createElement('div');
     row.className = 'nt-row';
     row.innerHTML =
-      `<input type="color" class="nt-color" value="${safeColor(ty.color, '#c9a96e')}" title="Color">
+      `<input type="color" class="nt-color" value="${safeColor(ty.color, '#c9a96e')}" title="${escAttr(t('notes.color'))}">
        <span class="nt-icon">${esc(ty.icon || '•')}</span>
        <span class="nt-name">${esc(ty.name)}</span>
        ${ty.isDefault
-        ? '<span class="nt-lock" title="Default type — recolour only">🔒</span>'
-        : '<button class="nt-btn nt-edit" title="Edit">✎</button><button class="nt-btn nt-del" title="Delete">🗑</button>'}`;
+        ? `<span class="nt-lock" title="${escAttr(t('notes.defaultTypeLock'))}">🔒</span>`
+        : `<button class="nt-btn nt-edit" title="${escAttr(t('common.edit'))}">✎</button><button class="nt-btn nt-del" title="${escAttr(t('common.delete'))}">🗑</button>`}`;
     row.querySelector('.nt-color').onchange = e => setNoteTypeColor(ty, e.target.value);
     if (!ty.isDefault) {
       row.querySelector('.nt-edit').onclick = () => showCustomTypeForm(ty, row);
@@ -543,25 +545,25 @@ function showCustomTypeForm(existing, anchorRow) {
   form.className = 'nt-form';
   const color = safeColor(existing ? existing.color : '#' + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, '0'), '#c9a96e');
   form.innerHTML =
-    `<input type="text" class="control ntf-name" placeholder="Name" value="${existing ? escAttr(existing.name) : ''}">
+    `<input type="text" class="control ntf-name" placeholder="${escAttr(t('notes.typeNamePh'))}" value="${existing ? escAttr(existing.name) : ''}">
      <div class="ntf-row">
-       <input type="color" class="ntf-color" value="${color}" title="Color">
-       <input type="text" class="control ntf-icon" maxlength="2" placeholder="Icon" value="${existing ? escAttr(existing.icon || '') : ''}">
+       <input type="color" class="ntf-color" value="${color}" title="${escAttr(t('notes.color'))}">
+       <input type="text" class="control ntf-icon" maxlength="2" placeholder="${escAttr(t('notes.typeIconPh'))}" value="${existing ? escAttr(existing.icon || '') : ''}">
      </div>
      <div class="ntf-actions">
-       <button class="tbtn subtle ntf-cancel">Cancel</button>
-       <button class="tbtn accent ntf-save">Save</button>
+       <button class="tbtn subtle ntf-cancel">${esc(t('common.cancel'))}</button>
+       <button class="tbtn accent ntf-save">${esc(t('common.save'))}</button>
      </div>`;
   const cleanup = () => { renderNoteTypeSettings(); };
   form.querySelector('.ntf-cancel').onclick = cleanup;
   form.querySelector('.ntf-save').onclick = () => {
     const name = form.querySelector('.ntf-name').value.trim();
-    if (!name) { toast('Enter a name'); return; }
+    if (!name) { toast(t('notes.enterName')); return; }
     const col = form.querySelector('.ntf-color').value;
     const icon = form.querySelector('.ntf-icon').value.trim();
     if (existing) {
-      const t = novel.settings.customNoteTypes.find(x => x.id === existing.id);
-      if (t) { t.name = name; t.color = col; t.icon = icon; }
+      const ct = novel.settings.customNoteTypes.find(x => x.id === existing.id);
+      if (ct) { ct.name = name; ct.color = col; ct.icon = icon; }
     } else {
       novel.settings.customNoteTypes.push({ id: uuid(), name, color: col, icon });
     }
@@ -569,7 +571,7 @@ function showCustomTypeForm(existing, anchorRow) {
     ensureHighlightStyles();
     renderNoteTypeSettings();
     renderNotes();
-    toast(existing ? 'Custom type updated' : 'Custom type created');
+    toast(existing ? t('notes.customTypeUpdated') : t('notes.customTypeCreated'));
   };
   if (anchorRow && anchorRow.nextSibling) host.insertBefore(form, anchorRow.nextSibling);
   else host.appendChild(form);
@@ -594,6 +596,7 @@ function saveNoteDisplay() {
 }
 
 /* ---- export notes ---- */
+/* A working document for the writer, so it follows the UI language (unlike compiled books). */
 function buildNotesExport(kind) {
   const lines = [];
   novel.chapters.forEach(c => {
@@ -609,7 +612,7 @@ function buildNotesExport(kind) {
         });
         lines.push('');
       } else {
-        lines.push(`NOTES FOR: ${heading}`, '─'.repeat(42));
+        lines.push(t('notes.exportFor', { heading }), '─'.repeat(42));
         notes.forEach(n => {
           const ty = getNoteType(n.typeId);
           lines.push(`[${ty.name}] “${n.selectedText}” — ${n.content || ''} (${fmtNoteDate(n.createdAt)})${n.resolved ? ' ✓' : ''}`);
@@ -618,11 +621,11 @@ function buildNotesExport(kind) {
       }
     });
   });
-  if (!lines.length) return kind === 'md' ? '# Notes\n\n_(no notes)_' : 'NOTES\n\n(no notes)';
-  return (kind === 'md' ? '# Notes\n\n' : '') + lines.join('\n');
+  if (!lines.length) return kind === 'md' ? `# ${t('notes.exportTitle')}\n\n_${t('notes.exportEmpty')}_` : `${t('notes.exportTitleTxt')}\n\n${t('notes.exportEmpty')}`;
+  return (kind === 'md' ? `# ${t('notes.exportTitle')}\n\n` : '') + lines.join('\n');
 }
 export async function doExportNotes(kind) {
-  if (!novel) { toast('No novel open'); return; }
+  if (!novel) { toast(t('notes.noNovel')); return; }
   flushNovel();
   const content = buildNotesExport(kind);
   const name = (novel.title || 'novel') + '-notes.' + kind;
@@ -633,13 +636,13 @@ export async function doExportNotes(kind) {
       await invoke('write_text', { path, content });
     } catch (e) {
       console.error(e);
-      toast('Export failed');
+      toast(t('notes.exportFailed'));
       return;
     }
   } else {
     downloadFile(name, content);
   }
-  toast('Notes exported (' + kind.toUpperCase() + ')');
+  toast(t('notes.exported', { kind: kind.toUpperCase() }));
 }
 
 export function init() {

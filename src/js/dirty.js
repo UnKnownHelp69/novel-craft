@@ -2,6 +2,7 @@
    CLAUDE.md. */
 import { $ } from './dom.js';
 import { isLoadingContent, novel, setDirty } from './state.js';
+import { t } from './i18n/index.js';
 
 export let savedContent = {};         // sceneId -> normalizeHTML() snapshot at last save/load
 export let savedMd = {};              // sceneId -> markdown snapshot at last save/load
@@ -10,13 +11,13 @@ export function markDirty() {
   if (isLoadingContent) return;   // ignore mutations caused by programmatic loads
   setDirty(true);
   const ind = $('#saveIndicator');
-  ind.textContent = 'Unsaved';
+  ind.textContent = t('status.unsaved');
   ind.classList.remove('saving');
 }
 export function setSaved() {
   setDirty(false);
   const ind = $('#saveIndicator');
-  ind.textContent = 'Saved';
+  ind.textContent = t('status.saved');
   ind.classList.remove('saving');
 }
 
@@ -55,6 +56,6 @@ export function snapshotSaved() {
 }
 export function setSaving() {
   const ind = $('#saveIndicator');
-  ind.textContent = 'Saving…';
+  ind.textContent = t('status.saving');
   ind.classList.add('saving');
 }

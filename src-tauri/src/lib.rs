@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -649,15 +649,26 @@ fn add_recent_file(
 /* ---------------- menu ---------------- */
 
 /// The native menu. Item ids are the payload of the `menu` event (see `on_menu_event`) that
-/// src/js/menu.js dispatches on; keep the two in sync.
-fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    // Built once at launch from recent.json and never rebuilt; see the grants in `run`.
+/// src/js/menu.js dispatches on; keep the two in sync. `labels` maps an item id (or a submenu
+/// key: file, edit, view, help, open_recent, recent_none, quit, cut, copy, paste, select_all) to
+/// its text in the interface language; anything missing keeps its English label. At launch the
+/// map is empty, and the frontend replaces the menu with translated labels via set_menu_labels.
+fn build_menu(
+    app: &tauri::AppHandle,
+    labels: &HashMap<String, String>,
+) -> tauri::Result<Menu<tauri::Wry>> {
+    let l = |key: &str, english: &str| labels.get(key).cloned().unwrap_or_else(|| english.into());
+    let item = |id: &str, english: &str, accel: Option<&str>| {
+        MenuItem::with_id(app, id, l(id, english), true, accel)
+    };
+    // The recent list as it is when the menu is built. Every path in recent.json is granted:
+    // those at launch in `run`, later ones by add_recent_file, which only takes granted paths.
     let recent = read_recent(app);
     let recent_items: Vec<MenuItem<tauri::Wry>> = if recent.is_empty() {
         vec![MenuItem::with_id(
             app,
             "recent_none",
-            "No recent files",
+            l("recent_none", "No recent files"),
             false,
             None::<&str>,
         )?]
@@ -679,89 +690,74 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .iter()
         .map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
         .collect();
-    let open_recent = Submenu::with_items(app, "Open Recent", true, &recent_refs)?;
+    let open_recent = Submenu::with_items(app, l("open_recent", "Open Recent"), true, &recent_refs)?;
 
     let file = Submenu::with_items(
         app,
-        "File",
+        l("file", "File"),
         true,
         &[
-            &MenuItem::with_id(app, "new", "New Novel", true, None::<&str>)?,
-            &MenuItem::with_id(app, "open", "Open…", true, Some("CmdOrCtrl+O"))?,
+            &item("new", "New Novel", None)?,
+            &item("open", "Open…", Some("CmdOrCtrl+O"))?,
             &open_recent,
-            &MenuItem::with_id(app, "save", "Save", true, Some("CmdOrCtrl+S"))?,
-            &MenuItem::with_id(app, "save_as", "Save As…", true, Some("CmdOrCtrl+Shift+S"))?,
-            &MenuItem::with_id(
-                app,
-                "restore_backup",
-                "Restore from Backup…",
-                true,
-                None::<&str>,
-            )?,
+            &item("save", "Save", Some("CmdOrCtrl+S"))?,
+            &item("save_as", "Save As…", Some("CmdOrCtrl+Shift+S"))?,
+            &item("restore_backup", "Restore from Backup…", None)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "compile", "Compile Novel…", true, None::<&str>)?,
+            &item("compile", "Compile Novel…", None)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "export_txt", "Export as TXT", true, None::<&str>)?,
-            &MenuItem::with_id(app, "export_html", "Export as HTML", true, None::<&str>)?,
-            &MenuItem::with_id(app, "export_md", "Export as Markdown", true, None::<&str>)?,
+            &item("export_txt", "Export as TXT", None)?,
+            &item("export_html", "Export as HTML", None)?,
+            &item("export_md", "Export as Markdown", None)?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, Some("Quit"))?,
+            &PredefinedMenuItem::quit(app, Some(&l("quit", "Quit")))?,
         ],
     )?;
 
     let edit = Submenu::with_items(
         app,
-        "Edit",
+        l("edit", "Edit"),
         true,
         // Undo/Redo are plain items, not predefined ones: those are unsupported on Linux.
         // src/js/menu.js runs document.execCommand for these ids.
         &[
-            &MenuItem::with_id(app, "undo", "Undo", true, Some("CmdOrCtrl+Z"))?,
-            &MenuItem::with_id(app, "redo", "Redo", true, Some("CmdOrCtrl+Shift+Z"))?,
+            &item("undo", "Undo", Some("CmdOrCtrl+Z"))?,
+            &item("redo", "Redo", Some("CmdOrCtrl+Shift+Z"))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, Some("Cut"))?,
-            &PredefinedMenuItem::copy(app, Some("Copy"))?,
-            &PredefinedMenuItem::paste(app, Some("Paste"))?,
-            &PredefinedMenuItem::select_all(app, Some("Select All"))?,
+            &PredefinedMenuItem::cut(app, Some(&l("cut", "Cut")))?,
+            &PredefinedMenuItem::copy(app, Some(&l("copy", "Copy")))?,
+            &PredefinedMenuItem::paste(app, Some(&l("paste", "Paste")))?,
+            &PredefinedMenuItem::select_all(app, Some(&l("select_all", "Select All")))?,
         ],
     )?;
 
     let view = Submenu::with_items(
         app,
-        "View",
+        l("view", "View"),
         true,
         &[
-            &MenuItem::with_id(
-                app,
-                "toggle_focus",
-                "Toggle Focus Mode",
-                true,
-                Some("CmdOrCtrl+Shift+F"),
-            )?,
-            &MenuItem::with_id(
-                app,
-                "toggle_panels",
-                "Toggle Side Panels",
-                true,
-                None::<&str>,
-            )?,
+            &item("toggle_focus", "Toggle Focus Mode", Some("CmdOrCtrl+Shift+F"))?,
+            &item("toggle_panels", "Toggle Side Panels", None)?,
         ],
     )?;
 
     let help = Submenu::with_items(
         app,
-        "Help",
+        l("help", "Help"),
         true,
-        &[&MenuItem::with_id(
-            app,
-            "about",
-            "About NovelCraft",
-            true,
-            None::<&str>,
-        )?],
+        &[&item("about", "About NovelCraft", None)?],
     )?;
 
     Menu::with_items(app, &[&file, &edit, &view, &help])
+}
+
+/// Rebuild the native menu in the interface language (see `build_menu` for the keys). Called by
+/// the frontend at startup and whenever the user switches the language.
+#[tauri::command]
+fn set_menu_labels(app: tauri::AppHandle, labels: HashMap<String, String>) -> Result<(), String> {
+    let menu = build_menu(&app, &labels).map_err(|e| e.to_string())?;
+    app.set_menu(menu).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /* ---------------- run ---------------- */
@@ -783,7 +779,7 @@ pub fn run() {
             for p in read_recent(handle).into_iter().chain(last_file(handle)) {
                 granted.grant(Path::new(&p));
             }
-            let menu = build_menu(handle)?;
+            let menu = build_menu(handle, &HashMap::new())?;
             app.set_menu(menu)?;
             Ok(())
         })
@@ -813,7 +809,8 @@ pub fn run() {
             set_decorations,
             set_window_title,
             get_recent_files,
-            add_recent_file
+            add_recent_file,
+            set_menu_labels
         ])
         .run(tauri::generate_context!())
         .expect("error while running NovelCraft");
