@@ -46,6 +46,20 @@ function nativeMenuLabels() {
   };
 }
 
+/* The widest save-indicator text in this language, for the top bar's layout (styles.css). */
+function measureSaveIndicator() {
+  const probe = document.createElement('span');
+  probe.className = 'save-indicator';
+  probe.style.cssText = 'position:absolute;visibility:hidden;min-width:0';
+  document.body.appendChild(probe);
+  const w = Math.max(...['status.saved', 'status.unsaved', 'status.saving'].map(k => {
+    probe.textContent = t(k);
+    return probe.getBoundingClientRect().width;
+  }));
+  probe.remove();
+  document.documentElement.style.setProperty('--save-ind-w', Math.ceil(w) + 'px');
+}
+
 /* Interface language: 'auto' (the system language when there is a dictionary for it) or a
    LOCALES code. Switching re-renders in place, so the open scene, selection and unsaved work
    stay as they are; the overlays (graph, map, corkboard, compile) render on open. */
@@ -58,6 +72,7 @@ export function applyUiLanguage(pref, { rerender = true } = {}) {
     ...Object.entries(LOCALES).map(([code, l]) => new Option(l.name, code)));
   sel.value = LOCALES[pref] ? pref : 'auto';
   applyI18n(document);
+  measureSaveIndicator();
   if (hasTauri) invoke('set_menu_labels', { labels: nativeMenuLabels() }).catch(() => {});
   if (!rerender) return;
   refreshSaveIndicator();

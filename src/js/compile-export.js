@@ -9,6 +9,7 @@ import { findScene, saveCurrentScene } from './tree.js';
 import { baseName } from './novel-file.js';
 import { toast } from './dialogs.js';
 import { resolveLanguage } from './lib/language.js';
+import { t } from './i18n/index.js';
 import { downloadFile } from './export.js';
 import { comp } from './compile.js';
 import { buildFlow, compTocEntries, sepText, tocLabel } from './lib/compile-flow.js';
@@ -147,12 +148,12 @@ async function saveTextFile(name, content) {
     if (!path) return;
     try {
       await invoke('write_text', { path, content });
-      toast('Saved ' + baseName(path));
+      toast(t('compile.savedFile', { name: baseName(path) }));
     } catch (e) {
       console.error(e);
-      toast('Export failed');
+      toast(t('compile.exportFailed'));
     }
-  } else { downloadFile(name, content); toast('Exported ' + name); }
+  } else { downloadFile(name, content); toast(t('compile.exported', { name })); }
 }
 /* --- compile-txt:start --- reads the comp/novel state; test/compile-txt.test.js lifts it
    and injects stand-ins for them. --- */
@@ -195,7 +196,7 @@ function compileHTML() {
 <body><div class="${compDocClasses()}" style="${compDocStyle()}">${docBodyHTML(false)}</div></body></html>`;
 }
 export async function doCompExport(kind) {
-  if (!comp || !comp.items.length) { toast('Nothing to compile'); return; }
+  if (!comp || !comp.items.length) { toast(t('compile.nothingToCompile')); return; }
   saveCurrentScene();
   if (kind === 'txt') return await saveTextFile(compFileName('txt'), compileTXT());
   if (kind === 'html') return await saveTextFile(compFileName('html'), compileHTML());
@@ -217,17 +218,17 @@ async function saveBinary(name, bytes, mime) {
     if (!path) return;
     try {
       await invoke('write_binary', { path, base64: bytesToBase64(bytes) });
-      toast('Saved ' + baseName(path));
+      toast(t('compile.savedFile', { name: baseName(path) }));
     } catch (e) {
       console.error(e);
-      toast('Export failed');
+      toast(t('compile.exportFailed'));
     }
   } else {
     const blob = new Blob([bytes], { type: mime });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = name; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    toast('Exported ' + name);
+    toast(t('compile.exported', { name }));
   }
 }
 
@@ -245,8 +246,8 @@ export async function loadPdfFont(res) {
   const url = PDF_FONT_FILES[res];
   let r;
   try { r = await fetch(url); }
-  catch (e) { throw new Error(`could not read the embedded font ${url} (${e.message})`); }
-  if (!r.ok) throw new Error(`could not read the embedded font ${url} (HTTP ${r.status})`);
+  catch (e) { throw new Error(t('compile.fontReadError', { url, error: e.message })); }
+  if (!r.ok) throw new Error(t('compile.fontReadError', { url, error: 'HTTP ' + r.status }));
   return (pdfFontCache[res] = parseTrueType(new Uint8Array(await r.arrayBuffer())));
 }
 /* One char per byte (0-255), so the font file can be spliced into the PDF string and the
@@ -291,7 +292,7 @@ async function exportCompPDF() {
     fonts = {};
     list.forEach((res, i) => (fonts[res] = loaded[i]));
   } catch (e) {
-    toast('PDF export failed — ' + e.message);
+    toast(t('compile.pdfFailed', { error: e.message }));
     return;
   }
 
@@ -381,7 +382,7 @@ async function exportCompPDF() {
   Object.keys(reports).forEach(res => reports[res].missing.forEach(ch => missing.add(ch)));
   if (missing.size) {
     const list = [...missing].slice(0, 12).join(' ');
-    toast(`PDF: ${missing.size} character(s) are missing from the embedded font and rendered blank: ${list}`);
+    toast(t('compile.pdfMissingChars', { n: missing.size, list }));
   }
 }
 async function exportCompEPUB() {

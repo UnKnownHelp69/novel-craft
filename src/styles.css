@@ -67,9 +67,11 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
 .topbar-left>*{flex-shrink:0;}
 .topbar-right{flex-shrink:0;}
 .tbtn{white-space:nowrap;}
-/* min-width = the save indicator's 52px + the 10px gap: it keeps its room even when the
-   breadcrumb has shrunk to nothing. */
-.topbar-center{flex:1;min-width:62px;display:flex;align-items:center;justify-content:center;gap:10px;overflow:hidden;}
+/* min-width = the save indicator's width + the 10px gap: it keeps its room even when the
+   breadcrumb has shrunk to nothing. --save-ind-w is the widest status text in the interface
+   language (measured by applyUiLanguage in js/settings.js), so the indicator neither gets
+   cut off nor shifts the top bar when it changes between Saved and Unsaved. */
+.topbar-center{flex:1;min-width:calc(var(--save-ind-w, 52px) + 10px);display:flex;align-items:center;justify-content:center;gap:10px;overflow:hidden;}
 .app-title{color:var(--accent);font-weight:700;letter-spacing:.5px;font-size:15px;}
 .chapter-title{
   color:var(--text);font-size:13px;padding:2px 8px;border-radius:4px;
@@ -106,7 +108,7 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
 .empty-state .lp-action{flex:none;min-width:150px;}
 .rm-empty{color:var(--text-dim);font-style:italic;cursor:default;}
 .chapter-title[contenteditable="true"]{outline:1px solid var(--accent);user-select:text;}
-.save-indicator{color:var(--text-dim);font-size:11px;min-width:52px;flex-shrink:0;}
+.save-indicator{color:var(--text-dim);font-size:11px;min-width:var(--save-ind-w, 52px);flex-shrink:0;}
 .save-indicator.saving{color:var(--accent);}
 
 .tbtn{

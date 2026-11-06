@@ -24,7 +24,7 @@ import { closeCompile, compOpen, setComp } from './compile.js';
 import { t } from './i18n/index.js';
 
 export function baseName(p) { return p ? p.replace(/\\/g, '/').split('/').pop() : ''; }
-function updateWindowTitle() {
+export function updateWindowTitle() {
   const title = novel ? (novel.title || t('file.untitledNovel')) : t('file.noNovel');
   document.title = 'NovelCraft — ' + title;
   if (hasTauri) { try { invoke('set_window_title', { title }); } catch (_) {} }

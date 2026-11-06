@@ -328,7 +328,7 @@ export function renameChapter(id) {
 export function setAllCollapsed(v) { if (!novel) return; novel.chapters.forEach(c => (c.collapsed = v)); renderTree(); }
 
 /* ---- breadcrumb (top bar) ---- */
-function updateBreadcrumb() {
+export function updateBreadcrumb() {
   const bc = $('#breadcrumb');
   if (!bc) return;
   bc.innerHTML = '';

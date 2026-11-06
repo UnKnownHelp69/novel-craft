@@ -81,7 +81,8 @@ A module only declares things when it is imported; anything that wires events go
 were added). Imported bindings are read-only, so shared state that other modules change has a
 setter next to it (`setNovel`, `setCurrentSceneId`, `setDirty`, …). Circular imports between
 UI modules are fine as long as nothing calls into another module at import time. `lib/` must
-never import a UI module: node imports `lib/` directly in the tests.
+never import a UI module (`i18n/` is not one: it is pure too): node imports `lib/` directly in
+the tests.
 
 ### Frontend ↔ backend bridge
 

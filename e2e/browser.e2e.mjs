@@ -306,20 +306,24 @@ test('the app runs under the desktop CSP without violations', async () => {
   } finally { await close(); }
 });
 
-test('at the minimum window width the save indicator stays visible', async () => {
+for (const lang of ['en', 'ru']) test(`at the minimum window width the save indicator stays visible (${lang})`, async () => {
   const { page, close } = await appPage();
   try {
     await page.setViewportSize({ width: 1100, height: 600 });
-    const m = await page.evaluate(() => {
+    const m = await page.evaluate(lang => {
+      const sel = document.getElementById('uiLanguage');
+      sel.value = lang; sel.dispatchEvent(new Event('change'));
       document.getElementById('winControls').style.display = 'flex';   // as in the desktop app
       app.setCurrentNovel({ title: 'Война и мир. Том первый', chapters: [{ title: 'Глава', scenes: [{ title: 'Сцена', content: '<p>x</p>' }] }] },
         '/novels/Война и мир — черновик 3.novel');
-      const ind = document.getElementById('saveIndicator').getBoundingClientRect();
+      app.markDirty();   // the longest status text ("Unsaved" / «Не сохранено»)
+      const el = document.getElementById('saveIndicator');
+      const ind = el.getBoundingClientRect();
       const center = document.querySelector('.topbar-center').getBoundingClientRect();
       const tall = [...document.querySelectorAll('.topbar-right .tbtn')].filter(b => b.getBoundingClientRect().height > 32).length;
-      return { visible: Math.min(ind.right, center.right) - Math.max(ind.left, center.left), tall };
-    });
-    assert.ok(m.visible >= 40, `save indicator visible width ${m.visible}px`);
+      return { visible: Math.min(ind.right, center.right) - Math.max(ind.left, center.left), text: el.scrollWidth, tall };
+    }, lang);
+    assert.ok(m.visible >= m.text, `save indicator: ${m.visible}px of ${m.text}px visible`);
     assert.strictEqual(m.tall, 0, 'top-bar buttons must not wrap');
   } finally { await close(); }
 });
@@ -402,6 +406,69 @@ test('a deleted scene or chapter comes back with Undo, in place and with its edi
     await page.evaluate(() => app.setCurrentNovel({ title: 'Третий', chapters: [{ id: 'b', title: 'Бэ', scenes: [{ id: 'b1', title: 'Бэ 1', content: '<p>b</p>' }] }] }, null));
     await toastUndo().click();
     assert.deepStrictEqual(await chapters(), ['Бэ']);
+    assert.deepStrictEqual(errors, []);
+  } finally { await close(); }
+});
+
+test('the interface switches to Russian in place, keeps the work, and remembers the choice', async () => {
+  const { page, errors, close } = await appPage();
+  try {
+    const n = plainNovel('<p>Текст</p>', { settings: { customNoteTypes: [] } });
+    n.chapters[0].scenes[0].notes = [{ id: 'n1', typeId: 'fix', content: 'проверить', selectedText: 'Текст', startOffset: 0, endOffset: 5 }];
+    await openNovel(page, await writeTempNovel('lang.novel', n));
+    await page.click('#editor p');
+    await page.keyboard.press('End');
+    await page.keyboard.type(' правка');
+    const setLang = code => page.evaluate(c => {
+      const sel = document.getElementById('uiLanguage');
+      sel.value = c; sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }, code);
+    await setLang('ru');
+    // English strings from the dictionary that are still on screen (visible text of leaf-ish elements)
+    const leftovers = () => page.evaluate(async () => {
+      const { LOCALES } = await import(new URL('js/i18n/index.js', location.href).href);
+      const en = LOCALES.en.dict, ru = LOCALES.ru.dict;
+      const english = new Set(Object.keys(en).filter(k => typeof en[k] === 'string' && en[k] !== ru[k] && /[A-Za-z]{3}/.test(en[k])).map(k => en[k].trim()));
+      const out = [];
+      for (const el of document.querySelectorAll('body *')) {
+        if (!el.offsetParent && getComputedStyle(el).position !== 'fixed') continue;
+        const own = [...el.childNodes].filter(c => c.nodeType === 3).map(c => c.data).join('').trim();
+        if (own && english.has(own)) out.push(own);
+        for (const a of ['title', 'placeholder']) if (el.getAttribute(a) && english.has(el.getAttribute(a).trim())) out.push(`${a}=${el.getAttribute(a)}`);
+      }
+      return [...new Set(out)];
+    });
+    assert.deepStrictEqual(await leftovers(), [], 'English left after switching to Russian');
+    // every view that renders its own UI, opened in Russian
+    for (const [name, open, shut] of [
+      ['note card', () => app.openNoteCard('n1'), () => app.closeNoteCard()],
+      ['corkboard', () => app.toggleCorkboard(), () => app.toggleCorkboard()],
+      ['graph', () => app.openGraph(), () => app.closeGraph()],
+      ['map', () => app.openMap(), () => app.closeMap()],
+      ['compile', () => { app.openCompile(); document.getElementById('compPreviewBtn').click(); }, () => app.closeCompile()]
+    ]) {
+      await page.evaluate(open);
+      await page.waitForTimeout(200);
+      assert.deepStrictEqual(await leftovers(), [], `English left in the ${name}`);
+      await page.evaluate(shut);
+    }
+    const state = await page.evaluate(() => ({
+      lang: document.documentElement.lang, indicator: document.getElementById('saveIndicator').textContent,
+      text: document.getElementById('editor').textContent, dirty: app.dirty, current: app.currentSceneId,
+      language: document.querySelector('[data-i18n="ui.settings.language"]').textContent
+    }));
+    assert.deepStrictEqual(state, { lang: 'ru', indicator: 'Не сохранено', text: 'Текст правка', dirty: true, current: 's1', language: 'Язык интерфейса' });
+    // dynamic UI built after the switch is Russian too: the scene context menu
+    await page.click('.tree-scene[data-scene-id="s1"]', { button: 'right' });
+    assert.match(await page.textContent('#ctxMenu'), /Переименовать/);
+    await page.keyboard.press('Escape');
+    // the choice survives a reload; back to English restores the original text
+    await page.reload();
+    await page.evaluate(exposeApp, APP_MODULES);
+    assert.strictEqual(await page.evaluate(() => document.getElementById('uiLanguage').value), 'ru');
+    assert.strictEqual(await page.textContent('[data-i18n="ui.settings.language"]'), 'Язык интерфейса');
+    await setLang('en');
+    assert.strictEqual(await page.textContent('[data-i18n="ui.settings.language"]'), 'Interface language');
     assert.deepStrictEqual(errors, []);
   } finally { await close(); }
 });

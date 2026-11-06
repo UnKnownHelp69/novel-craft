@@ -1,7 +1,7 @@
 /* Dirty tracking and the save indicator; the rules are under "Dirty-flag discipline" in
    CLAUDE.md. */
 import { $ } from './dom.js';
-import { isLoadingContent, novel, setDirty } from './state.js';
+import { dirty, isLoadingContent, novel, setDirty } from './state.js';
 import { t } from './i18n/index.js';
 
 export let savedContent = {};         // sceneId -> normalizeHTML() snapshot at last save/load
@@ -53,6 +53,11 @@ export function snapshotSaved() {
     savedContent[s.id] = normalizeHTML(s.content);
     savedMd[s.id] = s.markdownContent || '';
   }));
+}
+/* The indicator's text again, in the current interface language (after a language switch). */
+export function refreshSaveIndicator() {
+  const ind = $('#saveIndicator');
+  ind.textContent = t(ind.classList.contains('saving') ? 'status.saving' : dirty ? 'status.unsaved' : 'status.saved');
 }
 export function setSaving() {
   const ind = $('#saveIndicator');
