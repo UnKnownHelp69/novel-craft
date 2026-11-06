@@ -259,3 +259,24 @@ test('inlineMd escapes before converting', () => {
   assert.strictEqual(inlineMd('a<b>c'), 'a&lt;b&gt;c');
   assert.strictEqual(inlineMd('**<i>**'), '<b>&lt;i&gt;</b>');
 });
+
+/* ---------- backslash escapes (issue #94) ---------- */
+
+test('backslash escapes come back as the bare character, the backslash included', () => {
+  // htmlToMd() writes a literal \, * or a line-start # as \\, \* and \#; each must read back as
+  // one character, or every round trip through markdown mode doubles the user's backslashes.
+  assert.strictEqual(inlineMd('C:\\\\notes'), 'C:\\notes');
+  assert.strictEqual(inlineMd('a \\* b'), 'a * b');
+  assert.strictEqual(inlineMd('\\# not a heading'), '# not a heading');
+  assert.strictEqual(inlineMd('\\\\\\\\'), '\\\\', 'two escaped backslashes are two backslashes');
+});
+
+test('a backslash that escapes nothing stays as typed', () => {
+  assert.strictEqual(inlineMd('C:\\notes'), 'C:\\notes');
+  assert.strictEqual(inlineMd('end\\'), 'end\\');
+});
+
+test('an escaped asterisk is not emphasis, an escaped backslash before one does not escape it', () => {
+  assert.strictEqual(inlineMd('\\*not italic\\*'), '*not italic*');
+  assert.strictEqual(inlineMd('\\\\*it*'), '\\<i>it</i>');
+});

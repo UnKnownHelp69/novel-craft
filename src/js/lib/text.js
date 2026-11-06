@@ -11,6 +11,9 @@ export const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/
 /* esc() is for element content only: it leaves quotes alone (DOCX tests pin that output).
    Values interpolated into double-quoted attributes (value="${escAttr(x)}") need escAttr(). */
 export const escAttr = s => esc(s).replace(/"/g, '&quot;');
+/* A stable non-negative 32-bit hash of a string, for look that must not change between runs
+   (a corkboard card's tilt, a character's first place on the graph). Not for security. */
+export function hashStr(s) { let h = 0; for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h); }
 /* A word starts and ends with a letter or digit (combining marks included); apostrophes and
    hyphens only count when they join letters (кто-то, rock'n'roll), so a hyphen typed as a
    dash (" - ") is not a word of its own. */

@@ -133,4 +133,4 @@ one. Versions published before this change remain available under the plain MIT 
 
 ---
 
-NovelCraft was built together with an AI coding agent (Claude Code).
+NovelCraft was built together with AI coding agents.
