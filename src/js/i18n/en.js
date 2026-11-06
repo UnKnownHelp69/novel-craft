@@ -604,4 +604,17 @@ export default {
   'compile.fontReadError': 'could not read the embedded font {url} ({error})',
   'compile.pdfFailed': 'PDF export failed — {error}',
   'compile.pdfMissingChars': { one: 'PDF: {n} character is missing from the embedded font and rendered blank: {list}', other: 'PDF: {n} characters are missing from the embedded font and rendered blank: {list}' },
+  // updates
+  'ui.settings.checkUpdatesAuto': 'Check for updates at startup',
+  'ui.settings.checkUpdatesNow': 'Check for updates now',
+  'nativeMenu.checkUpdates': 'Check for Updates…',
+  'updates.upToDate': 'NovelCraft is up to date',
+  'updates.checkFailed': 'Could not check for updates — are you online?',
+  'updates.availableTitle': 'Update available',
+  'updates.availableBody': 'NovelCraft {version} is available (you have {current}). Install it and restart? Unsaved work is saved first.',
+  'updates.availableToast': 'NovelCraft {version} is available',
+  'updates.install': 'Install',
+  'updates.saveFirst': 'Update not installed: the novel was not saved',
+  'updates.installing': 'Downloading the update…',
+  'updates.installFailed': 'The update could not be installed',
 };

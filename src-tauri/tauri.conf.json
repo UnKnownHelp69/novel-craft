@@ -46,5 +46,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY5Qjc5NDZEQUY0RUUyOUQKUldTZDRrNnZiWlMzK1RIQ0NaTXFtK003RUpjRzdOUWx2OFE1ZVk4ZWIremdEaUdiaFBnZ3d6N2IK",
+      "endpoints": [
+        "https://github.com/UnKnownHelp69/novel-craft/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

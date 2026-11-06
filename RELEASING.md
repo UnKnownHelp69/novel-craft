@@ -63,13 +63,16 @@ pass — none run here; the release relies on CI having passed on the PRs that r
 
 ### 3. What the workflow does
 
-1. **Verify version** (seconds): resolves the version from the tag, the input or `tauri.conf.json`
-   and fails on a mismatch before any build starts.
+1. **Verify version** (seconds): checks that the updater key secret is set, resolves the version
+   from the tag, the input or `tauri.conf.json`, and fails on a mismatch before any build starts.
 2. **Build installers** — three jobs in parallel, with `fail-fast` off:
    - Linux (`ubuntu-22.04`): `.AppImage`, `.deb`, `.rpm`
    - Windows: `.msi`, `-setup.exe` (NSIS)
    - macOS: one universal `.dmg` (Apple Silicon + Intel; the slowest job, since the Rust code is
      compiled for both architectures)
+
+   Each job also builds the signed update package for its platform (`.sig` next to it), and the
+   release gets `latest.json`, the manifest installed copies read to find the update.
 
    Each job uploads its files to the draft release `NovelCraft vX.Y.Z`; whichever finishes first
    creates the draft, the others add to it. A job that fails just leaves its installers missing —
@@ -86,8 +89,10 @@ On the Releases page, open the draft → **Edit**:
 - [ ] Release notes: the draft comes with a short preset text (which installer to pick, and how to
       get past the unsigned-build warnings — keep that part). **Generate release notes** adds the
       list of PRs merged since the previous release; trim it to something readable.
-- [ ] **Set as a pre-release** if the build may still be rough. This is independent of the version
-      number.
+- [ ] `latest.json` is attached (installed copies find updates through it).
+- [ ] **Set as a pre-release** only if the build may still be rough: installed copies are **not**
+      offered a pre-release (they read `releases/latest`, which skips pre-releases and drafts).
+      Publishing it as a regular release is what rolls the update out.
 - [ ] **Publish release.** Until then only collaborators can see the draft.
 
 ## Known limitations (not bugs)
@@ -96,5 +101,20 @@ On the Releases page, open the draft → **Edit**:
   warns on first launch (*More info → Run anyway*) and macOS Gatekeeper refuses a double-click
   (right-click the app → *Open*). Fixing this means adding signing secrets and the matching
   `tauri-action` settings — a separate project.
-- **No auto-updater.** The app never checks for new versions and the workflow publishes no updater
-  manifest (`uploadUpdaterJson: false`); users download each release by hand.
+- **Updates start with the first release made after the updater was added.** Copies of 1.1.0 and
+  earlier have no updater, so their users download one release by hand; from then on the app
+  offers each new regular release itself.
+
+## The updater key
+
+Installed copies only install an update whose signature matches the public key in
+`src-tauri/tauri.conf.json` (`plugins.updater.pubkey`). The matching private key lives in the
+repository secrets:
+
+- `TAURI_SIGNING_PRIVATE_KEY` — the contents of the private key file;
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` — its password (empty if it has none).
+
+**Keep a backup of the private key outside GitHub** (secrets cannot be read back). If it is lost,
+releases signed with a new key are rejected by every installed copy: their users would have to
+download one release by hand. A new pair is made with `npx tauri signer generate -w <file>`; the
+public half (`<file>.pub`) goes into `tauri.conf.json`, the private half into the secrets.

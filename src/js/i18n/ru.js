@@ -602,4 +602,17 @@ export default {
   'compile.fontReadError': 'не удалось прочитать встроенный шрифт {url} ({error})',
   'compile.pdfFailed': 'Не удалось экспортировать PDF — {error}',
   'compile.pdfMissingChars': { one: 'PDF: {n} символ отсутствует во встроенном шрифте и оставлен пустым: {list}', few: 'PDF: {n} символа отсутствуют во встроенном шрифте и оставлены пустыми: {list}', many: 'PDF: {n} символов отсутствуют во встроенном шрифте и оставлены пустыми: {list}', other: 'PDF: {n} символа отсутствуют во встроенном шрифте и оставлены пустыми: {list}' },
+  // updates
+  'ui.settings.checkUpdatesAuto': 'Проверять обновления при запуске',
+  'ui.settings.checkUpdatesNow': 'Проверить обновления',
+  'nativeMenu.checkUpdates': 'Проверить обновления…',
+  'updates.upToDate': 'Установлена последняя версия NovelCraft',
+  'updates.checkFailed': 'Не удалось проверить обновления — есть ли подключение к интернету?',
+  'updates.availableTitle': 'Доступно обновление',
+  'updates.availableBody': 'Доступна версия NovelCraft {version} (у вас {current}). Установить и перезапустить? Несохранённая работа сначала будет сохранена.',
+  'updates.availableToast': 'Доступна версия NovelCraft {version}',
+  'updates.install': 'Установить',
+  'updates.saveFirst': 'Обновление не установлено: роман не сохранён',
+  'updates.installing': 'Загрузка обновления…',
+  'updates.installFailed': 'Не удалось установить обновление',
 };

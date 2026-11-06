@@ -26,6 +26,7 @@ import { refreshMaxIcon, init as initWindowControls } from './window-controls.js
 import {
   applyNativeTitlebar, applyTypewriter, applyUiLanguage, loadPrefs, init as initSettings
 } from './settings.js';
+import { autoCheckForUpdates, init as initUpdates } from './updates.js';
 
 /* Runs once, after every init(), so all handlers are wired before a novel loads. An
    unsaved-work recovery is offered before the last file is reopened: a leftover recovery
@@ -79,4 +80,6 @@ initShortcuts();
 initMenu();
 initWindowControls();
 initSettings();
-startup();
+initUpdates();
+// The update check waits for startup, so its toast never competes with the recovery prompt.
+startup().then(autoCheckForUpdates);

@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_updater::UpdaterExt;
 
 /// The app config directory, created on first use. Holds `last_file.txt`, `recent.json` and
 /// the `working.novel` autosave. Falls back to the current directory if the OS reports none.
@@ -690,7 +691,8 @@ fn build_menu(
         .iter()
         .map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
         .collect();
-    let open_recent = Submenu::with_items(app, l("open_recent", "Open Recent"), true, &recent_refs)?;
+    let open_recent =
+        Submenu::with_items(app, l("open_recent", "Open Recent"), true, &recent_refs)?;
 
     let file = Submenu::with_items(
         app,
@@ -736,7 +738,11 @@ fn build_menu(
         l("view", "View"),
         true,
         &[
-            &item("toggle_focus", "Toggle Focus Mode", Some("CmdOrCtrl+Shift+F"))?,
+            &item(
+                "toggle_focus",
+                "Toggle Focus Mode",
+                Some("CmdOrCtrl+Shift+F"),
+            )?,
             &item("toggle_panels", "Toggle Side Panels", None)?,
         ],
     )?;
@@ -745,7 +751,10 @@ fn build_menu(
         app,
         l("help", "Help"),
         true,
-        &[&item("about", "About NovelCraft", None)?],
+        &[
+            &item("check_updates", "Check for Updates…", None)?,
+            &item("about", "About NovelCraft", None)?,
+        ],
     )?;
 
     Menu::with_items(app, &[&file, &edit, &view, &help])
@@ -760,16 +769,74 @@ fn set_menu_labels(app: tauri::AppHandle, labels: HashMap<String, String>) -> Re
     Ok(())
 }
 
+/* ---------------- updates ---------------- */
+
+/// The update the last `check_update` found, kept here for `install_update`: the frontend only
+/// says "install it", it never hands the backend a download URL of its own.
+#[derive(Default)]
+struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
+
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    version: String,
+    current: String,
+    notes: Option<String>,
+}
+
+/// Ask the release endpoint (tauri.conf.json → plugins.updater) whether a newer version exists.
+/// `None` means up to date; being offline or a release without an update manifest is an error.
+#[tauri::command]
+async fn check_update(
+    app: tauri::AppHandle,
+    pending: State<'_, PendingUpdate>,
+) -> Result<Option<UpdateInfo>, String> {
+    let update = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+    let info = update.as_ref().map(|u| UpdateInfo {
+        version: u.version.clone(),
+        current: u.current_version.clone(),
+        notes: u.body.clone(),
+    });
+    *pending.0.lock().unwrap() = update;
+    Ok(info)
+}
+
+/// Download the update the last check found, verify its signature against the public key in
+/// tauri.conf.json, install it and restart. The frontend saves the open novel first.
+#[tauri::command]
+async fn install_update(
+    app: tauri::AppHandle,
+    pending: State<'_, PendingUpdate>,
+) -> Result<(), String> {
+    let update = pending
+        .0
+        .lock()
+        .unwrap()
+        .take()
+        .ok_or("no update to install")?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    app.restart();
+}
+
 /* ---------------- run ---------------- */
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Restores size, position and maximized state between launches; the 1400x900 in
         // tauri.conf.json only applies to the very first one.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(GrantedPaths::default())
+        .manage(PendingUpdate::default())
         .setup(|app| {
             let handle = app.handle();
             // The native "Open Recent" submenu is built once, from the recent list as it is
@@ -810,7 +877,9 @@ pub fn run() {
             set_window_title,
             get_recent_files,
             add_recent_file,
-            set_menu_labels
+            set_menu_labels,
+            check_update,
+            install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running NovelCraft");

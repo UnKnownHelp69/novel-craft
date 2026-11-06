@@ -300,6 +300,8 @@ test('the app runs under the desktop CSP without violations', async () => {
       badgeColor: getComputedStyle(document.querySelector('.note-badge')).getPropertyValue('--nc').trim()
     }));
     assert.deepStrictEqual(state.violations, [], 'CSP violations: ' + JSON.stringify(state.violations));
+    assert.strictEqual(await page.evaluate(() => document.getElementById('updateSettings').classList.contains('hidden')), true,
+      'the browser build has no updater: its settings are hidden');
     assert.ok(state.highlightRules > 0, 'injected <style> rules must apply');
     assert.notStrictEqual(state.badgeColor, '', 'style attributes must apply');
     assert.deepStrictEqual(errors, []);

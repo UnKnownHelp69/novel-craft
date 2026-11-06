@@ -174,6 +174,13 @@ test('CSP blocks inline handlers but the app keeps working under it', { skip }, 
   assert.ok(typeof glyphs === 'number' && glyphs > 0, 'PDF font fetch (connect-src): ' + glyphs);
 });
 
+test('the updater installs only what its own check found', { skip }, async () => {
+  // The frontend cannot point install_update at a download of its own: it installs the update the
+  // last check_update found (verified against the public key in tauri.conf.json), or nothing.
+  const r = await invoke('install_update');
+  assert.deepStrictEqual({ ok: r.ok, e: r.e }, { ok: false, e: 'no update to install' });
+});
+
 test('switching the interface language rebuilds the native menu', { skip }, async () => {
   const r = await invoke('set_menu_labels', { labels: { file: 'Файл', save: 'Сохранить', recent_none: 'Нет недавних файлов' } });
   assert.strictEqual(r.ok, true, 'set_menu_labels: ' + r.e);

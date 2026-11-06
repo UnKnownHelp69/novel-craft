@@ -22,7 +22,11 @@ release and look under *Assets*):
 | **macOS** (Apple Silicon and Intel) | `NovelCraft_…_universal.dmg` |
 | **Linux** | `.AppImage` (runs anywhere), `.deb` (Debian, Ubuntu, Mint) or `.rpm` (Fedora, openSUSE) |
 
-The builds are not code-signed yet, so the system warns the first time you start the app:
+From the version after 1.1.0 on, NovelCraft keeps itself up to date: it checks for a new version at startup and
+offers to install it (*Settings* has the switch, and *Help ▸ Check for Updates…* checks now).
+Updates are signed, and the app installs only an update signed by NovelCraft's own key.
+
+The builds are not code-signed, so the system warns the first time you install the app:
 
 - **Windows** — SmartScreen says "Windows protected your PC": click **More info**, then **Run anyway**.
 - **macOS** — "cannot be opened because the developer cannot be verified": right-click the app in
