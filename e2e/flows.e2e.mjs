@@ -289,6 +289,25 @@ flow('Markdown mode: source typed in one scene survives a scene switch and saves
   assert.equal(await indicator(page), 'Saved');
 });
 
+flow('Markdown mode: backslashes, asterisks and a line-start hash survive round trips through the source', async page => {
+  // issue #94: every visual -> source -> edited -> visual round trip used to double the backslashes
+  await openFixture(page, novelOf([ch('c1', 'Глава', sc('a', 'Сцена', '<p>C:\\notes\\draft *не курсив*</p><p># не заголовок</p>'))]));
+  for (let round = 1; round <= 2; round++) {
+    await page.click('#btnMarkdownMode');
+    await expectShown(page, '#mdEditor');
+    await page.click('#mdEditor');
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' ' + round);
+    await page.click('#btnMarkdownMode');
+    await expectShown(page, '#editor');
+  }
+  const { data } = await save(page);
+  const html = sceneIn(data, 'Сцена').content;
+  assert.match(html, /<p>C:\\notes\\draft \*не курсив\*<\/p>/, html);
+  assert.match(html, /<p># не заголовок 1 2<\/p>/, html);
+  assert.doesNotMatch(html, /\\\\|<i>|<h1>/, html);
+});
+
 flow('opening another novel over unsaved work asks first', async page => {
   await openFixture(page, novelOf([ch('c1', 'Глава', sc('s', 'Сцена', '<p>Старый</p>'))]));
   await typeAtEnd(page, ' черновик');

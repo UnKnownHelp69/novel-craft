@@ -18,10 +18,10 @@ export function mdToHtml(md) {
   });
   return out.join('');
 }
-/* esc() runs first, so only the <b>/<i> added here are markup. Backslash escapes are parked
-   as control-character placeholders while the emphasis passes run: \* and \# come back as
-   the bare character, but \\ keeps both backslashes (it is not unescaped, so a backslash
-   that htmlToMd() wrote as \\ comes back doubled when edited markdown is applied). */
+/* esc() runs first, so only the <b>/<i> added here are markup. The backslash escapes
+   htmlToMd() writes (\\, \* and \#) are parked as control-character placeholders while the
+   emphasis passes run, then come back as the bare character. A backslash before anything else
+   is kept as typed. */
 export function inlineMd(s) {
   s = esc(s);
   s = s.replace(/\\\\/g, '\x01');
@@ -31,7 +31,7 @@ export function inlineMd(s) {
   s = s.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
   s = s.replace(/\*(.+?)\*/g, '<i>$1</i>');
   
-  s = s.replace(/\x01/g, '\\\\');
+  s = s.replace(/\x01/g, '\\');
   s = s.replace(/\x02/g, '*');
   s = s.replace(/\x03/g, '#');
   return s;
@@ -42,18 +42,12 @@ export function inlineMd(s) {
 export function htmlToMd(html) {
   const d = parseInert(html);
   let out = [];
+  // escape what inlineMd()/mdToHtml() would read as syntax ('#' only at a line start)
+  const escText = t => t.replace(/\\/g, '\\\\').replace(/\*/g, '\\*').replace(/^#/g, '\\#').replace(/\n#/g, '\n\\#');
   const inline = node => {
     let s = '';
     node.childNodes.forEach(ch => {
-      if (ch.nodeType === 3) {
-        let t = ch.textContent;
-        // escape what inlineMd()/mdToHtml() would read as syntax ('#' only at a line start)
-        t = t.replace(/\\/g, '\\\\');
-        t = t.replace(/\*/g, '\\*');
-        t = t.replace(/^#/g, '\\#');
-        t = t.replace(/\n#/g, '\n\\#');
-        s += t;
-      }
+      if (ch.nodeType === 3) s += escText(ch.textContent);
       else if (/^(B|STRONG)$/.test(ch.tagName)) s += '**' + inline(ch) + '**';
       else if (/^(I|EM)$/.test(ch.tagName)) s += '*' + inline(ch) + '*';
       else if (ch.tagName === 'BR') s += '\n';
@@ -64,7 +58,7 @@ export function htmlToMd(html) {
   const walk = node => {
     node.childNodes.forEach(ch => {
       if (ch.nodeType === 3) {
-        if (ch.textContent.trim()) out.push(ch.textContent);
+        if (ch.textContent.trim()) out.push(escText(ch.textContent));
         return;
       }
       const t = ch.tagName;
