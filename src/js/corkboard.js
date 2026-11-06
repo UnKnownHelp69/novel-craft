@@ -1,6 +1,6 @@
 /* Corkboard: the scenes of a chapter as index cards, filtered, sorted and reordered by drag. */
 import { $, $$ } from './dom.js';
-import { esc } from './lib/text.js';
+import { esc, hashStr } from './lib/text.js';
 import { currentSceneId, novel } from './state.js';
 import { markDirty } from './dirty.js';
 import {
@@ -21,7 +21,6 @@ let suppressCorkClick = false;  // swallows the click that follows a drop
 
 function charName(id) { const c = novel && novel.characters.find(x => x.id === id); return c ? (c.name || '(unnamed)') : ''; }
 function locName(id) { const l = novel && novel.locations.find(x => x.id === id); return l ? (l.name || '(unnamed)') : ''; }
-function hashStr(s) { let h = 0; for (let i = 0; i < (s || '').length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h); }
 
 function openCorkboard() {
   if (!novel) return;

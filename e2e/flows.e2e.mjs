@@ -1264,6 +1264,9 @@ flow('character graph: add a character and a relationship; legend; Escape closes
   }));
   await page.keyboard.press('Control+g');
   await expectShown(page, '#graphOverlay');
+  // the characters have no saved positions yet; placing them is not an edit (issue #97)
+  await page.waitForTimeout(300);
+  assert.equal(await indicator(page), 'Saved', 'opening the graph is not an edit');
 
   await page.click('#graphAddChar');
   await answerPrompt(page, 'Вера', 'Add character');

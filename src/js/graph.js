@@ -1,6 +1,6 @@
 /* Character relationship graph, drawn on a canvas. */
 import { $, $$ } from './dom.js';
-import { esc, escAttr, uuid } from './lib/text.js';
+import { esc, escAttr, hashStr, uuid } from './lib/text.js';
 import { novel } from './state.js';
 import { markDirty } from './dirty.js';
 import { fillSelect } from './tree.js';
@@ -53,19 +53,19 @@ function graphEdges(chars) {
   }));
   return edges;
 }
-/* Seed missing positions on a jittered 220-unit circle; this writes to the novel, hence markDirty. */
+/* Seed missing positions on a 220-unit circle, jittered by ±20 from the character's id. Opening
+   the graph is not an edit, so this does not mark the novel dirty: the seeded positions reach
+   the file with the next real save, and until then the same characters seed the same layout. */
 function ensureGraphPositions() {
   const chars = novel.characters;
   const n = chars.length;
-  let changed = false;
   chars.forEach((c, i) => {
     if (!c.graphPosition || typeof c.graphPosition.x !== 'number') {
       const ang = (i / Math.max(1, n)) * Math.PI * 2;
-      c.graphPosition = { x: Math.cos(ang) * 220 + (Math.random() * 40 - 20), y: Math.sin(ang) * 220 + (Math.random() * 40 - 20) };
-      changed = true;
+      const h = hashStr(String(c.id));
+      c.graphPosition = { x: Math.cos(ang) * 220 + (h % 41 - 20), y: Math.sin(ang) * 220 + ((h >>> 8) % 41 - 20) };
     }
   });
-  if (changed) markDirty();
 }
 function w2s(x, y) { return { x: x * gView.zoom + gView.x, y: y * gView.zoom + gView.y }; }
 function s2w(x, y) { return { x: (x - gView.x) / gView.zoom, y: (y - gView.y) / gView.zoom }; }
