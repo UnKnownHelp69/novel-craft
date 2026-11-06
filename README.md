@@ -66,9 +66,11 @@ be saved as presets for the next time.
 
 ![Compile](docs/screenshots/compile.png)
 
-**Russian and every other language.** Word counts, keyboard shortcuts and every export work with
-Cyrillic and any other script. Chapter headings and the table of contents in exported books are
-in English or Russian, detected from the text or chosen by hand.
+**English and Russian interface — and any language in your books.** The interface follows your
+system language, or pick it in *Settings*. Word counts, keyboard shortcuts and every export work
+with Cyrillic and any other script. Chapter headings and the table of contents in exported books
+are in English or Russian, detected from the text or chosen by hand, whatever the interface
+language.
 
 ## Your work is safe
 

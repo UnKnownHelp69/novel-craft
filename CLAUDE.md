@@ -74,13 +74,15 @@ scripts/                 Node helpers: serve.mjs, make-icon.mjs, fetch-fonts.mjs
 | `compile.js`, `compile-export.js` | The Compile dialog; building the HTML/TXT/PDF/EPUB/DOCX files |
 | `shortcuts.js`, `menu.js`, `window-controls.js`, `settings.js` | Keyboard shortcuts; native menu events; frameless window; app prefs |
 | `lib/*.js` | `text` (esc, uuid, countWords), `html` (sanitizer), `model`, `markdown`, `language`, `keys`, `compile-flow`, `zip`, `pdf`, `epub`, `docx` |
+| `i18n/` | Interface translations: `index.js` (`t`, `applyI18n`, `LOCALES`), one dictionary per language (`en.js`, `ru.js`) |
 
 A module only declares things when it is imported; anything that wires events goes in its
 `init()`, which `main.js` calls in order (listeners on the same target run in the order they
 were added). Imported bindings are read-only, so shared state that other modules change has a
 setter next to it (`setNovel`, `setCurrentSceneId`, `setDirty`, …). Circular imports between
 UI modules are fine as long as nothing calls into another module at import time. `lib/` must
-never import a UI module: node imports `lib/` directly in the tests.
+never import a UI module (`i18n/` is not one: it is pure too): node imports `lib/` directly in
+the tests.
 
 ### Frontend ↔ backend bridge
 
@@ -110,7 +112,8 @@ Window controls (frameless window): `minimize_window`, `maximize_window`,
 `unmaximize_window`, `close_window`, `is_maximized`, `set_decorations`,
 `set_window_title`. Recent files (stored as `recent.json` in app config dir):
 `get_recent_files`, `add_recent_file`. The native menu emits `menu` events
-(payload = item id, e.g. `"save"`, or `"recent:<path>"`) that `js/menu.js` listens for.
+(payload = item id, e.g. `"save"`, or `"recent:<path>"`) that `js/menu.js` listens for;
+`set_menu_labels` rebuilds it with labels in the interface language (sent by `js/settings.js`).
 
 ### Data model
 
@@ -155,6 +158,14 @@ under the pointer by then, unless that press turns into a drag.
 - Deleting a scene or chapter is immediate and undoable from the toast (`toastAction`);
   don't add "cannot be undone" confirmations back.
 - Full Unicode / Cyrillic support is a requirement — don't assume ASCII.
+- **No UI text in code or markup without a key.** Every user-visible string goes through
+  `t('area.key')` (JS) or `data-i18n` / `data-i18n-title|placeholder|aria-label` (index.html), and
+  the key is added to **every** dictionary in `src/js/i18n/` (`test/i18n.test.js` fails otherwise).
+  Plurals are objects of `Intl.PluralRules` forms, filled by `t(key, { n })`; numbers and dates go
+  through `fmtNumber` / `fmtDate`. Never call `t()` at import time (tables hold keys, not labels),
+  and escape `t()` output in HTML templates like any other text. Text that goes into exported
+  books follows the novel's export language (`lib/language.js`), not the interface language.
+  To add a language: a new dictionary file plus one line in `LOCALES`.
 - The window is **frameless** (`decorations: false`); custom controls live in the top
   bar and a "Use native title bar" toggle in Settings restores the OS frame.
 

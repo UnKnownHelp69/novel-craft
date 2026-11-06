@@ -6,6 +6,7 @@ import { $ } from './dom.js';
 import { dirty, novel, setDirty } from './state.js';
 import { doSave } from './save.js';
 import { clearBackup } from './autosave.js';
+import { t } from './i18n/index.js';
 
 async function destroyWindow() {
   if (hasTauri) await invoke('close_window');
@@ -26,7 +27,7 @@ export async function refreshMaxIcon() {
   let max = false;
   if (hasTauri) { try { max = await invoke('is_maximized'); } catch (_) {} }
   btn.innerHTML = max ? '&#10064;' : '&#9723;';   // ❐ restore  /  ◻ maximize
-  btn.title = max ? 'Restore' : 'Maximize';
+  btn.title = max ? t('window.restore') : t('window.maximize');
 }
 
 export function init() {

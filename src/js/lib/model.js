@@ -1,18 +1,19 @@
 /* Blank novel objects: what File → New and "add scene/chapter" create, and the shape
    migrateNovel() (novel-file.js) fills in for older files. */
 import { uuid } from './text.js';
+import { t } from '../i18n/index.js';
 
 export function nowISO() { return new Date().toISOString(); }
 export function blankScene(n) {
   return {
-    id: uuid(), title: `Scene ${n + 1}`, order: n,
+    id: uuid(), title: t('model.sceneN', { n: n + 1 }), order: n,
     content: '', markdownContent: '', wordCount: 0,
     povCharacter: null, location: null, timeOfDay: 'unknown', status: 'draft',
     notes: [], createdAt: nowISO(), modifiedAt: nowISO()
   };
 }
 export function blankChapter(n) {
-  return { id: uuid(), order: n, title: `Chapter ${n + 1}`, wordCount: 0, collapsed: false, scenes: [blankScene(0)] };
+  return { id: uuid(), order: n, title: t('model.chapterN', { n: n + 1 }), wordCount: 0, collapsed: false, scenes: [blankScene(0)] };
 }
 /* A fresh, empty world map (lives in novel.settings.worldMap). The background
    image is stored inline as a base64 data URL so the map is self-contained and
@@ -31,7 +32,7 @@ export function blankWorldMap() {
 export function newNovel(title) {
   return {
     version: '1.0',
-    title: title || 'Untitled Novel',
+    title: title || t('model.untitledNovel'),
     settings: { fontSize: 18, defaultFont: 'Georgia, serif', wordGoal: 80000, customNoteTypes: [], noteTypeColors: {}, worldMap: blankWorldMap(), compilationPresets: [], language: null },
     chapters: [blankChapter(0)],
     characters: [],

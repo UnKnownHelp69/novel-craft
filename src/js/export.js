@@ -10,6 +10,7 @@ import { toast } from './dialogs.js';
 import { doOpen, doSave, newProject } from './save.js';
 import { resolveLanguage } from './lib/language.js';
 import { doExportNotes } from './notes.js';
+import { t } from './i18n/index.js';
 
 /* Text exports: 'txt', 'md' or 'html' (anything else returns undefined). Scenes were
    sanitized on load and paste already; the HTML export sanitizes them again and escapes the
@@ -42,7 +43,7 @@ export function buildExport(kind, n) {
   }
 }
 export async function doExport(kind) {
-  if (!novel) { toast('No novel to export'); return; }
+  if (!novel) { toast(t('export.noNovel')); return; }
   const content = buildExport(kind, novel);
   const name = (novel.title || 'novel') + '.' + kind;
   if (hasTauri) {
@@ -52,13 +53,13 @@ export async function doExport(kind) {
       await invoke('write_text', { path, content });
     } catch (e) {
       console.error(e);
-      toast('Export failed');
+      toast(t('export.failed'));
       return;
     }
   } else {
     downloadFile(name, content);
   }
-  toast('Exported to ' + kind.toUpperCase());
+  toast(t('export.exportedTo', { format: kind.toUpperCase() }));
 }
 export function downloadFile(name, content) {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });

@@ -9,6 +9,7 @@ import { mdMode } from './editor.js';
 import { mdToHtml } from './lib/markdown.js';
 import { promptModal } from './dialogs.js';
 import { corkboardOpen } from './corkboard.js';
+import { fmtNumber, t } from './i18n/index.js';
 
 export let focusMode = false;
 
@@ -25,7 +26,7 @@ export function updateCounters() {
   $('#statCharsNs').textContent = txt.replace(/\s/g, '').length;
   const pct = Math.min(100, Math.round((total / goal) * 100));
   $('#progressBar').style.width = pct + '%';
-  $('#goalLabel').textContent = `${pct}% of ${goal.toLocaleString()}`;
+  $('#goalLabel').textContent = t('panels.goalProgress', { pct, goal: fmtNumber(goal) });
 }
 
 /* ---- focus mode ---- */
@@ -43,7 +44,7 @@ export function setFocus(on) {
 export function init() {
   $('#btnGoal').addEventListener('click', () => {
     if (!novel) return;
-    promptModal('Word goal', 'Target total words:', String(novel.settings.wordGoal), v => {
+    promptModal(t('panels.wordGoal'), t('panels.wordGoalPrompt'), String(novel.settings.wordGoal), v => {
       const n = parseInt(v, 10);
       if (n > 0 && n !== novel.settings.wordGoal) {
         novel.settings.wordGoal = n;

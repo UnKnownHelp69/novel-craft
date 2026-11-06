@@ -174,6 +174,18 @@ test('CSP blocks inline handlers but the app keeps working under it', { skip }, 
   assert.ok(typeof glyphs === 'number' && glyphs > 0, 'PDF font fetch (connect-src): ' + glyphs);
 });
 
+test('switching the interface language rebuilds the native menu', { skip }, async () => {
+  const r = await invoke('set_menu_labels', { labels: { file: 'Файл', save: 'Сохранить', recent_none: 'Нет недавних файлов' } });
+  assert.strictEqual(r.ok, true, 'set_menu_labels: ' + r.e);
+  // through the app: Russian, then back to English, with no errors on the way
+  await exec(`const sel = document.getElementById('uiLanguage'); sel.value = 'ru'; sel.dispatchEvent(new Event('change'));`);
+  await sleep(500);
+  assert.strictEqual(await exec(`return document.querySelector('[data-i18n="ui.settings.language"]').textContent;`), 'Язык интерфейса');
+  await exec(`const sel = document.getElementById('uiLanguage'); sel.value = 'en'; sel.dispatchEvent(new Event('change'));`);
+  await sleep(500);
+  assert.strictEqual(await exec(`return document.querySelector('[data-i18n="ui.settings.language"]').textContent;`), 'Interface language');
+});
+
 test('Ctrl+S on a Russian layout saves to the open file', { skip }, async () => {
   await exec(`const ed = document.getElementById('editor'); ed.focus();
     getSelection().selectAllChildren(ed); getSelection().collapseToEnd();

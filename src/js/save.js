@@ -11,9 +11,10 @@ import {
 import { toast } from './dialogs.js';
 import { downloadFile } from './export.js';
 import { clearBackup } from './autosave.js';
+import { t } from './i18n/index.js';
 
 export async function doSave(saveAs = false) {
-  if (!novel) { toast('No novel to save'); return false; }
+  if (!novel) { toast(t('save.noNovel')); return false; }
   const target = novel;
   const defaultName = (novel.title || 'novel') + '.novel';
   let path = currentFilePath;
@@ -22,7 +23,7 @@ export async function doSave(saveAs = false) {
     // is saved, so the novel stays dirty (close prompt and backups keep protecting it).
     path = await pickPath('pick_save', { defaultName });
     if (!path) return false;
-    if (novel !== target) { toast('Save cancelled — another novel was opened'); return false; }
+    if (novel !== target) { toast(t('save.cancelledOtherNovel')); return false; }
   }
   flushNovel();
   renumber();
@@ -46,7 +47,7 @@ export async function doSave(saveAs = false) {
     else $('#saveIndicator').classList.remove('saving');
     clearBackup();
     updateFilePathIndicator();
-    toast(saveAs ? 'Saved a copy' : 'Project saved');
+    toast(saveAs ? t('save.savedCopy') : t('save.saved'));
     return true;
   } catch (e) {
     console.error(e);
@@ -55,10 +56,10 @@ export async function doSave(saveAs = false) {
     // The remembered path is not one this session may write (the backend only writes files
     // the user picked or opened): ask where to save instead of failing on every Ctrl+S.
     if (hasTauri && !saveAs && /access denied/.test(String(e))) {
-      toast('Choose where to save this novel');
+      toast(t('save.chooseWhere'));
       return doSave(true);
     }
-    toast('Save failed');
+    toast(t('save.failed'));
     return false;
   }
 }

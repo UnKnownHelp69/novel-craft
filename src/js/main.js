@@ -24,7 +24,7 @@ import { init as initShortcuts } from './shortcuts.js';
 import { init as initMenu } from './menu.js';
 import { refreshMaxIcon, init as initWindowControls } from './window-controls.js';
 import {
-  applyNativeTitlebar, applyTypewriter, loadPrefs, init as initSettings
+  applyNativeTitlebar, applyTypewriter, applyUiLanguage, loadPrefs, init as initSettings
 } from './settings.js';
 
 /* Runs once, after every init(), so all handlers are wired before a novel loads. An
@@ -57,6 +57,8 @@ async function startup() {
   }
 }
 
+// The interface language first, so everything rendered from here on is in it.
+applyUiLanguage(loadPrefs().uiLanguage || 'auto', { rerender: false });
 initBridge();
 initTree();
 initNovelFile();

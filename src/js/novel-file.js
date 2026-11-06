@@ -21,12 +21,13 @@ import {
   setOpenNoteId
 } from './notes.js';
 import { closeCompile, compOpen, setComp } from './compile.js';
+import { t } from './i18n/index.js';
 
 export function baseName(p) { return p ? p.replace(/\\/g, '/').split('/').pop() : ''; }
-function updateWindowTitle() {
-  const t = novel ? (novel.title || 'Untitled Novel') : 'No Novel';
-  document.title = 'NovelCraft — ' + t;
-  if (hasTauri) { try { invoke('set_window_title', { title: t }); } catch (_) {} }
+export function updateWindowTitle() {
+  const title = novel ? (novel.title || t('file.untitledNovel')) : t('file.noNovel');
+  document.title = 'NovelCraft — ' + title;
+  if (hasTauri) { try { invoke('set_window_title', { title }); } catch (_) {} }
 }
 export function updateFilePathIndicator() {
   const el = $('#filePathIndicator');
@@ -36,8 +37,8 @@ export function updateFilePathIndicator() {
     el.title = currentFilePath;
     el.classList.remove('unsaved');
   } else {
-    el.textContent = '• Unsaved';
-    el.title = 'This novel has not been saved to a file yet';
+    el.textContent = t('file.unsavedIndicator');
+    el.title = t('file.unsavedIndicatorTitle');
     el.classList.add('unsaved');
   }
 }
@@ -51,7 +52,7 @@ export function refreshUI() {
   editor.setAttribute('contenteditable', has ? 'true' : 'false');
   $('#emptyState').classList.toggle('hidden', has);
   $('#chaptersSection').classList.toggle('hidden', !has);
-  $('#novelTitle').textContent = has ? (novel.title || 'Untitled Novel') : '—';
+  $('#novelTitle').textContent = has ? (novel.title || t('file.untitledNovel')) : '—';
   if (has) {
     setCurrentChapterId(novel.chapters[0] && novel.chapters[0].id);
     setCurrentSceneId(novel.chapters[0] && novel.chapters[0].scenes[0] && novel.chapters[0].scenes[0].id);
@@ -94,7 +95,7 @@ function toFileObject(n) {
 export function serializeNovel(n) { return JSON.stringify(toFileObject(n), null, 2); }
 
 /* --- migrate-novel:start --- test/migrate-novel.test.js lifts this block and runs it with
-   Node stand-ins for its DOM-bound helpers (stripHtml, toast). --- */
+   Node stand-ins for its DOM-bound helpers (stripHtml, toast) and the real t(). --- */
 /* Backward-compat: files that stored a Russian default-type name as the typeId. */
 const RU_NOTE_NAME_TO_ID = {
   'Исправить': 'fix', 'Проверить факт': 'factcheck', 'Развить мысль': 'expand',
@@ -203,7 +204,7 @@ function migrateNovel(d) {
     c.scenes.forEach(normScene);
     c.wordCount = c.scenes.reduce((sum, s) => sum + (s.wordCount || 0), 0);
   });
-  if (migratedToScenes) setTimeout(() => toast('Migrated chapters to the new scene structure'), 400);
+  if (migratedToScenes) setTimeout(() => toast(t('file.migratedToScenes')), 400);
   ['characters', 'locations', 'races'].forEach(k => {
     if (!Array.isArray(n[k])) n[k] = [];
     n[k].forEach(e => { if (!e.id) e.id = uuid(); });
@@ -270,9 +271,7 @@ async function handleLibraryFile(data, path) {
   
   setCurrentNovel(active, null);   // open as unsaved so we don't silently overwrite the library file
   
-  confirmModal('Multiple novels found',
-    `This file contains ${novels.length} novels, but NovelCraft now uses one file per novel. ` +
-    `Save all ${novels.length} as separate .novel files now?`,
+  confirmModal(t('file.libraryTitle'), t('file.libraryBody', { n: novels.length }),
     async () => {
       for (const n of novels) {
         const content = serializeNovel(n);
@@ -289,14 +288,14 @@ async function handleLibraryFile(data, path) {
               }
             } catch (e) {
               console.error(e);
-              toast('Save failed for ' + n.title);
+              toast(t('file.saveFailedFor', { title: n.title }));
             }
           }
         } else {
           downloadFile((n.title || 'novel') + '.novel', content);
         }
       }
-      toast('Split into separate files');
+      toast(t('file.splitDone'));
     });
 }
 
@@ -310,14 +309,14 @@ export async function loadFromPath(path) {
     if (data && Array.isArray(data.novels)) await handleLibraryFile(data, path);
     else setCurrentNovel(data, path);
     if (hasTauri) { await invoke('set_last_file', { path }); await addRecent(path); }
-    toast('Opened ' + baseName(path));
+    toast(t('file.opened', { name: baseName(path) }));
   } catch (e) {
     console.error(e);
-    toast('Could not open file');
+    toast(t('file.openFailed'));
   }
 }
 export function guardUnsaved(action, msg) {
-  if (dirty) confirmModal('Unsaved changes', msg, action);
+  if (dirty) confirmModal(t('file.unsavedTitle'), msg, action);
   else action();
 }
 export function openNovelFile() {
@@ -338,32 +337,32 @@ export function openNovelFile() {
             const data = JSON.parse(rd.result);
             if (data && Array.isArray(data.novels)) handleLibraryFile(data, null);
             else setCurrentNovel(data, null);
-            toast('Opened ' + f.name);
-          } catch { toast('Invalid file'); }
+            toast(t('file.opened', { name: f.name }));
+          } catch { toast(t('file.invalidFile')); }
         };
         rd.readAsText(f);
       };
       inp.click();
     }
-  }, 'Discard unsaved changes and open another novel?');
+  }, t('file.discardAndOpen'));
 }
 export function newNovelFile() {
   guardUnsaved(async () => {
     const n = newNovel();
     if (hasTauri) {
       // prompt for the file location up front and create the file
-      const path = await pickPath('pick_save', { defaultName: 'Untitled Novel.novel' });
+      const path = await pickPath('pick_save', { defaultName: n.title + '.novel' });
       if (!path) return;               // cancelled -> keep current novel
       setCurrentNovel(n, path);
       await invoke('save_novel', { path, content: serializeNovel(novel) });
       await invoke('set_last_file', { path });
       await addRecent(path);
-      toast('Created ' + baseName(path));
+      toast(t('file.created', { name: baseName(path) }));
     } else {
       setCurrentNovel(n, null);        // browser: unsaved until first Save
-      toast('New novel');
+      toast(t('file.newNovel'));
     }
-  }, 'Discard unsaved changes and create a new novel?');
+  }, t('file.discardAndNew'));
 }
 
 /* --- recent files --- */
@@ -380,7 +379,11 @@ export async function renderRecentMenu() {
   const list = await getRecent();
   menu.innerHTML = '';
   if (!list.length) {
-    menu.innerHTML = '<button class="rm-empty" disabled>No recent files</button>';
+    const b = document.createElement('button');
+    b.className = 'rm-empty';
+    b.disabled = true;
+    b.textContent = t('file.noRecent');
+    menu.appendChild(b);
     return;
   }
   list.slice(0, 5).forEach(p => {
@@ -389,7 +392,7 @@ export async function renderRecentMenu() {
     b.title = p;
     b.addEventListener('click', () => {
       menu.classList.remove('open');
-      guardUnsaved(() => loadFromPath(p), 'Discard unsaved changes and open this file?');
+      guardUnsaved(() => loadFromPath(p), t('file.discardAndOpenFile'));
     });
     menu.appendChild(b);
   });

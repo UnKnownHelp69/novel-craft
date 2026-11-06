@@ -15,47 +15,47 @@
        .topbar-right carries no attribute: it is all buttons. -->
   <header id="topbar" data-tauri-drag-region>
     <div class="topbar-left" data-tauri-drag-region>
-      <button class="icon-btn panel-toggle" id="toggleLeft" title="Toggle panels (Ctrl+\)">◀</button>
+      <button class="icon-btn panel-toggle" id="toggleLeft" title="Toggle panels (Ctrl+\)" data-i18n-title="ui.topbar.togglePanels">◀</button>
       <span class="app-title">NovelCraft</span>
       <span class="brand-sep">—</span>
-      <span id="novelTitle" class="novel-title" title="Double-click to rename the novel">Untitled Novel</span>
+      <span id="novelTitle" class="novel-title" title="Double-click to rename the novel" data-i18n-title="ui.topbar.renameNovelHint">Untitled Novel</span>
       <span id="filePathIndicator" class="file-path" title=""></span>
     </div>
 
     <div class="topbar-center" data-tauri-drag-region>
-      <nav id="breadcrumb" class="breadcrumb" title="Novel › Chapter › Scene"></nav>
+      <nav id="breadcrumb" class="breadcrumb" title="Novel › Chapter › Scene" data-i18n-title="ui.topbar.breadcrumb"></nav>
       <span id="saveIndicator" class="save-indicator">Saved</span>
     </div>
 
     <div class="topbar-right">
-      <button class="tbtn" id="btnNew" title="New Novel (creates a new .novel file)">New</button>
-      <button class="tbtn" id="btnOpen" title="Open .novel file (Ctrl+O)">Open</button>
+      <button class="tbtn" id="btnNew" title="New Novel (creates a new .novel file)" data-i18n-title="ui.topbar.newTitle" data-i18n="ui.topbar.new">New</button>
+      <button class="tbtn" id="btnOpen" title="Open .novel file (Ctrl+O)" data-i18n-title="ui.topbar.openTitle" data-i18n="ui.topbar.open">Open</button>
       <div class="dropdown">
-        <button class="tbtn" id="btnRecent" title="Recent files">Recent ▾</button>
+        <button class="tbtn" id="btnRecent" title="Recent files" data-i18n-title="ui.topbar.recentTitle"><span data-i18n="ui.topbar.recent">Recent</span> ▾</button>
         <div class="dropdown-menu" id="recentMenu"><button class="rm-empty" disabled>No recent files</button></div>
       </div>
-      <button class="tbtn" id="btnSave" title="Save .novel file (Ctrl+S)">Save</button>
-      <button class="tbtn" id="btnSaveAs" title="Save As… (Ctrl+Shift+S)">Save As</button>
+      <button class="tbtn" id="btnSave" title="Save .novel file (Ctrl+S)" data-i18n-title="ui.topbar.saveTitle" data-i18n="common.save">Save</button>
+      <button class="tbtn" id="btnSaveAs" title="Save As… (Ctrl+Shift+S)" data-i18n-title="ui.topbar.saveAsTitle" data-i18n="ui.topbar.saveAs">Save As</button>
       <div class="dropdown">
-        <button class="tbtn" id="btnExport" title="Export">Export ▾</button>
+        <button class="tbtn" id="btnExport" title="Export" data-i18n-title="ui.topbar.export"><span data-i18n="ui.topbar.export">Export</span> ▾</button>
         <div class="dropdown-menu" id="exportMenu">
-          <button data-export="txt">Text (.txt)</button>
+          <button data-export="txt" data-i18n="ui.export.txt">Text (.txt)</button>
           <button data-export="html">HTML (.html)</button>
           <button data-export="md">Markdown (.md)</button>
           <div class="dropdown-sep"></div>
-          <button data-export-notes="txt">Export Notes (.txt)</button>
-          <button data-export-notes="md">Export Notes (.md)</button>
+          <button data-export-notes="txt" data-i18n="ui.export.notesTxt">Export Notes (.txt)</button>
+          <button data-export-notes="md" data-i18n="ui.export.notesMd">Export Notes (.md)</button>
         </div>
       </div>
-      <button class="tbtn" id="btnCompile" title="Compile Novel to a single document">📘 Compile</button>
-      <button class="tbtn accent" id="btnFocus" title="Focus Mode (Ctrl+Shift+F)">Focus</button>
-      <button class="icon-btn panel-toggle" id="toggleRight" title="Toggle tools (Ctrl+/)">▶</button>
+      <button class="tbtn" id="btnCompile" title="Compile Novel to a single document" data-i18n-title="ui.topbar.compileTitle">📘 <span data-i18n="ui.topbar.compile">Compile</span></button>
+      <button class="tbtn accent" id="btnFocus" title="Focus Mode (Ctrl+Shift+F)" data-i18n-title="ui.topbar.focusTitle" data-i18n="ui.topbar.focus">Focus</button>
+      <button class="icon-btn panel-toggle" id="toggleRight" title="Toggle tools (Ctrl+/)" data-i18n-title="ui.topbar.toggleTools">▶</button>
 
       <!-- native window controls (Tauri, frameless) -->
       <div class="win-controls" id="winControls">
-        <button class="win-btn" id="winMin" title="Minimize">&#9472;</button>
-        <button class="win-btn" id="winMax" title="Maximize">&#9723;</button>
-        <button class="win-btn win-close" id="winClose" title="Close">&#10005;</button>
+        <button class="win-btn" id="winMin" title="Minimize" data-i18n-title="ui.window.minimize">&#9472;</button>
+        <button class="win-btn" id="winMax" title="Maximize" data-i18n-title="ui.window.maximize">&#9723;</button>
+        <button class="win-btn win-close" id="winClose" title="Close" data-i18n-title="common.close">&#10005;</button>
       </div>
     </div>
   </header>
@@ -65,16 +65,16 @@
     <!-- LEFT: chapters -->
     <aside id="leftPanel" class="side-panel">
       <div class="lp-actions">
-        <button class="lp-action" id="btnNewNovel" title="Create a new .novel file">＋ New Novel</button>
-        <button class="lp-action" id="btnOpenNovel" title="Open a .novel file">📂 Open</button>
+        <button class="lp-action" id="btnNewNovel" title="Create a new .novel file" data-i18n-title="ui.tree.newNovelTitle">＋ <span data-i18n="ui.tree.newNovel">New Novel</span></button>
+        <button class="lp-action" id="btnOpenNovel" title="Open a .novel file" data-i18n-title="ui.tree.openNovelTitle">📂 <span data-i18n="ui.topbar.open">Open</span></button>
       </div>
 
       <!-- Chapters of the currently-open novel -->
       <div class="lp-section" id="chaptersSection">
         <div class="panel-head">
-          <span class="lp-title">📖 Chapters</span>
-          <button class="icon-btn" id="btnCorkboard" title="Toggle corkboard view">📋</button>
-          <button class="icon-btn" id="btnAddChapter" title="Add chapter">＋</button>
+          <span class="lp-title">📖 <span data-i18n="ui.tree.chapters">Chapters</span></span>
+          <button class="icon-btn" id="btnCorkboard" title="Toggle corkboard view" data-i18n-title="ui.tree.toggleCorkboard">📋</button>
+          <button class="icon-btn" id="btnAddChapter" title="Add chapter" data-i18n-title="ui.tree.addChapter">＋</button>
         </div>
         <div class="lp-body">
           <ul id="chapterList" class="chapter-list tree-list"></ul>
@@ -84,9 +84,9 @@
       <!-- Empty state (no novel open) -->
       <div id="emptyState" class="empty-state hidden">
         <div class="es-icon">📖</div>
-        <p>Open a novel or create a new one</p>
-        <button class="lp-action" id="esNew">＋ New Novel</button>
-        <button class="lp-action" id="esOpen">📂 Open Novel</button>
+        <p data-i18n="ui.tree.emptyHint">Open a novel or create a new one</p>
+        <button class="lp-action" id="esNew">＋ <span data-i18n="ui.tree.newNovel">New Novel</span></button>
+        <button class="lp-action" id="esOpen">📂 <span data-i18n="ui.tree.openNovel">Open Novel</span></button>
       </div>
     </aside>
 
@@ -96,15 +96,15 @@
       <div id="sceneMeta" class="scene-meta hidden">
         <div class="scene-meta-inner">
           <div class="metadata-controls">
-            <select id="metaPov" class="meta-select" title="POV character"></select>
-            <select id="metaLoc" class="meta-select" title="Location"></select>
-            <select id="metaTime" class="meta-select" title="Time of day"></select>
-            <select id="metaStatus" class="meta-select" title="Status"></select>
+            <select id="metaPov" class="meta-select" title="POV character" data-i18n-title="ui.sceneMeta.pov"></select>
+            <select id="metaLoc" class="meta-select" title="Location" data-i18n-title="ui.sceneMeta.location"></select>
+            <select id="metaTime" class="meta-select" title="Time of day" data-i18n-title="ui.sceneMeta.timeOfDay"></select>
+            <select id="metaStatus" class="meta-select" title="Status" data-i18n-title="ui.sceneMeta.status"></select>
           </div>
-          <button id="metaHide" class="meta-hide metadata-close" title="Hide scene bar">✕</button>
+          <button id="metaHide" class="meta-hide metadata-close" title="Hide scene bar" data-i18n-title="ui.sceneMeta.hide">✕</button>
         </div>
       </div>
-      <button id="metaShow" class="meta-show hidden" title="Show scene bar">▾ Scene info</button>
+      <button id="metaShow" class="meta-show hidden" title="Show scene bar" data-i18n-title="ui.sceneMeta.show">▾ <span data-i18n="ui.sceneMeta.info">Scene info</span></button>
 
       <div class="editor-scroll">
         <div id="editorWrap">
@@ -113,33 +113,33 @@
           <div id="marginNotes" class="margin-notes"></div>
         </div>
       </div>
-      <button id="exitFocus" class="exit-focus hidden">Exit Focus (Esc)</button>
+      <button id="exitFocus" class="exit-focus hidden" data-i18n="ui.editor.exitFocus">Exit Focus (Esc)</button>
 
       <!-- corkboard view (overlays the editor) -->
       <div id="corkboard" class="corkboard hidden">
         <div class="cork-toolbar">
-          <button id="corkBack" class="tbtn accent">← Back to Editor</button>
-          <label class="cork-ctl">Size
+          <button id="corkBack" class="tbtn accent">← <span data-i18n="ui.corkboard.back">Back to Editor</span></button>
+          <label class="cork-ctl"><span data-i18n="ui.corkboard.size">Size</span>
             <input type="range" id="corkZoom" min="0" max="2" step="1" value="1" />
           </label>
-          <label class="cork-ctl">Status
+          <label class="cork-ctl"><span data-i18n="ui.corkboard.status">Status</span>
             <select id="corkStatus" class="control">
-              <option value="all">All</option>
-              <option value="draft">Draft</option>
-              <option value="review">Review</option>
-              <option value="done">Done</option>
+              <option value="all" data-i18n="ui.corkboard.all">All</option>
+              <option value="draft" data-i18n="ui.status.draft">Draft</option>
+              <option value="review" data-i18n="ui.status.review">Review</option>
+              <option value="done" data-i18n="ui.status.done">Done</option>
             </select>
           </label>
           <label class="cork-ctl">POV
             <select id="corkPov" class="control"></select>
           </label>
-          <label class="cork-ctl">Sort
+          <label class="cork-ctl"><span data-i18n="ui.corkboard.sort">Sort</span>
             <select id="corkSort" class="control">
-              <option value="order">Order</option>
-              <option value="title">Title</option>
-              <option value="words">Word count</option>
-              <option value="status">Status</option>
-              <option value="time">Time of day</option>
+              <option value="order" data-i18n="ui.corkboard.sortOrder">Order</option>
+              <option value="title" data-i18n="ui.corkboard.sortTitle">Title</option>
+              <option value="words" data-i18n="ui.corkboard.sortWords">Word count</option>
+              <option value="status" data-i18n="ui.corkboard.status">Status</option>
+              <option value="time" data-i18n="ui.sceneMeta.timeOfDay">Time of day</option>
             </select>
           </label>
         </div>
@@ -151,21 +151,21 @@
     <aside id="rightPanel" class="side-panel">
       <!-- Formatting -->
       <div class="accordion open" data-acc="fmt">
-        <button class="acc-head">Formatting <span class="chev">▾</span></button>
+        <button class="acc-head"><span data-i18n="ui.fmt.title">Formatting</span> <span class="chev">▾</span></button>
         <div class="acc-body">
           <div class="fmt-row">
-            <button class="fmt-btn" data-cmd="bold" id="fmtBold" title="Bold (Ctrl+B)"><b>B</b></button>
-            <button class="fmt-btn" data-cmd="italic" id="fmtItalic" title="Italic (Ctrl+I)"><i>I</i></button>
-            <button class="fmt-btn" id="btnMarkdownMode" title="Toggle Markdown source">&lt;/&gt;</button>
+            <button class="fmt-btn" data-cmd="bold" id="fmtBold" title="Bold (Ctrl+B)" data-i18n-title="ui.fmt.bold"><b>B</b></button>
+            <button class="fmt-btn" data-cmd="italic" id="fmtItalic" title="Italic (Ctrl+I)" data-i18n-title="ui.fmt.italic"><i>I</i></button>
+            <button class="fmt-btn" id="btnMarkdownMode" title="Toggle Markdown source" data-i18n-title="ui.fmt.markdown">&lt;/&gt;</button>
           </div>
-          <label class="field-label">Paragraph style</label>
+          <label class="field-label" data-i18n="ui.fmt.paragraphStyle">Paragraph style</label>
           <select id="styleSelect" class="control">
-            <option value="P">Normal</option>
-            <option value="H1">Heading 1</option>
-            <option value="H2">Heading 2</option>
-            <option value="H3">Heading 3</option>
+            <option value="P" data-i18n="ui.fmt.normal">Normal</option>
+            <option value="H1" data-i18n="ui.fmt.h1">Heading 1</option>
+            <option value="H2" data-i18n="ui.fmt.h2">Heading 2</option>
+            <option value="H3" data-i18n="ui.fmt.h3">Heading 3</option>
           </select>
-          <label class="field-label">Font (selection)</label>
+          <label class="field-label" data-i18n="ui.fmt.fontSelection">Font (selection)</label>
           <select id="fontSelect" class="control">
             <option value="Georgia, serif">Georgia</option>
             <option value="'Lora', serif">Lora</option>
@@ -174,9 +174,9 @@
             <option value="Roboto, sans-serif">Roboto</option>
             <option value="Arial, sans-serif">Arial</option>
           </select>
-          <label class="field-label">Global font size: <span id="fsVal">18</span>px</label>
+          <label class="field-label"><span data-i18n="ui.fmt.fontSize">Global font size:</span> <span id="fsVal">18</span>px</label>
           <input type="range" id="fontSize" class="slider" min="14" max="24" step="2" value="18" />
-          <label class="field-label">Default document font</label>
+          <label class="field-label" data-i18n="ui.fmt.docFont">Default document font</label>
           <select id="docFontSelect" class="control">
             <option value="Georgia, serif">Georgia</option>
             <option value="'Lora', serif">Lora</option>
@@ -190,42 +190,42 @@
 
       <!-- Characters -->
       <div class="accordion" data-acc="chars">
-        <button class="acc-head">Characters <span class="chev">▾</span></button>
+        <button class="acc-head"><span data-i18n="ui.chars.title">Characters</span> <span class="chev">▾</span></button>
         <div class="acc-body">
-          <button class="graph-btn" id="btnGraphView" title="Open the character relationship graph (Ctrl+G)">🔗 Graph View</button>
-          <button class="add-entity" id="btnAddChar">＋ Add Character</button>
+          <button class="graph-btn" id="btnGraphView" title="Open the character relationship graph (Ctrl+G)" data-i18n-title="ui.chars.graphTitle">🔗 <span data-i18n="ui.chars.graphView">Graph View</span></button>
+          <button class="add-entity" id="btnAddChar">＋ <span data-i18n="ui.chars.add">Add Character</span></button>
           <div id="charList" class="entity-list"></div>
         </div>
       </div>
 
       <!-- Locations -->
       <div class="accordion" data-acc="locs">
-        <button class="acc-head">Locations <span class="chev">▾</span></button>
+        <button class="acc-head"><span data-i18n="ui.locs.title">Locations</span> <span class="chev">▾</span></button>
         <div class="acc-body">
-          <button class="graph-btn" id="btnWorldMap" title="Open the interactive world map">🗺️ Open World Map</button>
-          <button class="add-entity" id="btnAddLoc">＋ Add Location</button>
+          <button class="graph-btn" id="btnWorldMap" title="Open the interactive world map" data-i18n-title="ui.locs.mapTitle">🗺️ <span data-i18n="ui.locs.openMap">Open World Map</span></button>
+          <button class="add-entity" id="btnAddLoc">＋ <span data-i18n="ui.locs.add">Add Location</span></button>
           <div id="locList" class="entity-list"></div>
         </div>
       </div>
 
       <!-- Races -->
       <div class="accordion" data-acc="races">
-        <button class="acc-head">Races / Peoples <span class="chev">▾</span></button>
+        <button class="acc-head"><span data-i18n="ui.races.title">Races / Peoples</span> <span class="chev">▾</span></button>
         <div class="acc-body">
-          <button class="add-entity" id="btnAddRace">＋ Add Race</button>
+          <button class="add-entity" id="btnAddRace">＋ <span data-i18n="ui.races.add">Add Race</span></button>
           <div id="raceList" class="entity-list"></div>
         </div>
       </div>
 
       <!-- Notes -->
       <div class="accordion" data-acc="notes">
-        <button class="acc-head">📝 Notes <span class="chev">▾</span></button>
+        <button class="acc-head"><span>📝 <span data-i18n="ui.notes.title">Notes</span></span> <span class="chev">▾</span></button>
         <div class="acc-body">
           <div id="noteFilters" class="note-filters"></div>
           <select id="noteResolvedFilter" class="control">
-            <option value="hide">Hide resolved</option>
-            <option value="show">Show resolved</option>
-            <option value="only">Only resolved</option>
+            <option value="hide" data-i18n="ui.notes.hideResolved">Hide resolved</option>
+            <option value="show" data-i18n="ui.notes.showResolved">Show resolved</option>
+            <option value="only" data-i18n="ui.notes.onlyResolved">Only resolved</option>
           </select>
           <div id="noteList" class="note-list"></div>
         </div>
@@ -233,13 +233,13 @@
 
       <!-- Counters -->
       <div class="accordion open" data-acc="counters">
-        <button class="acc-head">Counters <span class="chev">▾</span></button>
+        <button class="acc-head"><span data-i18n="ui.counters.title">Counters</span> <span class="chev">▾</span></button>
         <div class="acc-body">
-          <div class="stat"><span>Words (chapter)</span><b id="statChapWords">0</b></div>
-          <div class="stat"><span>Words (total)</span><b id="statTotalWords">0</b></div>
-          <div class="stat"><span>Chars (with spaces)</span><b id="statChars">0</b></div>
-          <div class="stat"><span>Chars (no spaces)</span><b id="statCharsNs">0</b></div>
-          <div class="goal-head"><span>Goal progress</span></div>
+          <div class="stat"><span data-i18n="ui.counters.wordsChapter">Words (chapter)</span><b id="statChapWords">0</b></div>
+          <div class="stat"><span data-i18n="ui.counters.wordsTotal">Words (total)</span><b id="statTotalWords">0</b></div>
+          <div class="stat"><span data-i18n="ui.counters.chars">Chars (with spaces)</span><b id="statChars">0</b></div>
+          <div class="stat"><span data-i18n="ui.counters.charsNoSpaces">Chars (no spaces)</span><b id="statCharsNs">0</b></div>
+          <div class="goal-head"><span data-i18n="ui.counters.goalProgress">Goal progress</span></div>
           <div class="progress"><div id="progressBar" class="progress-bar"></div></div>
           <div class="stat"><span id="goalLabel">0% of 80,000</span></div>
         </div>
@@ -247,40 +247,42 @@
 
       <!-- Settings -->
       <div class="accordion" data-acc="settings">
-        <button class="acc-head">⚙️ Settings <span class="chev">▾</span></button>
+        <button class="acc-head"><span>⚙️ <span data-i18n="ui.settings.title">Settings</span></span> <span class="chev">▾</span></button>
         <div class="acc-body">
-          <div class="settings-sub">Note Types</div>
+          <div class="settings-sub" data-i18n="ui.settings.noteTypes">Note Types</div>
           <div id="noteTypeList" class="note-type-list"></div>
-          <button class="add-entity" id="btnAddNoteType">＋ Add Custom Type</button>
+          <button class="add-entity" id="btnAddNoteType">＋ <span data-i18n="ui.settings.addNoteType">Add Custom Type</span></button>
 
-          <div class="settings-sub">Note Display</div>
+          <div class="settings-sub" data-i18n="ui.settings.noteDisplay">Note Display</div>
           <label class="toggle-row">
             <input type="checkbox" id="showMargin" checked />
-            <span>Show margin indicators</span>
+            <span data-i18n="ui.settings.showMargin">Show margin indicators</span>
           </label>
           <label class="toggle-row">
             <input type="checkbox" id="highlightAnno" checked />
-            <span>Highlight annotated text</span>
+            <span data-i18n="ui.settings.highlightAnno">Highlight annotated text</span>
           </label>
           <label class="toggle-row">
             <input type="checkbox" id="autoResolveEdit" />
-            <span>Auto-resolve notes on text edit</span>
+            <span data-i18n="ui.settings.autoResolve">Auto-resolve notes on text edit</span>
           </label>
 
-          <div class="settings-sub">General</div>
+          <div class="settings-sub" data-i18n="ui.settings.general">General</div>
+          <label class="field-label" for="uiLanguage" data-i18n="ui.settings.language">Interface language</label>
+          <select id="uiLanguage" class="control"></select>
           <div class="goal-head">
-            <span>Word goal</span>
-            <button class="icon-btn" id="btnGoal" title="Set word goal">⚙</button>
+            <span data-i18n="ui.settings.wordGoal">Word goal</span>
+            <button class="icon-btn" id="btnGoal" title="Set word goal" data-i18n-title="ui.settings.setWordGoal">⚙</button>
           </div>
           <label class="toggle-row">
             <input type="checkbox" id="nativeTitlebar" />
-            <span>Use native title bar</span>
+            <span data-i18n="ui.settings.nativeTitlebar">Use native title bar</span>
           </label>
           <label class="toggle-row">
             <input type="checkbox" id="typewriterToggle" />
-            <span>Typewriter focus (dim &amp; center)</span>
+            <span data-i18n="ui.settings.typewriter">Typewriter focus (dim &amp; center)</span>
           </label>
-          <button class="add-entity" id="btnRestoreBackup" title="Load an earlier version of this novel's file">⟲ Restore from Backup…</button>
+          <button class="add-entity" id="btnRestoreBackup" title="Load an earlier version of this novel's file" data-i18n-title="ui.settings.restoreBackupTitle">⟲ <span data-i18n="ui.settings.restoreBackup">Restore from Backup…</span></button>
         </div>
       </div>
     </aside>
@@ -295,19 +297,19 @@
 
   <!-- ============ CONTEXT MENU (editor) ============ -->
   <div id="editorCtx" class="ctx-menu hidden">
-    <button data-ectx="addnote" title="Add Margin Note (Ctrl+Shift+M)">📝 Add Note</button>
+    <button data-ectx="addnote" title="Add Margin Note (Ctrl+Shift+M)" data-i18n-title="ui.notePopup.addMarginNote" data-i18n="ui.editorCtx.addNote">📝 Add Note</button>
   </div>
 
   <!-- ============ ADD-NOTE POPUP ============ -->
-  <div id="notePopup" class="note-popup hidden" title="Add Margin Note (Ctrl+Shift+M)">
-    <div class="np-title">Add Note</div>
-    <label class="field-label">Note type</label>
+  <div id="notePopup" class="note-popup hidden" title="Add Margin Note (Ctrl+Shift+M)" data-i18n-title="ui.notePopup.addMarginNote">
+    <div class="np-title" data-i18n="ui.notePopup.title">Add Note</div>
+    <label class="field-label" data-i18n="ui.notePopup.type">Note type</label>
     <select id="npType" class="control"></select>
-    <label class="field-label">Note content</label>
-    <textarea id="npContent" class="control np-content" rows="3" placeholder="Note content…"></textarea>
+    <label class="field-label" data-i18n="ui.notePopup.content">Note content</label>
+    <textarea id="npContent" class="control np-content" rows="3" placeholder="Note content…" data-i18n-placeholder="ui.notePopup.contentPlaceholder"></textarea>
     <div class="np-actions">
-      <button id="npCancel" class="tbtn subtle">Cancel</button>
-      <button id="npAdd" class="tbtn accent">Add Note</button>
+      <button id="npCancel" class="tbtn subtle" data-i18n="common.cancel">Cancel</button>
+      <button id="npAdd" class="tbtn accent" data-i18n="ui.notePopup.add">Add Note</button>
     </div>
   </div>
 
@@ -321,8 +323,8 @@
       <p id="modalBody"></p>
       <input type="text" id="modalInput" class="control hidden" />
       <div class="modal-actions">
-        <button id="modalCancel" class="tbtn">Cancel</button>
-        <button id="modalOk" class="tbtn accent">OK</button>
+        <button id="modalCancel" class="tbtn" data-i18n="common.cancel">Cancel</button>
+        <button id="modalOk" class="tbtn accent" data-i18n="common.ok">OK</button>
       </div>
     </div>
   </div>
@@ -330,12 +332,12 @@
   <!-- ============ CLOSE CONFIRM (3 options) ============ -->
   <div id="closeOverlay" class="modal-overlay hidden">
     <div class="modal">
-      <h3>Unsaved Changes</h3>
-      <p>You have unsaved changes. What would you like to do?</p>
+      <h3 data-i18n="ui.closeConfirm.title">Unsaved Changes</h3>
+      <p data-i18n="ui.closeConfirm.body">You have unsaved changes. What would you like to do?</p>
       <div class="modal-actions">
-        <button id="closeSaveBtn" class="tbtn accent">Save and Close</button>
-        <button id="closeDiscardBtn" class="tbtn">Discard Changes</button>
-        <button id="closeCancelBtn" class="tbtn subtle">Cancel</button>
+        <button id="closeSaveBtn" class="tbtn accent" data-i18n="ui.closeConfirm.saveClose">Save and Close</button>
+        <button id="closeDiscardBtn" class="tbtn" data-i18n="ui.closeConfirm.discard">Discard Changes</button>
+        <button id="closeCancelBtn" class="tbtn subtle" data-i18n="common.cancel">Cancel</button>
       </div>
     </div>
   </div>
@@ -343,11 +345,11 @@
   <!-- ============ BACKUPS ============ -->
   <div id="backupOverlay" class="modal-overlay hidden">
     <div class="modal backup-modal">
-      <h3>Restore from Backup</h3>
+      <h3 data-i18n="ui.backups.title">Restore from Backup</h3>
       <p id="backupHint"></p>
       <div id="backupList" class="backup-list"></div>
       <div class="modal-actions">
-        <button id="backupClose" class="tbtn">Close</button>
+        <button id="backupClose" class="tbtn" data-i18n="common.close">Close</button>
       </div>
     </div>
   </div>
@@ -356,27 +358,27 @@
   <div id="graphOverlay" class="graph-overlay hidden">
     <div class="graph-modal">
       <div class="graph-toolbar">
-        <span class="graph-title">🔗 Character Graph</span>
-        <button class="tbtn" id="graphAddChar">＋ Character</button>
-        <button class="tbtn" id="graphAddRel">＋ Relationship</button>
-        <label class="graph-ctl">Layout
+        <span class="graph-title">🔗 <span data-i18n="ui.graph.title">Character Graph</span></span>
+        <button class="tbtn" id="graphAddChar">＋ <span data-i18n="ui.graph.addChar">Character</span></button>
+        <button class="tbtn" id="graphAddRel">＋ <span data-i18n="ui.graph.addRel">Relationship</span></button>
+        <label class="graph-ctl"><span data-i18n="ui.graph.layout">Layout</span>
           <select id="graphLayout" class="control">
-            <option value="manual">Manual</option>
-            <option value="auto">Auto-Arrange</option>
-            <option value="circular">Circular</option>
+            <option value="manual" data-i18n="ui.graph.layoutManual">Manual</option>
+            <option value="auto" data-i18n="ui.graph.layoutAuto">Auto-Arrange</option>
+            <option value="circular" data-i18n="ui.graph.layoutCircular">Circular</option>
           </select>
         </label>
-        <label class="graph-ctl">Filter
+        <label class="graph-ctl"><span data-i18n="ui.graph.filter">Filter</span>
           <select id="graphFilter" class="control">
-            <option value="all">Show All</option>
-            <option value="main">Main Characters Only</option>
-            <option value="withrel">With Relationships</option>
-            <option value="withoutrel">Without Relationships</option>
+            <option value="all" data-i18n="ui.graph.filterAll">Show All</option>
+            <option value="main" data-i18n="ui.graph.filterMain">Main Characters Only</option>
+            <option value="withrel" data-i18n="ui.graph.filterWithRel">With Relationships</option>
+            <option value="withoutrel" data-i18n="ui.graph.filterWithoutRel">Without Relationships</option>
           </select>
         </label>
-        <button class="tbtn" id="graphExport">Export PNG</button>
-        <button class="tbtn" id="graphReset">Reset Positions</button>
-        <button class="tbtn subtle graph-close" id="graphClose" title="Close (Esc)">✕</button>
+        <button class="tbtn" id="graphExport" data-i18n="ui.graph.exportPng">Export PNG</button>
+        <button class="tbtn" id="graphReset" data-i18n="ui.graph.reset">Reset Positions</button>
+        <button class="tbtn subtle graph-close" id="graphClose" title="Close (Esc)" data-i18n-title="ui.dialog.closeEsc">✕</button>
       </div>
       <div class="graph-stage">
         <canvas id="graphCanvas"></canvas>
@@ -384,7 +386,7 @@
         <div id="graphPanel" class="graph-panel hidden"></div>
         <!-- legend -->
         <div id="graphLegend" class="graph-legend">
-          <button id="legendToggle" class="legend-toggle">Legend ▾</button>
+          <button id="legendToggle" class="legend-toggle"><span data-i18n="ui.graph.legend">Legend</span> ▾</button>
           <div id="legendBody" class="legend-body"></div>
         </div>
       </div>
@@ -395,44 +397,44 @@
   <div id="mapOverlay" class="map-overlay hidden">
     <div class="map-modal">
       <div class="map-toolbar">
-        <span class="map-title">🗺️ World Map</span>
-        <button class="tbtn" id="mapUpload" title="Upload a background map image">Upload Map Image</button>
+        <span class="map-title">🗺️ <span data-i18n="ui.map.title">World Map</span></span>
+        <button class="tbtn" id="mapUpload" title="Upload a background map image" data-i18n-title="ui.map.uploadTitle" data-i18n="ui.map.upload">Upload Map Image</button>
         <div class="map-zoomctl">
-          <button class="tbtn map-zbtn" id="mapZoomOut" title="Zoom out">−</button>
+          <button class="tbtn map-zbtn" id="mapZoomOut" title="Zoom out" data-i18n-title="ui.map.zoomOut">−</button>
           <span id="mapZoomLabel" class="map-zoom">100%</span>
-          <button class="tbtn map-zbtn" id="mapZoomIn" title="Zoom in">＋</button>
+          <button class="tbtn map-zbtn" id="mapZoomIn" title="Zoom in" data-i18n-title="ui.map.zoomIn">＋</button>
         </div>
-        <button class="tbtn" id="mapFit" title="Fit map to screen">Fit to Screen</button>
-        <button class="tbtn" id="mapOriginal" title="Original size (100%)">100%</button>
-        <button class="tbtn" id="mapAddRoute" title="Add a travel route between two locations">Add Route</button>
-        <label class="map-ctl">Draw layer
+        <button class="tbtn" id="mapFit" title="Fit map to screen" data-i18n-title="ui.map.fitTitle" data-i18n="ui.map.fit">Fit to Screen</button>
+        <button class="tbtn" id="mapOriginal" title="Original size (100%)" data-i18n-title="ui.map.originalTitle">100%</button>
+        <button class="tbtn" id="mapAddRoute" title="Add a travel route between two locations" data-i18n-title="ui.map.addRouteTitle" data-i18n="ui.map.addRoute">Add Route</button>
+        <label class="map-ctl"><span data-i18n="ui.map.drawLayer">Draw layer</span>
           <select id="mapActiveLayer" class="control"></select>
         </label>
-        <button class="tbtn" id="mapExport" title="Export current view as PNG">Export PNG</button>
-        <button class="tbtn subtle map-close" id="mapClose" title="Close (Esc)">✕</button>
+        <button class="tbtn" id="mapExport" title="Export current view as PNG" data-i18n-title="ui.map.exportTitle" data-i18n="ui.map.exportPng">Export PNG</button>
+        <button class="tbtn subtle map-close" id="mapClose" title="Close (Esc)" data-i18n-title="ui.dialog.closeEsc">✕</button>
       </div>
       <div class="map-main">
         <aside class="map-side">
-          <div class="map-side-head">📍 Locations</div>
-          <input type="text" id="mapLocSearch" class="control map-search" placeholder="Search locations…" />
-          <button class="tbtn map-place-all" id="mapPlaceAll">Place All Unplaced</button>
+          <div class="map-side-head">📍 <span data-i18n="ui.map.locations">Locations</span></div>
+          <input type="text" id="mapLocSearch" class="control map-search" placeholder="Search locations…" data-i18n-placeholder="ui.map.searchLocations" />
+          <button class="tbtn map-place-all" id="mapPlaceAll" data-i18n="ui.map.placeAll">Place All Unplaced</button>
           <div id="mapLocList" class="map-loc-list"></div>
-          <div class="map-side-head">🗂️ Layers</div>
+          <div class="map-side-head">🗂️ <span data-i18n="ui.map.layers">Layers</span></div>
           <div id="mapLayerList" class="map-layer-list"></div>
-          <button class="add-entity map-add-layer" id="mapAddLayer">＋ Add Layer</button>
+          <button class="add-entity map-add-layer" id="mapAddLayer">＋ <span data-i18n="ui.map.addLayer">Add Layer</span></button>
           <div id="mapDrawTools" class="map-draw-tools hidden">
-            <div class="map-side-sub">Drawing tools</div>
+            <div class="map-side-sub" data-i18n="ui.map.drawingTools">Drawing tools</div>
             <div class="map-tool-row">
-              <button class="map-tool active" data-tool="pen" title="Freehand pen">✏️</button>
-              <button class="map-tool" data-tool="line" title="Line">╱</button>
-              <button class="map-tool" data-tool="rect" title="Rectangle">▭</button>
-              <button class="map-tool" data-tool="circle" title="Circle">◯</button>
-              <button class="map-tool" data-tool="text" title="Text">T</button>
-              <button class="map-tool" data-tool="eraser" title="Eraser">🩹</button>
+              <button class="map-tool active" data-tool="pen" title="Freehand pen" data-i18n-title="ui.map.toolPen">✏️</button>
+              <button class="map-tool" data-tool="line" title="Line" data-i18n-title="ui.map.toolLine">╱</button>
+              <button class="map-tool" data-tool="rect" title="Rectangle" data-i18n-title="ui.map.toolRect">▭</button>
+              <button class="map-tool" data-tool="circle" title="Circle" data-i18n-title="ui.map.toolCircle">◯</button>
+              <button class="map-tool" data-tool="text" title="Text" data-i18n-title="ui.map.toolText">T</button>
+              <button class="map-tool" data-tool="eraser" title="Eraser" data-i18n-title="ui.map.toolEraser">🩹</button>
             </div>
             <div class="map-tool-row">
-              <input type="color" id="mapDrawColor" class="nt-color" value="#c9a96e" title="Drawing color" />
-              <button class="tbtn subtle" id="mapClearLayer">Clear layer</button>
+              <input type="color" id="mapDrawColor" class="nt-color" value="#c9a96e" title="Drawing color" data-i18n-title="ui.map.drawColor" />
+              <button class="tbtn subtle" id="mapClearLayer" data-i18n="ui.map.clearLayer">Clear layer</button>
             </div>
           </div>
         </aside>
@@ -457,39 +459,39 @@
   <div id="compileOverlay" class="compile-overlay hidden">
     <div class="compile-modal">
       <div class="compile-toolbar">
-        <span class="compile-title">📘 Compile Novel</span>
-        <button class="tbtn" id="compPreviewBtn" title="Toggle preview">👁 Preview</button>
+        <span class="compile-title">📘 <span data-i18n="ui.compile.title">Compile Novel</span></span>
+        <button class="tbtn" id="compPreviewBtn" title="Toggle preview" data-i18n-title="ui.compile.togglePreview">👁 <span data-i18n="ui.compile.preview">Preview</span></button>
         <span class="compile-spacer"></span>
-        <label class="compile-ctl">Preset
+        <label class="compile-ctl"><span data-i18n="ui.compile.preset">Preset</span>
           <select id="compPreset" class="control"></select>
         </label>
-        <button class="tbtn" id="compSavePreset" title="Save current settings as a preset">Save Preset</button>
+        <button class="tbtn" id="compSavePreset" title="Save current settings as a preset" data-i18n-title="ui.compile.savePresetTitle" data-i18n="ui.compile.savePreset">Save Preset</button>
         <div class="dropdown">
-          <button class="tbtn accent" id="compExportBtn">Export ▾</button>
+          <button class="tbtn accent" id="compExportBtn"><span data-i18n="ui.compile.export">Export</span> ▾</button>
           <div class="dropdown-menu" id="compExportMenu">
-            <button data-comp-export="pdf">Export as PDF</button>
-            <button data-comp-export="epub">Export as EPUB</button>
-            <button data-comp-export="html">Export as HTML</button>
-            <button data-comp-export="txt">Export as TXT</button>
-            <button data-comp-export="docx">Export as DOCX</button>
+            <button data-comp-export="pdf" data-i18n="ui.compile.exportAsPdf">Export as PDF</button>
+            <button data-comp-export="epub" data-i18n="ui.compile.exportAsEpub">Export as EPUB</button>
+            <button data-comp-export="html" data-i18n="ui.compile.exportAsHtml">Export as HTML</button>
+            <button data-comp-export="txt" data-i18n="ui.compile.exportAsTxt">Export as TXT</button>
+            <button data-comp-export="docx" data-i18n="ui.compile.exportAsDocx">Export as DOCX</button>
           </div>
         </div>
-        <button class="tbtn subtle compile-close" id="compClose" title="Close (Esc)">✕</button>
+        <button class="tbtn subtle compile-close" id="compClose" title="Close (Esc)" data-i18n-title="ui.dialog.closeEsc">✕</button>
       </div>
       <div class="compile-body">
         <!-- available scenes -->
         <aside class="compile-src">
-          <div class="compile-head">Available Scenes</div>
-          <input type="text" id="compSearch" class="control" placeholder="Search scenes…" />
+          <div class="compile-head" data-i18n="ui.compile.available">Available Scenes</div>
+          <input type="text" id="compSearch" class="control" placeholder="Search scenes…" data-i18n-placeholder="ui.compile.searchScenes" />
           <div id="compAvailable" class="compile-avail"></div>
         </aside>
         <!-- compilation order -->
         <section class="compile-order-wrap">
           <div class="compile-order-tools">
-            <button class="tbtn" id="compAddPart">＋ Part Divider</button>
-            <button class="tbtn" id="compAddBreak">＋ Section Break</button>
-            <button class="tbtn subtle" id="compRestore">Restore Default Order</button>
-            <button class="tbtn subtle" id="compClear">Clear All</button>
+            <button class="tbtn" id="compAddPart">＋ <span data-i18n="ui.compile.addPart">Part Divider</span></button>
+            <button class="tbtn" id="compAddBreak">＋ <span data-i18n="ui.compile.addBreak">Section Break</span></button>
+            <button class="tbtn subtle" id="compRestore" data-i18n="ui.compile.restoreOrder">Restore Default Order</button>
+            <button class="tbtn subtle" id="compClear" data-i18n="ui.compile.clearAll">Clear All</button>
           </div>
           <div id="compOrder" class="compile-order"></div>
           <div id="compPreview" class="compile-preview hidden"></div>
@@ -497,7 +499,7 @@
         </section>
         <!-- settings -->
         <aside class="compile-settings">
-          <div class="compile-head">Settings</div>
+          <div class="compile-head" data-i18n="ui.compile.settings">Settings</div>
           <div id="compSettingsBody" class="compile-settings-body"></div>
         </aside>
       </div>

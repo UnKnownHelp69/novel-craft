@@ -14,6 +14,7 @@ import { doExportNotes } from './notes.js';
 import { openCompile } from './compile.js';
 import { openBackups } from './backups.js';
 import { refreshMaxIcon, requestClose } from './window-controls.js';
+import { t } from './i18n/index.js';
 
 export function init() {
   if (hasTauri) {
@@ -22,7 +23,7 @@ export function init() {
       const p = e.payload;
       if (typeof p === 'string' && p.startsWith('recent:')) {
         const path = p.slice(7);
-        guardUnsaved(() => loadFromPath(path), 'Discard unsaved changes and open this file?');
+        guardUnsaved(() => loadFromPath(path), t('file.discardAndOpenFile'));
         return;
       }
       switch (p) {
@@ -41,7 +42,7 @@ export function init() {
         case 'redo': document.execCommand('redo'); break;
         case 'toggle_focus': setFocus(!focusMode); break;
         case 'toggle_panels': $('#toggleLeft').click(); $('#toggleRight').click(); break;
-        case 'about': confirmModal('About NovelCraft', 'NovelCraft — a distraction-free novel writing studio. Built with Tauri.', () => {}); break;
+        case 'about': confirmModal(t('menu.aboutTitle'), t('menu.aboutBody'), () => {}); break;
       }
     });
 

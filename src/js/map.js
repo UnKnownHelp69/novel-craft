@@ -7,6 +7,7 @@ import { fillSelect } from './tree.js';
 import { ctx, ctxItem, showCtx } from './context-menu.js';
 import { confirmModal, promptModal, toast } from './dialogs.js';
 import { distToSeg } from './graph.js';
+import { t } from './i18n/index.js';
 
 /* Three coordinate spaces:
    - relative: pin positions in novel.settings.worldMap.locations[id] = { x, y } in 0..1 of the
@@ -16,6 +17,7 @@ import { distToSeg } from './graph.js';
    screen = world × mView.zoom + (mView.x, mView.y); see mw2s / ms2w. */
 const LOC_TYPE_COLOR = { city: '#4a90d9', building: '#c9a96e', natural: '#5cb85c', other: '#8f887c' };
 function locColor(l) { return LOC_TYPE_COLOR[l.type] || '#8f887c'; }
+const LOC_TYPE_LABEL = { city: 'map.typeCity', building: 'map.typeBuilding', natural: 'map.typeNatural', other: 'map.typeOther' };   // keys for t()
 
 export let mapOpen = false;
 let mapEventsInit = false;
@@ -143,7 +145,7 @@ export function mapDraw() {
     mCtx.setLineDash([]);
     if (!mImg) {
       mCtx.fillStyle = '#4a4a58'; mCtx.font = '13px Inter, sans-serif'; mCtx.textAlign = 'center';
-      mCtx.fillText('No map image — click “Upload Map Image” to add one', tl.x + sz.w * mView.zoom / 2, tl.y + sz.h * mView.zoom / 2);
+      mCtx.fillText(t('map.noImage'), tl.x + sz.w * mView.zoom / 2, tl.y + sz.h * mView.zoom / 2);
     }
   }
   wm.layers.forEach(l => { if (l.visible) drawLayer(l); });
@@ -171,7 +173,7 @@ function drawPins() {
     mCtx.beginPath(); mCtx.arc(p.x, cy, r * 0.42, 0, Math.PI * 2);
     mCtx.fillStyle = 'rgba(0,0,0,.35)'; mCtx.fill();
     if (showLabels) {
-      const name = l.name || '(unnamed)';
+      const name = l.name || t('map.unnamed');
       mCtx.font = '600 12px Inter, sans-serif'; mCtx.textAlign = 'center'; mCtx.textBaseline = 'top';
       const tw = mCtx.measureText(name).width;
       mCtx.fillStyle = 'rgba(20,20,26,.75)';
@@ -245,7 +247,7 @@ async function uploadMapImage() {
     loadMapImage();
     markDirty();
     setTimeout(() => mapFit(), 60);   // give the new image a moment to decode so the fit uses its size
-    toast('Map image set');
+    toast(t('map.imageSet'));
   };
   const inp = document.createElement('input');
   inp.type = 'file';
@@ -253,7 +255,7 @@ async function uploadMapImage() {
   inp.onchange = () => {
     const f = inp.files[0];
     if (!f) return;
-    if (f.size > 12 * 1024 * 1024) { toast('Image is too large (max 12 MB)'); return; }
+    if (f.size > 12 * 1024 * 1024) { toast(t('map.imageTooLarge')); return; }
     const rd = new FileReader();
     rd.onload = () => apply(rd.result);
     rd.readAsDataURL(f);
@@ -269,8 +271,8 @@ function renderMapLocList() {
   const wm = worldMap();
   const q = mLocSearch.trim().toLowerCase();
   const locs = novel.locations.filter(l => !q || (l.name || '').toLowerCase().includes(q));
-  if (!novel.locations.length) { host.innerHTML = '<div class="map-empty">No locations yet. Add some in the Locations panel.</div>'; return; }
-  if (!locs.length) { host.innerHTML = '<div class="map-empty">No matches.</div>'; return; }
+  if (!novel.locations.length) { host.innerHTML = `<div class="map-empty">${esc(t('map.noLocations'))}</div>`; return; }
+  if (!locs.length) { host.innerHTML = `<div class="map-empty">${esc(t('map.noMatches'))}</div>`; return; }
   locs.forEach(l => {
     const placed = !!wm.locations[l.id];
     const row = document.createElement('div');
@@ -278,9 +280,9 @@ function renderMapLocList() {
     // locColor() only returns constants from LOC_TYPE_COLOR, so it is safe unescaped in style=
     row.innerHTML =
       `<span class="mlr-dot" style="background:${locColor(l)}"></span>
-       <span class="mlr-name">${esc(l.name || '(unnamed)')}</span>
-       ${placed ? '<span class="mlr-pin" title="On map">📍</span>'
-                : '<button class="mlr-place" title="Place on map">Place</button>'}`;
+       <span class="mlr-name">${esc(l.name || t('map.unnamed'))}</span>
+       ${placed ? `<span class="mlr-pin" title="${escAttr(t('map.onMap'))}">📍</span>`
+                : `<button class="mlr-place" title="${escAttr(t('map.placeOnMap'))}">${esc(t('map.place'))}</button>`}`;
     if (placed) {
       row.querySelector('.mlr-name').onclick = () => { centerOnLoc(l); showLocDetails(l); };
       row.querySelector('.mlr-pin').onclick = () => { centerOnLoc(l); showLocDetails(l); };
@@ -310,7 +312,7 @@ function placeLocation(id, rel) {
 function placeAllUnplaced() {
   const wm = worldMap();
   const unplaced = novel.locations.filter(l => !wm.locations[l.id]);
-  if (!unplaced.length) { toast('All locations are already placed'); return; }
+  if (!unplaced.length) { toast(t('map.allAlreadyPlaced')); return; }
   // spread them over a near-square grid inset from the image edges
   const cols = Math.ceil(Math.sqrt(unplaced.length));
   unplaced.forEach((l, i) => {
@@ -319,7 +321,7 @@ function placeAllUnplaced() {
     wm.locations[l.id] = { x: (c + 1) / (cols + 1), y: (r + 1) / (rows + 1), visible: true };
   });
   markDirty(); renderMapLocList(); mapDraw();
-  toast('Placed ' + unplaced.length + ' location' + (unplaced.length > 1 ? 's' : ''));
+  toast(t('map.placedN', { n: unplaced.length }));
 }
 function removePin(id) {
   const wm = worldMap();
@@ -327,7 +329,7 @@ function removePin(id) {
   // a route needs both ends on the map, so routes touching this pin go with it
   wm.routes = wm.routes.filter(r => r.fromLocationId !== id && r.toLocationId !== id);
   markDirty(); renderMapLocList(); mapDraw(); hideMapDetails();
-  toast('Removed from map');
+  toast(t('map.removedFromMap'));
 }
 
 /* ---- location details card ---- */
@@ -336,14 +338,14 @@ function showLocDetails(l) {
   const desc = (l.description || '').trim();
   el.innerHTML =
     `<div class="md-head"><span class="md-dot" style="background:${locColor(l)}"></span>
-       <span class="md-name">${esc(l.name || '(unnamed)')}</span>
-       <button class="md-x" title="Close">✕</button></div>
-     <div class="md-type">${esc(({ city: 'City', building: 'Building', natural: 'Natural', other: 'Other' }[l.type]) || 'Location')}</div>
+       <span class="md-name">${esc(l.name || t('map.unnamed'))}</span>
+       <button class="md-x" title="${escAttr(t('common.close'))}">✕</button></div>
+     <div class="md-type">${esc(t(LOC_TYPE_LABEL[l.type] || 'map.typeLocation'))}</div>
      ${desc ? `<div class="md-desc">${esc(desc.slice(0, 220))}${desc.length > 220 ? '…' : ''}</div>` : ''}
      <div class="md-actions">
-       <button class="tbtn" id="mdEdit">Edit in Locations</button>
-       <button class="tbtn" id="mdRoute">Add Route</button>
-       <button class="tbtn nc-danger" id="mdRemove">Remove Pin</button>
+       <button class="tbtn" id="mdEdit">${esc(t('map.editInLocations'))}</button>
+       <button class="tbtn" id="mdRoute">${esc(t('map.addRoute'))}</button>
+       <button class="tbtn nc-danger" id="mdRemove">${esc(t('map.removePin'))}</button>
      </div>`;
   // Position in stage px (= canvas screen px; the canvas fills the stage) beside the pin,
   // flipped/clamped to stay inside. Unhide first: offsetWidth/Height are 0 while hidden.
@@ -378,13 +380,13 @@ function renderMapLayers() {
   const wm = worldMap();
   host.innerHTML = '';
   const base = [
-    ['background', '🗺️ Background Image'], ['locations', '📍 Locations'],
-    ['routes', '🛤️ Travel Routes'], ['labels', '🏷️ Labels']
+    ['background', '🗺️', 'map.layerBackground'], ['locations', '📍', 'map.layerLocations'],
+    ['routes', '🛤️', 'map.layerRoutes'], ['labels', '🏷️', 'map.layerLabels']
   ];
-  base.forEach(([key, label]) => {
+  base.forEach(([key, icon, label]) => {
     const row = document.createElement('div');
     row.className = 'map-layer-row base';
-    row.innerHTML = `<button class="ml-eye" title="Toggle">${wm.baseLayers[key] ? '👁' : '🚫'}</button><span class="ml-name">${label}</span>`;
+    row.innerHTML = `<button class="ml-eye" title="${escAttr(t('map.toggle'))}">${wm.baseLayers[key] ? '👁' : '🚫'}</button><span class="ml-name">${icon} ${esc(t(label))}</span>`;
     row.querySelector('.ml-eye').onclick = () => { wm.baseLayers[key] = !wm.baseLayers[key]; markDirty(); renderMapLayers(); mapDraw(); };
     host.appendChild(row);
   });
@@ -392,35 +394,35 @@ function renderMapLayers() {
     const row = document.createElement('div');
     row.className = 'map-layer-row' + (l.id === mActiveLayerId ? ' active' : '');
     row.innerHTML =
-      `<button class="ml-eye" title="Toggle">${l.visible ? '👁' : '🚫'}</button>
-       <span class="ml-name" title="Double-click to rename">${esc(l.name)}</span>
-       <input type="range" class="ml-op" min="0" max="1" step="0.1" value="${l.opacity}" title="Opacity">
-       <button class="ml-draw" title="Draw on this layer">✏️</button>
-       <button class="ml-del" title="Delete layer">🗑</button>`;
+      `<button class="ml-eye" title="${escAttr(t('map.toggle'))}">${l.visible ? '👁' : '🚫'}</button>
+       <span class="ml-name" title="${escAttr(t('map.dblClickRename'))}">${esc(l.name)}</span>
+       <input type="range" class="ml-op" min="0" max="1" step="0.1" value="${l.opacity}" title="${escAttr(t('map.opacity'))}">
+       <button class="ml-draw" title="${escAttr(t('map.drawOnLayer'))}">✏️</button>
+       <button class="ml-del" title="${escAttr(t('map.deleteLayer'))}">🗑</button>`;
     row.querySelector('.ml-eye').onclick = () => { l.visible = !l.visible; markDirty(); renderMapLayers(); mapDraw(); };
     row.querySelector('.ml-op').oninput = e => { l.opacity = +e.target.value; markDirty(); mapDraw(); };
-    row.querySelector('.ml-name').ondblclick = () => promptModal('Rename layer', 'Layer name:', l.name, v => { if (v) { l.name = v; markDirty(); renderMapLayers(); renderMapLayerSelect(); } });
+    row.querySelector('.ml-name').ondblclick = () => promptModal(t('map.renameLayer'), t('map.layerNamePrompt'), l.name, v => { if (v) { l.name = v; markDirty(); renderMapLayers(); renderMapLayerSelect(); } });
     row.querySelector('.ml-draw').onclick = () => { mActiveLayerId = (mActiveLayerId === l.id ? '' : l.id); $('#mapActiveLayer').value = mActiveLayerId; updateDrawToolsVisibility(); renderMapLayers(); };
-    row.querySelector('.ml-del').onclick = () => confirmModal('Delete layer', `Delete layer “${l.name}” and its drawings?`, () => {
+    row.querySelector('.ml-del').onclick = () => confirmModal(t('map.deleteLayer'), t('map.deleteLayerBody', { name: l.name }), () => {
       wm.layers = wm.layers.filter(x => x.id !== l.id);
       if (mActiveLayerId === l.id) mActiveLayerId = '';
       markDirty(); renderMapLayers(); renderMapLayerSelect(); updateDrawToolsVisibility(); mapDraw();
     });
     host.appendChild(row);
   });
-  if (!wm.layers.length) host.insertAdjacentHTML('beforeend', '<div class="map-empty">No custom layers.</div>');
+  if (!wm.layers.length) host.insertAdjacentHTML('beforeend', `<div class="map-empty">${esc(t('map.noCustomLayers'))}</div>`);
 }
 function renderMapLayerSelect() {
   const sel = $('#mapActiveLayer');
   if (!sel) return;
   const wm = worldMap();
-  sel.innerHTML = '<option value="">— none (move/place) —</option>' +
+  sel.innerHTML = `<option value="">${esc(t('map.noActiveLayer'))}</option>` +
     wm.layers.map(l => `<option value="${escAttr(String(l.id))}">${esc(l.name)}</option>`).join('');
   sel.value = mActiveLayerId;
 }
 function addMapLayer() {
   const wm = worldMap();
-  wm.layers.push({ id: uuid(), name: 'Layer ' + (wm.layers.length + 1), visible: true, opacity: 1, drawings: [] });
+  wm.layers.push({ id: uuid(), name: t('map.layerDefaultName', { n: wm.layers.length + 1 }), visible: true, opacity: 1, drawings: [] });
   markDirty(); renderMapLayers(); renderMapLayerSelect();
 }
 function activeLayer() { return worldMap().layers.find(l => l.id === mActiveLayerId) || null; }
@@ -457,7 +459,7 @@ function initMapEvents() {
       const w = ms2w(m.x, m.y);
       if (mDrawTool === 'eraser') { eraseAt(w); return; }
       if (mDrawTool === 'text') {
-        promptModal('Add text', 'Text label:', '', v => { if (v) { layer.drawings.push({ tool: 'text', color: mDrawColor, width: 2, points: [w], text: v }); markDirty(); mapDraw(); } });
+        promptModal(t('map.addText'), t('map.textLabel'), '', v => { if (v) { layer.drawings.push({ tool: 'text', color: mDrawColor, width: 2, points: [w], text: v }); markDirty(); mapDraw(); } });
         return;
       }
       mDrawing = { tool: mDrawTool, color: mDrawColor, width: 2, points: [w] };
@@ -524,21 +526,21 @@ function initMapEvents() {
     e.preventDefault();
     ctx.innerHTML = '';
     if (pin) {
-      ctx.appendChild(ctxItem('Edit in Locations', () => { closeMap(); openLocationInPanel(pin.id); }));
-      ctx.appendChild(ctxItem('Add Route from Here', () => startRouteFrom(pin.id)));
-      ctx.appendChild(ctxItem('Remove from Map', () => removePin(pin.id), 'danger'));
+      ctx.appendChild(ctxItem(t('map.editInLocations'), () => { closeMap(); openLocationInPanel(pin.id); }));
+      ctx.appendChild(ctxItem(t('map.addRouteFromHere'), () => startRouteFrom(pin.id)));
+      ctx.appendChild(ctxItem(t('map.removeFromMap'), () => removePin(pin.id), 'danger'));
     } else {
       const wm = worldMap();
       const unplaced = novel.locations.filter(l => !wm.locations[l.id]);
       const w = ms2w(m.x, m.y); const sz = mapImageSize();
       const rel = { x: Math.max(0, Math.min(1, w.x / sz.w)), y: Math.max(0, Math.min(1, w.y / sz.h)) };
-      if (!unplaced.length) ctx.appendChild(ctxItem('All locations placed', () => {}, 'ctx-disabled'));
+      if (!unplaced.length) ctx.appendChild(ctxItem(t('map.allPlaced'), () => {}, 'ctx-disabled'));
       else {
         const sub = document.createElement('div');
         sub.className = 'ctx-sub';
-        sub.innerHTML = '<button class="ctx-sub-head">Place Location ▸</button>';
+        sub.innerHTML = `<button class="ctx-sub-head">${esc(t('map.placeLocation'))} ▸</button>`;
         const list = document.createElement('div'); list.className = 'ctx-sub-menu';
-        unplaced.forEach(l => list.appendChild(ctxItem(l.name || '(unnamed)', () => placeLocation(l.id, rel))));
+        unplaced.forEach(l => list.appendChild(ctxItem(l.name || t('map.unnamed'), () => placeLocation(l.id, rel))));
         sub.appendChild(list); ctx.appendChild(sub);
       }
     }
@@ -554,7 +556,7 @@ function exportMapPng() {
   const url = mCanvas.toDataURL('image/png');
   const a = document.createElement('a');
   a.href = url; a.download = (novel.title || 'novel') + '-map.png'; a.click();
-  toast('Map exported as PNG');
+  toast(t('map.exportedPng'));
 }
 
 /* ---- travel routes: rendering ---- */
@@ -649,13 +651,13 @@ function routeAt(sx, sy) {
 /* Route mode from the toolbar: two clicks (source, then destination). startRouteFrom (pin card /
    context menu) already knows the source. Either way drawing mode is switched off. */
 function beginRoute() {
-  if (placedLocs().length < 2) { toast('Place at least two locations on the map first'); return; }
+  if (placedLocs().length < 2) { toast(t('map.needTwoPlaced')); return; }
   mActiveLayerId = ''; $('#mapActiveLayer').value = ''; updateDrawToolsVisibility();
   mRouteMode = { fromId: null };
   hideMapDetails(); updateMapHint(); mapDraw();
 }
 function startRouteFrom(fromId) {
-  if (!worldMap().locations[fromId]) { toast('Place this location on the map first'); return; }
+  if (!worldMap().locations[fromId]) { toast(t('map.placeFirst')); return; }
   mActiveLayerId = ''; $('#mapActiveLayer').value = ''; updateDrawToolsVisibility();
   mRouteMode = { fromId };
   hideMapDetails(); updateMapHint(); mapDraw();
@@ -663,7 +665,7 @@ function startRouteFrom(fromId) {
 function routePickTarget(pinId) {
   if (!mRouteMode) return;
   if (mRouteMode.fromId === null) { mRouteMode.fromId = pinId; updateMapHint(); mapDraw(); return; }
-  if (pinId === mRouteMode.fromId) { toast('Pick a different destination'); return; }
+  if (pinId === mRouteMode.fromId) { toast(t('map.pickDifferentDest')); return; }
   const rt = {
     id: uuid(), fromLocationId: mRouteMode.fromId, toLocationId: pinId,
     name: '', travelTime: '', distance: '', terrain: '', characterIds: [],
@@ -680,8 +682,8 @@ export function updateMapHint() {
   if (!el) return;
   if (!mRouteMode) { el.classList.add('hidden'); return; }
   el.textContent = mRouteMode.fromId === null
-    ? 'Add Route: click the first location  (Esc to cancel)'
-    : 'Add Route: click the destination location  (Esc to cancel)';
+    ? t('map.hintRouteFirst')
+    : t('map.hintRouteDest');
   el.classList.remove('hidden');
 }
 
@@ -691,36 +693,36 @@ function openRouteEditor(rt) {
   routeEditing = rt;
   routeCharSel = new Set(rt.characterIds || []);
   const placed = placedLocs();
-  const locOpts = placed.map(l => [l.id, l.name || '(unnamed)']);
-  $('#routeTitle').textContent = 'Route Details';
+  const locOpts = placed.map(l => [l.id, l.name || t('map.unnamed')]);
+  $('#routeTitle').textContent = t('map.routeDetails');
   const form = $('#routeForm');
   form.innerHTML =
-    `<label class="field-label">Route name</label>
-     <input type="text" id="rfName" class="control" placeholder="e.g. The King's Road" />
+    `<label class="field-label">${esc(t('map.routeName'))}</label>
+     <input type="text" id="rfName" class="control" placeholder="${escAttr(t('map.routeNamePlaceholder'))}" />
      <div class="rf-row">
-       <div class="rf-col"><label class="field-label">From</label><select id="rfFrom" class="control"></select></div>
-       <div class="rf-col"><label class="field-label">To</label><select id="rfTo" class="control"></select></div>
+       <div class="rf-col"><label class="field-label">${esc(t('map.routeFrom'))}</label><select id="rfFrom" class="control"></select></div>
+       <div class="rf-col"><label class="field-label">${esc(t('map.routeTo'))}</label><select id="rfTo" class="control"></select></div>
      </div>
      <div class="rf-row">
-       <div class="rf-col"><label class="field-label">Travel time</label><input type="text" id="rfTime" class="control" placeholder="3 days on horseback" /></div>
-       <div class="rf-col"><label class="field-label">Distance</label><input type="text" id="rfDist" class="control" placeholder="200 miles" /></div>
+       <div class="rf-col"><label class="field-label">${esc(t('map.travelTime'))}</label><input type="text" id="rfTime" class="control" placeholder="${escAttr(t('map.travelTimePlaceholder'))}" /></div>
+       <div class="rf-col"><label class="field-label">${esc(t('map.distance'))}</label><input type="text" id="rfDist" class="control" placeholder="${escAttr(t('map.distancePlaceholder'))}" /></div>
      </div>
-     <label class="field-label">Terrain</label>
-     <input type="text" id="rfTerrain" class="control" placeholder="Mountain pass, dangerous in winter" />
-     <label class="field-label">Used by characters</label>
+     <label class="field-label">${esc(t('map.terrain'))}</label>
+     <input type="text" id="rfTerrain" class="control" placeholder="${escAttr(t('map.terrainPlaceholder'))}" />
+     <label class="field-label">${esc(t('map.usedBy'))}</label>
      <div id="rfChars" class="rf-chars"></div>
-     <label class="field-label">Notes</label>
+     <label class="field-label">${esc(t('map.notes'))}</label>
      <textarea id="rfNotes" class="control" rows="2"></textarea>
      <div class="rf-row">
-       <div class="rf-col"><label class="field-label">Line color</label><input type="color" id="rfColor" class="nt-color" /></div>
-       <div class="rf-col"><label class="field-label">Direction</label>
-         <label class="toggle-row"><input type="checkbox" id="rfBidir" /> <span>Bidirectional (no arrow)</span></label>
+       <div class="rf-col"><label class="field-label">${esc(t('map.lineColor'))}</label><input type="color" id="rfColor" class="nt-color" /></div>
+       <div class="rf-col"><label class="field-label">${esc(t('map.direction'))}</label>
+         <label class="toggle-row"><input type="checkbox" id="rfBidir" /> <span>${esc(t('map.bidirectional'))}</span></label>
        </div>
      </div>
      <div class="modal-actions">
-       <button class="tbtn nc-danger" id="rfDelete">Delete Route</button>
-       <button class="tbtn subtle" id="rfCancel">Close</button>
-       <button class="tbtn accent" id="rfSave">Save</button>
+       <button class="tbtn nc-danger" id="rfDelete">${esc(t('map.deleteRoute'))}</button>
+       <button class="tbtn subtle" id="rfCancel">${esc(t('common.close'))}</button>
+       <button class="tbtn accent" id="rfSave">${esc(t('common.save'))}</button>
      </div>`;
   fillSelect($('#rfFrom'), locOpts, rt.fromLocationId);
   fillSelect($('#rfTo'), locOpts, rt.toLocationId);
@@ -732,11 +734,11 @@ function openRouteEditor(rt) {
   $('#rfColor').value = rt.color || '#c9a96e';
   $('#rfBidir').checked = rt.bidirectional !== false;
   const chost = $('#rfChars');
-  if (!novel.characters.length) chost.innerHTML = '<span class="map-empty">No characters yet.</span>';
+  if (!novel.characters.length) chost.innerHTML = `<span class="map-empty">${esc(t('map.noCharacters'))}</span>`;
   else novel.characters.forEach(c => {
     const chip = document.createElement('button');
     chip.className = 'rf-char' + (routeCharSel.has(c.id) ? ' on' : '');
-    chip.textContent = c.name || '(unnamed)';
+    chip.textContent = c.name || t('map.unnamed');
     chip.onclick = () => { if (routeCharSel.has(c.id)) routeCharSel.delete(c.id); else routeCharSel.add(c.id); chip.classList.toggle('on'); };
     chost.appendChild(chip);
   });
@@ -753,19 +755,19 @@ function openRouteEditor(rt) {
     rt.color = $('#rfColor').value;
     rt.bidirectional = $('#rfBidir').checked;
     rt.characterIds = [...routeCharSel];
-    if (rt.fromLocationId === rt.toLocationId) { toast('A route needs two different locations'); return; }
+    if (rt.fromLocationId === rt.toLocationId) { toast(t('map.routeNeedsTwo')); return; }
     markDirty(); closeRouteEditor(); mapDraw();
-    toast('Route saved');
+    toast(t('map.routeSaved'));
   };
   $('#routeOverlay').classList.remove('hidden');
 }
 export function closeRouteEditor() { routeEditing = null; $('#routeOverlay').classList.add('hidden'); }
 function deleteRoute(rt) {
-  confirmModal('Delete route', 'Delete this route?', () => {
+  confirmModal(t('map.deleteRouteTitle'), t('map.deleteRouteBody'), () => {
     const wm = worldMap();
     wm.routes = wm.routes.filter(r => r.id !== rt.id);
     markDirty(); closeRouteEditor(); mapDraw();
-    toast('Route deleted');
+    toast(t('map.routeDeleted'));
   });
 }
 
@@ -786,7 +788,7 @@ export function init() {
   $('#mapLocSearch').addEventListener('input', e => { mLocSearch = e.target.value; renderMapLocList(); });
   $('#mapActiveLayer').addEventListener('change', e => { mActiveLayerId = e.target.value; updateDrawToolsVisibility(); renderMapLayers(); });
   $('#mapDrawColor').addEventListener('input', e => { mDrawColor = e.target.value; });
-  $('#mapClearLayer').addEventListener('click', () => { const l = activeLayer(); if (!l) { toast('Select a layer to draw on first'); return; } confirmModal('Clear layer', `Remove all drawings from “${l.name}”?`, () => { l.drawings = []; markDirty(); mapDraw(); }); });
+  $('#mapClearLayer').addEventListener('click', () => { const l = activeLayer(); if (!l) { toast(t('map.selectLayerFirst')); return; } confirmModal(t('map.clearLayerTitle'), t('map.clearLayerBody', { name: l.name }), () => { l.drawings = []; markDirty(); mapDraw(); }); });
   $$('#mapDrawTools .map-tool').forEach(btn => btn.addEventListener('click', () => {
     mDrawTool = btn.dataset.tool;
     $$('#mapDrawTools .map-tool').forEach(b => b.classList.toggle('active', b === btn));
