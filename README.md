@@ -22,9 +22,10 @@ release and look under *Assets*):
 | **macOS** (Apple Silicon and Intel) | `NovelCraft_…_universal.dmg` |
 | **Linux** | `.AppImage` (runs anywhere), `.deb` (Debian, Ubuntu, Mint) or `.rpm` (Fedora, openSUSE) |
 
-From the version after 1.1.0 on, NovelCraft keeps itself up to date: it checks for a new version at startup and
-offers to install it (*Settings* has the switch, and *Help ▸ Check for Updates…* checks now).
-Updates are signed, and the app installs only an update signed by NovelCraft's own key.
+From version 1.2 on, NovelCraft keeps itself up to date: it checks for a new version at startup
+and offers to install it (*Settings* has the switch, and *Help ▸ Check for Updates…* checks now).
+Updates are signed, and the app installs only an update signed by NovelCraft's own key. If you
+have 1.1 or older, install 1.2 by hand once.
 
 The builds are not code-signed, so the system warns the first time you install the app:
 
