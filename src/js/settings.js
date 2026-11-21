@@ -53,7 +53,7 @@ function measureSaveIndicator() {
   probe.className = 'save-indicator';
   probe.style.cssText = 'position:absolute;visibility:hidden;min-width:0';
   document.body.appendChild(probe);
-  const w = Math.max(...['status.saved', 'status.unsaved', 'status.saving'].map(k => {
+  const w = Math.max(...['status.saved', 'status.unsaved', 'status.saving', 'status.noFile'].map(k => {
     probe.textContent = t(k);
     return probe.getBoundingClientRect().width;
   }));

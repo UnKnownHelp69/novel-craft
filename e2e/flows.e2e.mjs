@@ -330,6 +330,8 @@ flow('opening another novel over unsaved work asks first', async page => {
 
 flow('a new novel from the start screen can be written and saved', async page => {
   await page.click('#esNew');
+  await expectIndicator(page, 'Not saved to a file yet');
+  await expectShown(page, '#filePathIndicator', false);
   await expectShown(page, '#emptyState', false);
   await expectText(page, '#novelTitle', 'Untitled Novel');
   assert.deepEqual(await treeOutline(page), [['Chapter 1', ['Scene 1']]]);

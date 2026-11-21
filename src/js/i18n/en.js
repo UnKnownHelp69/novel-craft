@@ -255,8 +255,7 @@ export default {
   // file
   'file.untitledNovel': 'Untitled Novel',
   'file.noNovel': 'No Novel',
-  'file.unsavedIndicator': '• Unsaved',
-  'file.unsavedIndicatorTitle': 'This novel has not been saved to a file yet',
+  'status.noFile': 'Not saved to a file yet',
   'file.migratedToScenes': 'Migrated chapters to the new scene structure',
   'file.libraryTitle': 'Multiple novels found',
   'file.libraryBody': { one: 'This file contains {n} novel, but NovelCraft now uses one file per novel. Save all {n} as separate .novel files now?', other: 'This file contains {n} novels, but NovelCraft now uses one file per novel. Save all {n} as separate .novel files now?' },

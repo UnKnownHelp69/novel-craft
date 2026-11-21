@@ -31,16 +31,9 @@ export function updateWindowTitle() {
 }
 export function updateFilePathIndicator() {
   const el = $('#filePathIndicator');
-  if (!novel) { el.textContent = ''; el.title = ''; el.classList.remove('unsaved'); return; }
-  if (currentFilePath) {
-    el.textContent = baseName(currentFilePath);
-    el.title = currentFilePath;
-    el.classList.remove('unsaved');
-  } else {
-    el.textContent = t('file.unsavedIndicator');
-    el.title = t('file.unsavedIndicatorTitle');
-    el.classList.add('unsaved');
-  }
+  el.textContent = baseName(currentFilePath);
+  el.title = currentFilePath || '';
+  el.hidden = !currentFilePath;
 }
 export function flushNovel() { if (novel) saveCurrentScene(); }   // editor -> current scene, before serializing
 
@@ -252,7 +245,7 @@ function sanitizeNovelHTML(n) {
 }
 
 /* Put a loaded novel object into the UI as the current file. */
-export function setCurrentNovel(n, path) {
+export function setCurrentNovel(n, path, hasFile = !!path) {
   setNovel(sanitizeNovelHTML(migrateNovel(n)));
   setCurrentFilePath(path || null);
   // Compile state belongs to the previous novel (its order, title, author); openCompile()
@@ -261,7 +254,7 @@ export function setCurrentNovel(n, path) {
   if (compOpen) closeCompile();
   refreshUI();
   snapshotSaved();
-  setSaved();
+  setSaved(hasFile);
 }
 
 /* Handle an old multi-novel (library) file by splitting it into separate files. */
@@ -343,7 +336,7 @@ export function openNovelFile() {
           try {
             const data = JSON.parse(rd.result);
             if (data && Array.isArray(data.novels)) handleLibraryFile(data, null);
-            else setCurrentNovel(data, null);
+            else setCurrentNovel(data, null, true);
             toast(t('file.opened', { name: f.name }));
           } catch { toast(t('file.invalidFile')); }
         };
@@ -360,7 +353,7 @@ export function newNovelFile() {
       // prompt for the file location up front and create the file
       const path = await pickPath('pick_save', { defaultName: n.title + '.novel' });
       if (!path) return;               // cancelled -> keep current novel
-      setCurrentNovel(n, path);
+      setCurrentNovel(n, path, hasFile = !!path);
       await invoke('save_novel', { path, content: serializeNovel(novel) });
       await invoke('set_last_file', { path });
       await addRecent(path);
