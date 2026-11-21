@@ -57,8 +57,9 @@ export function snapshotSaved() {
   }));
 }
 /* The indicator's text again, in the current interface language (after a language switch). */
-export function refreshSaveIndicator() {
+export function refreshSaveIndicator(finished = false) {
   const ind = $('#saveIndicator');
+  if (finished) ind.classList.remove('saving');
   ind.hidden = !novel;
   ind.textContent = t(ind.classList.contains('saving') ? 'status.saving' : dirty ? 'status.unsaved' : hasSavedFile ? 'status.saved' : 'status.noFile');
 }

@@ -107,10 +107,10 @@ test('a backup whose file this session may not write is restored as unsaved', { 
   // startup shows the recovery prompt; accept it
   await exec(`document.getElementById('modalOk').click();`);
   await sleep(1500);
-  const st = await exec(`return { title: app.novel && app.novel.title, path: app.currentFilePath, indicator: document.getElementById('filePathIndicator').textContent, dirty: app.dirty };`);
+  const st = await exec(`return { title: app.novel && app.novel.title, path: app.currentFilePath, indicator: document.getElementById('saveIndicator').textContent, dirty: app.dirty };`);
   assert.strictEqual(st.title, 'Recovered');
   assert.strictEqual(st.path, null, 'the remembered path must be dropped, not kept as an unwritable target');
-  assert.strictEqual(st.indicator, '• Unsaved');
+  assert.strictEqual(st.indicator, 'Unsaved');
   assert.strictEqual(st.dirty, true);
   assert.match(readFileSync(ORPHAN, 'utf8'), /Orphan on disk/, 'the orphan file is untouched');
 });
