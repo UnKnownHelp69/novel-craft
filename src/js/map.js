@@ -598,7 +598,7 @@ function drawRoutes() {
     const a = novel.locations.find(l => l.id === mRouteMode.fromId);
     if (a && worldMap().locations[a.id]) {
       const pa = mw2s(...Object.values(locWorld(a)));
-      mCtx.save(); mCtx.fillStyle = '#c9a96e'; mCtx.globalAlpha = 0.9;
+      mCtx.save(); mCtx.strokeStyle = '#c9a96e'; mCtx.lineWidth = 2; mCtx.globalAlpha = 0.9;
       mCtx.beginPath(); mCtx.arc(pa.x, pa.y - pinScreenR() * 1.5, pinScreenR() + 4, 0, Math.PI * 2); mCtx.stroke(); mCtx.restore();
     }
   }
@@ -611,7 +611,7 @@ function drawRouteArrow(x, y, ang, color) {
 }
 // Declared here but read by mapDraw/mousemove above; those only run once the map is open.
 let mHoverRoute = null;
-let routeEditing = null, routeCharSel = null;   // routeCharSel: character picks, committed on Save
+let routeCharSel = null;   // routeCharSel: character picks, committed on Save
 
 /* Control point (screen px) of a route's curve, for hit-testing; drawRoutes inlines the same math. */
 function routeControl(pa, pb) {
@@ -690,7 +690,6 @@ export function updateMapHint() {
 /* ---- route details editor ---- */
 /* Edits rt in place, but only on Save; Close discards. From/To offer only placed locations. */
 function openRouteEditor(rt) {
-  routeEditing = rt;
   routeCharSel = new Set(rt.characterIds || []);
   const placed = placedLocs();
   const locOpts = placed.map(l => [l.id, l.name || t('map.unnamed')]);
@@ -761,7 +760,7 @@ function openRouteEditor(rt) {
   };
   $('#routeOverlay').classList.remove('hidden');
 }
-export function closeRouteEditor() { routeEditing = null; $('#routeOverlay').classList.add('hidden'); }
+export function closeRouteEditor() { $('#routeOverlay').classList.add('hidden'); }
 function deleteRoute(rt) {
   confirmModal(t('map.deleteRouteTitle'), t('map.deleteRouteBody'), () => {
     const wm = worldMap();
