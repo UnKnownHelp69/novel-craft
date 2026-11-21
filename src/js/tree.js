@@ -339,6 +339,7 @@ export function updateBreadcrumb() {
     const b = document.createElement('button');
     b.className = 'bc-part ' + cls;
     b.textContent = text;
+    b.title = text;
     // A title edit still in progress is committed here, not on mousedown (see the breadcrumb
     // mousedown listener near nvTitle).
     if (handler) b.onclick = () => { if (document.activeElement === nvTitle) nvTitle.blur(); handler(); };
