@@ -354,11 +354,18 @@ export function newNovelFile() {
       // prompt for the file location up front and create the file
       const path = await pickPath('pick_save', { defaultName: n.title + '.novel' });
       if (!path) return;               // cancelled -> keep current novel
-      setCurrentNovel(n, path, hasFile = !!path);
-      await invoke('save_novel', { path, content: serializeNovel(novel) });
-      await invoke('set_last_file', { path });
-      await addRecent(path);
-      toast(t('file.created', { name: baseName(path) }));
+      const previous = novel;
+      try {
+        await invoke('save_novel', { path, content: serializeNovel(n) });
+        if (novel !== previous) return;
+        setCurrentNovel(n, path);
+        await invoke('set_last_file', { path });
+        await addRecent(path);
+        toast(t('file.created', { name: baseName(path) }));
+      } catch (error) {
+        console.error(error);
+        toast(t('save.failed'));
+      }
     } else {
       setCurrentNovel(n, null);        // browser: unsaved until first Save
       toast(t('file.newNovel'));
