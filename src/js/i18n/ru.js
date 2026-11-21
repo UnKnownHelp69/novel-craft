@@ -47,6 +47,7 @@ export default {
   'ui.sceneMeta.hide': 'Скрыть панель сцены',
   'ui.sceneMeta.show': 'Показать панель сцены',
   'ui.sceneMeta.info': 'Сведения о сцене',
+  'ui.editor.placeholder': 'Начните писать сцену…',
   'ui.editor.exitFocus': 'Выйти из режима фокуса (Esc)',
   'ui.corkboard.back': 'Назад к редактору',
   'ui.corkboard.size': 'Размер',

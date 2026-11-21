@@ -295,7 +295,7 @@ body.focus .scene-meta,body.focus .meta-show{display:none;}
 .editor h2{font-size:1.5em;margin:.5em 0 .3em;}
 .editor h3{font-size:1.25em;margin:.5em 0 .3em;}
 .editor p{margin:0 0 .8em;}
-.editor:empty::before{content:"Start writing your chapter…";color:var(--text-dim);}
+.editor:empty::before{content:attr(placeholder);color:var(--text-dim);}
 .md-editor{resize:none;font-family:'Roboto Mono',monospace;white-space:pre-wrap;}
 .hidden{display:none !important;}   /* !important: must beat the display:flex of the element's own class */
 

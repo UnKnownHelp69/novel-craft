@@ -49,6 +49,7 @@ export default {
   'ui.sceneMeta.hide': 'Hide scene bar',
   'ui.sceneMeta.show': 'Show scene bar',
   'ui.sceneMeta.info': 'Scene info',
+  'ui.editor.placeholder': 'Start writing your scene…',
   'ui.editor.exitFocus': 'Exit Focus (Esc)',
   'ui.corkboard.back': 'Back to Editor',
   'ui.corkboard.size': 'Size',
