@@ -6,6 +6,7 @@
 import { hasTauri, invoke } from './bridge.js';
 import { $ } from './dom.js';
 import { currentFilePath, dirty, novel } from './state.js';
+import { forgetSavedHistory } from './history.js';
 import { markDirty } from './dirty.js';
 import { baseName, setCurrentNovel } from './novel-file.js';
 import { confirmModal, toast } from './dialogs.js';
@@ -59,7 +60,7 @@ async function restoreBackup(b) {
       if (!data || typeof data !== 'object' || !Array.isArray(data.chapters)) { toast(t('backups.notANovel')); return; }
       await invoke('backup_now', { path });   // the version on disk survives the restore
       setCurrentNovel(data, path);
-      markDirty();
+      forgetSavedHistory(); markDirty();
       toast(t('backups.restored', { date: at }));
     } catch (e) {
       console.error(e);

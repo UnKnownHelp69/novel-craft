@@ -1,5 +1,6 @@
 /* Dirty tracking and the save indicator; the rules are under "Dirty-flag discipline" in
    CLAUDE.md. */
+import { recordHistory, saveHistory } from './history.js';
 import { $ } from './dom.js';
 import { dirty, isLoadingContent, novel, setDirty } from './state.js';
 import { t } from './i18n/index.js';
@@ -7,8 +8,9 @@ import { t } from './i18n/index.js';
 export let savedContent = {};         // sceneId -> normalizeHTML() snapshot at last save/load
 export let savedMd = {};              // sceneId -> markdown snapshot at last save/load
 
-export function markDirty() {
+export function markDirty(scene) {
   if (isLoadingContent) return;   // ignore mutations caused by programmatic loads
+  recordHistory(scene);
   setDirty(true);
   const ind = $('#saveIndicator');
   ind.textContent = t('status.unsaved');
@@ -48,6 +50,7 @@ export function normalizeHTML(html) {
 /* The baseline later edits are compared against, per scene; retaken on every save (manual or
    auto) and every load. */
 export function snapshotSaved() {
+  saveHistory();
   savedContent = {};
   savedMd = {};
   if (!novel) return;

@@ -1,4 +1,5 @@
 /* Global keyboard shortcuts. */
+import { handlesHistory, stepHistory } from './history.js';
 import { $ } from './dom.js';
 import { updateToolbarState } from './editor.js';
 import { focusMode, setFocus } from './panels.js';
@@ -25,6 +26,12 @@ function navigateNotes(dir) {
 }
 
 export function init() {
+  document.addEventListener('beforeinput', e => {
+    if ((e.inputType === 'historyUndo' || e.inputType === 'historyRedo') && handlesHistory()) {
+      e.preventDefault();
+      stepHistory(e.inputType === 'historyRedo');
+    }
+  });
   /* One handler for every global shortcut; the first matching line wins, so order matters.
      Escape closes the topmost layer first (backup dialog, graph side panel, graph, corkboard,
      map route editor / route mode, map, compile, note card, add-note popup, focus mode), and
@@ -35,6 +42,11 @@ export function init() {
   document.addEventListener('keydown', e => {
     const mod = e.ctrlKey || e.metaKey;
     const key = shortcutKey(e);
+    if (mod && !e.altKey && (key === 'z' || key === 'y') && handlesHistory()) {
+      e.preventDefault();
+      stepHistory(e.shiftKey || key === 'y');
+      return;
+    }
     if (e.key === 'Escape' && !$('#modalOverlay').classList.contains('hidden')) {
       e.preventDefault();
       $('#modalCancel').click();

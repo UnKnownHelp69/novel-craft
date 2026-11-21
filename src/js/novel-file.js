@@ -1,5 +1,6 @@
 /* The open novel as a file (one .novel file = one novel): new, open, load with migration of
    older files, recent files and the title in the top bar. */
+import { resetHistory } from './history.js';
 import { hasTauri, invoke, pickPath } from './bridge.js';
 import { $, editor } from './dom.js';
 import { countWords, uuid } from './lib/text.js';
@@ -39,7 +40,7 @@ export function flushNovel() { if (novel) saveCurrentScene(); }   // editor -> c
 
 /* Render the whole UI for the current `novel` (or the empty state) and select its first scene.
    isLoadingContent is held for the whole pass, so nothing it fills in marks the novel dirty. */
-export function refreshUI() {
+export function refreshUI(sceneId = null) {
   const has = !!novel;
   document.body.classList.toggle('no-novel', !has);
   setLoadingContent(true);
@@ -48,8 +49,9 @@ export function refreshUI() {
   $('#chaptersSection').classList.toggle('hidden', !has);
   $('#novelTitle').textContent = has ? (novel.title || t('file.untitledNovel')) : '—';
   if (has) {
-    setCurrentChapterId(novel.chapters[0] && novel.chapters[0].id);
-    setCurrentSceneId(novel.chapters[0] && novel.chapters[0].scenes[0] && novel.chapters[0].scenes[0].id);
+    const chapter = novel.chapters.find(c => c.scenes.some(s => s.id === sceneId)) || novel.chapters[0];
+    setCurrentChapterId(chapter.id);
+    setCurrentSceneId(chapter.scenes.find(s => s.id === sceneId)?.id ?? chapter.scenes[0].id);
     applyFontSize(novel.settings.fontSize || 18);
     applyDocFont(novel.settings.defaultFont || 'Georgia, serif');
   } else {
@@ -254,6 +256,7 @@ export function setCurrentNovel(n, path, hasFile = !!path) {
   setComp(null);
   if (compOpen) closeCompile();
   refreshUI();
+  resetHistory();
   snapshotSaved();
   setSaved(hasFile);
 }

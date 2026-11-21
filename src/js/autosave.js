@@ -2,6 +2,7 @@
 import { hasTauri, invoke } from './bridge.js';
 import { $ } from './dom.js';
 import { currentFilePath, dirty, novel } from './state.js';
+import { forgetSavedHistory } from './history.js';
 import { markDirty } from './dirty.js';
 import { doSave } from './save.js';
 import {
@@ -80,7 +81,7 @@ export async function checkRecovery() {
           try { await invoke('read_text', { path }); } catch (_) { path = null; }
         }
         try {
-          setCurrentNovel(payload, path); markDirty();
+          setCurrentNovel(payload, path); forgetSavedHistory(); markDirty();
           toast(path || !data.path ? t('autosave.recovered') : t('autosave.recoveredUnsaved'));
           done('restored');
         } catch (e) {

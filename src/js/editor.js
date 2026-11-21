@@ -1,5 +1,6 @@
 /* The scene editor: input and paste handling, the formatting toolbar, markdown mode, and the
    document font and size. */
+import { finishTyping, recordHistory, rememberCaret } from './history.js';
 import { $, chapterList, editor, mdEditor } from './dom.js';
 import { countWords, escAttr } from './lib/text.js';
 import { parseInert, sanitizeSceneHTML, stripHtml } from './lib/html.js';
@@ -65,6 +66,7 @@ function currentBlockTag() {
 export function toggleMarkdownMode() {
   const s = currentScene();
   if (!s) return;
+  finishTyping();
   setLoadingContent(true);   // switching views is not an edit
   if (!mdMode) {
     // visual -> markdown
@@ -137,6 +139,10 @@ export function applyDocFont(font) {
 }
 
 export function init() {
+  for (const field of [editor, mdEditor]) {
+    field.addEventListener('beforeinput', rememberCaret);
+    field.addEventListener('blur', finishTyping);
+  }
   for (const event of ['focus', 'blur', 'input']) editor.addEventListener(event, scheduleTypewriter);
   window.addEventListener('resize', scheduleTypewriter);
   editor.addEventListener('input', () => {
@@ -144,6 +150,7 @@ export function init() {
     const s = currentScene();
     if (!s) return;
     s.content = editor.innerHTML;
+    s.markdownContent = '';
     s.wordCount = countWords(stripHtml(s.content));
     s.modifiedAt = nowISO();
     updateCounters();
@@ -152,7 +159,8 @@ export function init() {
     scheduleNotesRender();
     // compared normalized: input that leaves the scene as saved (markup the browser reshuffles
     // without a visible change) does not mark the novel dirty
-    if (normalizeHTML(s.content) !== (savedContent[s.id] || '')) markDirty();
+    if (normalizeHTML(s.content) !== (savedContent[s.id] || '')) markDirty(s);
+    else recordHistory(s);
   });
   editor.addEventListener('keydown', e => {
     plainPasteRequested = (e.ctrlKey || e.metaKey) && e.shiftKey && shortcutKey(e) === 'v';
@@ -211,11 +219,13 @@ export function init() {
     if (!s) return;
     s.markdownContent = mdEditor.value;
     // count the rendered text, not the raw markdown, so both modes agree (and match saveCurrentScene)
-    s.wordCount = countWords(stripHtml(sceneSourceToHtml(mdEditor.value)));
+    s.content = sceneSourceToHtml(mdEditor.value);
+    s.wordCount = countWords(stripHtml(s.content));
     s.modifiedAt = nowISO();
     updateCounters();
     refreshSceneWordCount(s);
-    if (s.markdownContent !== (savedMd[s.id] || '')) markDirty();
+    if (s.markdownContent !== (savedMd[s.id] || '')) markDirty(s);
+    else recordHistory(s);
   });
   $('#fmtBold').addEventListener('click', () => exec('bold'));
   $('#fmtItalic').addEventListener('click', () => exec('italic'));

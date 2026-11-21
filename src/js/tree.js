@@ -9,6 +9,7 @@ import {
   currentChapterId, currentSceneId, dirty, isLoadingContent, novel, setCurrentChapterId,
   setCurrentSceneId, setLoadingContent
 } from './state.js';
+import { rememberSelection } from './history.js';
 import { markDirty } from './dirty.js';
 import { nvTitle } from './novel-file.js';
 import { mdMode } from './editor.js';
@@ -113,6 +114,7 @@ export function selectScene(sceneId, saveFirst = true) {
   if (!f) return;
   setCurrentChapterId(f.chapter.id);
   setCurrentSceneId(sceneId);
+  rememberSelection();
   setOpenNoteId(null);
   closeAddNote();
   loadSceneIntoEditor();
