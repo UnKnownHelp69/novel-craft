@@ -15,7 +15,7 @@ import { shortcutKey } from './lib/keys.js';
 export let mdMode = false;
 /* Pasted HTML goes through the same allowlist as file content (sanitizeSceneHTML): pastes
    from Word or the web otherwise bring their classes, styles, fonts and remote images into
-   the scene. Plain-text pastes, including Ctrl+Shift+V, are left to the browser. The paste
+   the scene. Shift-paste always inserts the plain-text clipboard flavour. The paste
    event itself does not say whether Shift was held, so the keydown just before it records
    that (shortcutKey(), so Ctrl+Shift+V also works on non-Latin layouts). */
 let plainPasteRequested = false;
@@ -124,11 +124,19 @@ export function init() {
   editor.addEventListener('keydown', e => {
     plainPasteRequested = (e.ctrlKey || e.metaKey) && e.shiftKey && shortcutKey(e) === 'v';
   });
+  editor.addEventListener('keyup', () => { plainPasteRequested = false; });
+  editor.addEventListener('blur', () => { plainPasteRequested = false; });
   editor.addEventListener('paste', e => {
     const plain = plainPasteRequested;
     plainPasteRequested = false;
     const cd = e.clipboardData;
-    const html = !plain && cd && cd.getData('text/html');
+    if (plain) {
+      e.preventDefault();
+      const text = cd?.getData('text/plain');
+      if (text) document.execCommand('insertText', false, text);
+      return;
+    }
+    const html = cd && cd.getData('text/html');
     if (!html) return;
     e.preventDefault();
     const clean = sanitizeSceneHTML(html);

@@ -474,3 +474,20 @@ test('the interface switches to Russian in place, keeps the work, and remembers 
     assert.deepStrictEqual(errors, []);
   } finally { await close(); }
 });
+
+test('Shift-paste inserts the text flavour even when the clipboard offers rich text', async () => {
+  const { page, close } = await appPage();
+  try {
+    await openNovel(page, await writeTempNovel('plain.novel', plainNovel('')));
+    const html = await page.locator('#editor').evaluate(ed => {
+      ed.focus();
+      ed.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyV', ctrlKey: true, shiftKey: true }));
+      const dt = new DataTransfer();
+      dt.setData('text/html', '<b>rich</b>');
+      dt.setData('text/plain', 'plain');
+      ed.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, cancelable: true }));
+      return ed.innerHTML;
+    });
+    assert.equal(html, 'plain');
+  } finally { await close(); }
+});
