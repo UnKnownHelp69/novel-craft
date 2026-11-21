@@ -35,6 +35,11 @@ export function init() {
   document.addEventListener('keydown', e => {
     const mod = e.ctrlKey || e.metaKey;
     const key = shortcutKey(e);
+    if (e.key === 'Escape' && !$('#modalOverlay').classList.contains('hidden')) {
+      e.preventDefault();
+      $('#modalCancel').click();
+      return;
+    }
     if (e.key === 'Escape' && !$('#backupOverlay').classList.contains('hidden')) { closeBackups(); return; }
     if (mod && !e.shiftKey && key === 'g') { e.preventDefault(); if (graphOpen) closeGraph(); else openGraph(); return; }
     if (e.key === 'Escape' && graphOpen) { if (!$('#graphPanel').classList.contains('hidden')) { $('#graphPanel').classList.add('hidden'); } else closeGraph(); return; }

@@ -315,7 +315,7 @@ flow('opening another novel over unsaved work asks first', async page => {
   await page.keyboard.press('Control+o');
   await expectShown(page, '#modalOverlay');
   await expectText(page, '#modalTitle', 'Unsaved changes');
-  await page.click('#modalCancel');
+  await page.keyboard.press('Escape');
   await expectShown(page, '#modalOverlay', false);
   assert.equal(await editorText(page), 'Старый черновик', 'Cancel keeps the open novel');
 
