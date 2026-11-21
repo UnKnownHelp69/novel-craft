@@ -1,5 +1,6 @@
 /* The scene editor: input and paste handling, the formatting toolbar, markdown mode, and the
    document font and size. */
+import { finishTyping, recordHistory, rememberCaret } from './history.js';
 import { $, chapterList, editor, mdEditor } from './dom.js';
 import { countWords, escAttr } from './lib/text.js';
 import { parseInert, sanitizeSceneHTML, stripHtml } from './lib/html.js';
@@ -7,7 +8,7 @@ import { nowISO } from './lib/model.js';
 import { isLoadingContent, novel, setLoadingContent } from './state.js';
 import { markDirty, normalizeHTML, savedContent, savedMd } from './dirty.js';
 import { chapterWordCount, currentChapter, currentScene } from './tree.js';
-import { htmlToMd, mdToHtml } from './lib/markdown.js';
+import { htmlToMd, sceneSourceToHtml, sourceForScene } from './lib/markdown.js';
 import { updateCounters } from './panels.js';
 import { reconcileNotes, renderNotes, scheduleNotesRender } from './notes.js';
 import { shortcutKey } from './lib/keys.js';
@@ -15,7 +16,7 @@ import { shortcutKey } from './lib/keys.js';
 export let mdMode = false;
 /* Pasted HTML goes through the same allowlist as file content (sanitizeSceneHTML): pastes
    from Word or the web otherwise bring their classes, styles, fonts and remote images into
-   the scene. Plain-text pastes, including Ctrl+Shift+V, are left to the browser. The paste
+   the scene. Shift-paste always inserts the plain-text clipboard flavour. The paste
    event itself does not say whether Shift was held, so the keydown just before it records
    that (shortcutKey(), so Ctrl+Shift+V also works on non-Latin layouts). */
 let plainPasteRequested = false;
@@ -65,11 +66,12 @@ function currentBlockTag() {
 export function toggleMarkdownMode() {
   const s = currentScene();
   if (!s) return;
+  finishTyping();
   setLoadingContent(true);   // switching views is not an edit
   if (!mdMode) {
     // visual -> markdown
     s.content = editor.innerHTML;
-    mdEditor.value = htmlToMd(s.content);
+    mdEditor.value = sourceForScene(s);
     s.markdownContent = mdEditor.value;
     editor.classList.add('hidden');
     mdEditor.classList.remove('hidden');
@@ -78,7 +80,7 @@ export function toggleMarkdownMode() {
   } else {
     // markdown -> visual
     if (mdEditor.value !== htmlToMd(s.content)) {
-      s.content = mdToHtml(mdEditor.value);
+      s.content = sceneSourceToHtml(mdEditor.value);
     }
     s.markdownContent = mdEditor.value;
     editor.innerHTML = s.content || '';
@@ -90,6 +92,37 @@ export function toggleMarkdownMode() {
   }
   setLoadingContent(false);
   renderNotes();   // margin dots / highlights only exist in visual mode
+}
+
+let typewriterFrame = 0;
+export function scheduleTypewriter() {
+  if (typewriterFrame) return;
+  typewriterFrame = requestAnimationFrame(updateTypewriter);
+}
+function updateTypewriter() {
+  typewriterFrame = 0;
+  const sel = getSelection();
+  if (!document.body.classList.contains('typewriter') || document.activeElement !== editor ||
+      !sel.focusNode || !editor.contains(sel.focusNode)) {
+    CSS.highlights?.delete('typewriter-dim');
+    return;
+  }
+  const caret = document.createRange();
+  caret.setStart(sel.focusNode, sel.focusOffset);
+  caret.collapse(true);
+  const element = sel.focusNode.nodeType === 1 ? sel.focusNode : sel.focusNode.parentElement;
+  const block = element.closest('p,li,blockquote,pre,h1,h2,h3,h4,h5,h6,div');
+  if (CSS.highlights && block && block !== editor && editor.contains(block)) {
+    const before = document.createRange(), after = document.createRange();
+    before.selectNodeContents(editor);
+    after.selectNodeContents(editor);
+    before.setEndBefore(block);
+    after.setStartAfter(block);
+    CSS.highlights.set('typewriter-dim', new Highlight(before, after));
+  } else CSS.highlights?.delete('typewriter-dim');
+  const rect = caret.getClientRects()[0] || element.getBoundingClientRect();
+  const scroll = editor.closest('.editor-scroll');
+  scroll.scrollTop += rect.top + rect.height / 2 - scroll.getBoundingClientRect().top - scroll.clientHeight * 0.45;
 }
 
 /* ---- document font and size ---- */
@@ -106,11 +139,18 @@ export function applyDocFont(font) {
 }
 
 export function init() {
+  for (const field of [editor, mdEditor]) {
+    field.addEventListener('beforeinput', rememberCaret);
+    field.addEventListener('blur', finishTyping);
+  }
+  for (const event of ['focus', 'blur', 'input']) editor.addEventListener(event, scheduleTypewriter);
+  window.addEventListener('resize', scheduleTypewriter);
   editor.addEventListener('input', () => {
     if (isLoadingContent) return;          // programmatic innerHTML writes are not edits
     const s = currentScene();
     if (!s) return;
     s.content = editor.innerHTML;
+    s.markdownContent = '';
     s.wordCount = countWords(stripHtml(s.content));
     s.modifiedAt = nowISO();
     updateCounters();
@@ -119,16 +159,25 @@ export function init() {
     scheduleNotesRender();
     // compared normalized: input that leaves the scene as saved (markup the browser reshuffles
     // without a visible change) does not mark the novel dirty
-    if (normalizeHTML(s.content) !== (savedContent[s.id] || '')) markDirty();
+    if (normalizeHTML(s.content) !== (savedContent[s.id] || '')) markDirty(s);
+    else recordHistory(s);
   });
   editor.addEventListener('keydown', e => {
     plainPasteRequested = (e.ctrlKey || e.metaKey) && e.shiftKey && shortcutKey(e) === 'v';
   });
+  editor.addEventListener('keyup', () => { plainPasteRequested = false; });
+  editor.addEventListener('blur', () => { plainPasteRequested = false; });
   editor.addEventListener('paste', e => {
     const plain = plainPasteRequested;
     plainPasteRequested = false;
     const cd = e.clipboardData;
-    const html = !plain && cd && cd.getData('text/html');
+    if (plain) {
+      e.preventDefault();
+      const text = cd?.getData('text/plain');
+      if (text) document.execCommand('insertText', false, text);
+      return;
+    }
+    const html = cd && cd.getData('text/html');
     if (!html) return;
     e.preventDefault();
     const clean = sanitizeSceneHTML(html);
@@ -141,8 +190,11 @@ export function init() {
       // The read is async: remember the caret now and put it back before inserting.
       const sel = getSelection();
       const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+      const scene = currentScene();
+      const anchor = range?.startContainer;
       const reader = new FileReader();
       reader.onload = () => {
+        if (currentScene() !== scene || mdMode || !anchor || !editor.contains(anchor)) return;
         // through the policy too: it only keeps base64 data: URLs of the four types above
         const img = sanitizeSceneHTML(`<img src="${escAttr(String(reader.result))}">`);
         if (!img) return;
@@ -167,11 +219,13 @@ export function init() {
     if (!s) return;
     s.markdownContent = mdEditor.value;
     // count the rendered text, not the raw markdown, so both modes agree (and match saveCurrentScene)
-    s.wordCount = countWords(stripHtml(mdToHtml(mdEditor.value)));
+    s.content = sceneSourceToHtml(mdEditor.value);
+    s.wordCount = countWords(stripHtml(s.content));
     s.modifiedAt = nowISO();
     updateCounters();
     refreshSceneWordCount(s);
-    if (s.markdownContent !== (savedMd[s.id] || '')) markDirty();
+    if (s.markdownContent !== (savedMd[s.id] || '')) markDirty(s);
+    else recordHistory(s);
   });
   $('#fmtBold').addEventListener('click', () => exec('bold'));
   $('#fmtItalic').addEventListener('click', () => exec('italic'));
@@ -185,12 +239,11 @@ export function init() {
     markDirty();
   });
   document.addEventListener('selectionchange', () => {
-    if (document.activeElement === editor) updateToolbarState();
+    if (document.activeElement === editor) {
+      updateToolbarState();
+      if (document.body.classList.contains('typewriter')) scheduleTypewriter();
+    }
   });
-  /* Markdown mode. htmlToMd() keeps only h1-h3, paragraphs, bold/italic and line breaks,
-     so the round trip is lossy: the HTML is rebuilt from the markdown only when the markdown
-     text was actually changed; otherwise the scene's HTML (images, fonts, ...) stays as it was.
-     saveCurrentScene() applies the same rule. */
   $('#btnMarkdownMode').addEventListener('click', toggleMarkdownMode);
   $('#fontSize').addEventListener('input', e => {
     applyFontSize(+e.target.value);

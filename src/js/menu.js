@@ -3,6 +3,7 @@
    "recent:<path>". That submenu is built once at launch, and the backend grants those
    paths at the same time, so loading one passes check_path. Menu clicks are ignored while
    a native file dialog is pending. */
+import { handlesHistory, stepHistory } from './history.js';
 import { hasTauri, listen, nativeDialogOpen, TAURI } from './bridge.js';
 import { $ } from './dom.js';
 import { guardUnsaved, loadFromPath } from './novel-file.js';
@@ -39,8 +40,11 @@ export function init() {
         case 'export_md': doExport('md'); break;
         case 'export_notes_txt': doExportNotes('txt'); break;
         case 'export_notes_md': doExportNotes('md'); break;
-        case 'undo': document.execCommand('undo'); break;
-        case 'redo': document.execCommand('redo'); break;
+        case 'undo':
+        case 'redo':
+          if (handlesHistory()) stepHistory(p === 'redo');
+          else document.execCommand(p);
+          break;
         case 'toggle_focus': setFocus(!focusMode); break;
         case 'toggle_panels': $('#toggleLeft').click(); $('#toggleRight').click(); break;
         case 'check_updates': checkForUpdates({ manual: true }); break;

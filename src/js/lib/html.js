@@ -17,7 +17,7 @@ export const parseInert = html => {
    Text is collected in an array and the last emitted character is tracked on the
    side: growing one string with += and calling .endsWith() on it makes V8 flatten the string
    on every call, which made this walk quadratic (~0.4 s per keystroke on a 30k-word scene). --- */
-const TEXT_BLOCK_TAGS = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TR', 'UL', 'OL', 'TABLE']);
+export const TEXT_BLOCK_TAGS = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'TR', 'UL', 'OL', 'TABLE']);
 export function textFromNode(root) {
   const parts = [];
   let last = '';
@@ -27,7 +27,14 @@ export function textFromNode(root) {
     if (node.nodeName === 'BR') { push('\n'); return; }
     const isBlock = TEXT_BLOCK_TAGS.has(node.nodeName);
     if (isBlock && parts.length && last !== '\n') push('\n');
-    for (const c of node.childNodes) walk(c);
+    let seenCell = false;
+    for (const child of node.childNodes) {
+      if (node.nodeName === 'TR' && (child.nodeName === 'TD' || child.nodeName === 'TH')) {
+        if (seenCell) push('\t');
+        seenCell = true;
+      }
+      walk(child);
+    }
     if (isBlock && parts.length && last !== '\n') push('\n');
   };
   walk(root);

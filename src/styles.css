@@ -103,6 +103,8 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
   flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:10px;padding:24px;text-align:center;color:var(--text-dim);
 }
+body.no-novel :is(#editorArea, #leftPanel .lp-actions, #btnNew, #btnOpen, #rightPanel [data-acc="fmt"], #toggleLeft){display:none;}
+body.no-novel #leftPanel{flex:1;width:auto;opacity:1;}
 .empty-state .es-icon{font-size:38px;opacity:.6;}
 .empty-state p{margin:0 0 6px;font-size:13px;}
 .empty-state .lp-action{flex:none;min-width:150px;}
@@ -254,6 +256,10 @@ body.native-dialog::after{content:'';position:fixed;inset:0;z-index:2147483647;c
 /* breadcrumb */
 .breadcrumb{display:flex;align-items:center;gap:4px;overflow:hidden;min-width:0;max-width:60vw;-webkit-app-region:no-drag;}
 .bc-part{background:none;border:none;color:var(--text);font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:.15s ease;}
+@media (max-width: 1500px){
+  .bc-novel,.bc-novel + .bc-sep{display:none;}
+  .topbar-left{max-width:24%;}
+}
 .bc-part:hover{background:var(--editor-bg);color:var(--accent);}
 .bc-scene{color:var(--accent);font-weight:600;}
 .bc-sep{color:var(--text-dim);font-size:11px;}
@@ -291,7 +297,7 @@ body.focus .scene-meta,body.focus .meta-show{display:none;}
 .editor h2{font-size:1.5em;margin:.5em 0 .3em;}
 .editor h3{font-size:1.25em;margin:.5em 0 .3em;}
 .editor p{margin:0 0 .8em;}
-.editor:empty::before{content:"Start writing your chapter…";color:var(--text-dim);}
+.editor:empty::before{content:attr(placeholder);color:var(--text-dim);}
 .md-editor{resize:none;font-family:'Roboto Mono',monospace;white-space:pre-wrap;}
 .hidden{display:none !important;}   /* !important: must beat the display:flex of the element's own class */
 
@@ -303,7 +309,8 @@ body.focus #leftPanel,body.focus #rightPanel{width:0;min-width:0;opacity:0;point
 /* With the panels gone the column widens: 70% of the window, at most 850px. */
 body.focus #editorWrap{width:70%;max-width:850px;}
 /* Typewriter mode: the padding lets the first and last lines scroll to mid-screen. */
-body.focus.typewriter .editor{padding-top:30vh;padding-bottom:30vh;}
+body.typewriter .editor{padding-top:45vh;padding-bottom:55vh;}
+::highlight(typewriter-dim){color:var(--text-dim);}
 .exit-focus{
   position:absolute;top:-40px;left:50%;transform:translateX(-50%);
   background:var(--panel);color:var(--accent);border:1px solid var(--accent-dim);

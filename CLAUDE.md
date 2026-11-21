@@ -21,7 +21,7 @@ npm run dev        # tauri dev — run the app with a live-reloaded static front
 npm run serve      # the frontend alone in a browser (no backend) at http://127.0.0.1:1420
 npm run build      # tauri build — produce native binary + installers
 npm run icons      # regenerate src-tauri/icons from assets/app-icon.png
-npm run fonts      # download bundled Google Fonts (.woff2) for offline use (optional)
+npm run fonts      # restage the offline editor fonts from the installed packages
 ```
 
 There is **no JS build step / bundler** — the frontend in `src/` is served as-is

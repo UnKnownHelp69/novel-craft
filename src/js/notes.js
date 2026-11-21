@@ -292,7 +292,7 @@ function updateActiveHighlightStyle(color) {
 }
 function updateHighlights() {
   if (!('highlights' in CSS) || typeof Highlight === 'undefined') return;
-  CSS.highlights.clear();
+  for (const key of CSS.highlights.keys()) if (key.startsWith('note-')) CSS.highlights.delete(key);
   const c = currentChapter();
   if (mdMode || !noteDisplay.highlightAnno || !novel || !c) { updateActiveHighlightStyle(null); return; }
   const byType = {};

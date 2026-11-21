@@ -14,7 +14,7 @@ let browser;
 test.before(async () => { browser = await launchChromium(); });
 test.after(async () => { if (browser) await browser.close(); });
 
-async function appPage({ csp = false } = {}) {
+async function appPage({ csp = false, initScript } = {}) {
   const server = await serveApp({ csp });
   const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1400, height: 900 } });
   const page = await context.newPage();
@@ -24,6 +24,7 @@ async function appPage({ csp = false } = {}) {
     window.__csp = [];
     document.addEventListener('securitypolicyviolation', e => window.__csp.push(`${e.violatedDirective} ${e.blockedURI}`));
   });
+  if (initScript) await page.addInitScript(initScript);
   await page.goto(server.url);
   await page.evaluate(exposeApp, APP_MODULES);
   return { page, errors, close: async () => { await context.close(); await server.close(); } };
@@ -472,5 +473,68 @@ test('the interface switches to Russian in place, keeps the work, and remembers 
     await setLang('en');
     assert.strictEqual(await page.textContent('[data-i18n="ui.settings.language"]'), 'Interface language');
     assert.deepStrictEqual(errors, []);
+  } finally { await close(); }
+});
+
+test('Shift-paste inserts the text flavour even when the clipboard offers rich text', async () => {
+  const { page, close } = await appPage();
+  try {
+    await openNovel(page, await writeTempNovel('plain.novel', plainNovel('')));
+    const html = await page.locator('#editor').evaluate(ed => {
+      ed.focus();
+      ed.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyV', ctrlKey: true, shiftKey: true }));
+      const dt = new DataTransfer();
+      dt.setData('text/html', '<b>rich</b>');
+      dt.setData('text/plain', 'plain');
+      ed.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, cancelable: true }));
+      return ed.innerHTML;
+    });
+    assert.equal(html, 'plain');
+  } finally { await close(); }
+});
+
+test('compiled blocks separate list items, nested quotes and table rows', async () => {
+  const { page, close } = await appPage();
+  try {
+    const blocks = await page.evaluate(() => app.htmlToBlocks(
+      '<ol><li><p>one</p></li><li><b>two</b></li></ol>' +
+      '<blockquote><p>A</p><p>B</p></blockquote><table><tr><td>C</td><td>D</td></tr></table>'));
+    assert.deepEqual(blocks.map(b => b.runs.map(r => r.text).join('')), ['1. one', '2. two', 'A', 'B', 'C\tD']);
+    assert.equal(blocks[1].runs.at(-1).b, true);
+  } finally { await close(); }
+});
+
+test('a delayed save keeps newer recovery data and cannot switch another novel’s path', async () => {
+  const { page, close } = await appPage({ initScript: () => {
+    window.writes = [];
+    window.recovery = [];
+    window.__TAURI__ = {
+      event: { listen: async () => {} },
+      window: { getCurrentWindow: () => ({ onCloseRequested() {}, onResized() {} }) },
+      core: { async invoke(cmd, args) {
+        if (cmd === 'save_novel') return new Promise(resolve => window.writes.push(resolve));
+        if (cmd === 'autosave') window.recovery.push(JSON.parse(args.content));
+        if (cmd === 'clear_autosave') window.recovery.length = 0;
+        return null;
+      } }
+    };
+  } });
+  try {
+    await page.evaluate(() => {
+      app.setCurrentNovel({ title: 'First' }, '/first.novel');
+      window.saving = app.doSave();
+    });
+    await page.waitForFunction(() => writes.length === 1);
+    await page.locator('#editor').fill('newer');
+    assert.equal(await page.evaluate(() => { writes.shift()(); return window.saving; }), false);
+    assert.match(await page.evaluate(() => recovery.at(-1).novel.chapters[0].scenes[0].content), /newer/);
+    await page.evaluate(() => { window.saving = app.doSave(); });
+    await page.waitForFunction(() => writes.length === 1);
+    await page.evaluate(() => {
+      app.setCurrentNovel({ title: 'Second' }, '/second.novel');
+      writes.shift()();
+      return window.saving;
+    });
+    assert.equal(await page.evaluate(() => app.currentFilePath), '/second.novel');
   } finally { await close(); }
 });

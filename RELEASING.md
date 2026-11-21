@@ -57,9 +57,9 @@ picked there, so starting the run from another branch ships that branch's code.
 > run fall into different concurrency groups), so both build, and you get **two drafts under the
 > same tag** — this has happened before. If it does, delete one draft before publishing.
 
-Two things the workflow does *not* check: that the version is new (on path B with no bump, it
-simply builds the version that is already released, under that version's tag), and that the tests
-pass — none run here; the release relies on CI having passed on the PRs that reached `main`.
+Publishing a draft can also push its tag. The workflow checks for a published release of that
+version and skips the installer jobs when it finds one. Release builds rely on CI passing on
+the PRs that reached `main`.
 
 ### 3. What the workflow does
 
@@ -72,7 +72,8 @@ pass — none run here; the release relies on CI having passed on the PRs that r
      compiled for both architectures)
 
    Each job also builds the signed update package for its platform (`.sig` next to it), and the
-   release gets `latest.json`, the manifest installed copies read to find the update.
+   release gets `latest.json`, the manifest installed copies read to find the update. Once all
+   builds finish, the workflow resolves its package URLs to public release downloads.
 
    Each job uploads its files to the draft release `NovelCraft vX.Y.Z`; whichever finishes first
    creates the draft, the others add to it. A job that fails just leaves its installers missing —

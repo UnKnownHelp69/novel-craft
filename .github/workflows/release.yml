@@ -37,6 +37,7 @@ jobs:
     name: Verify version
     runs-on: ubuntu-22.04
     outputs:
+      published: ${{ steps.published.outputs.found }}
       version: ${{ steps.resolve.outputs.version }}
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
@@ -59,14 +60,16 @@ jobs:
 
       - name: Resolve and check the release version
         id: resolve
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           config_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
           if [ "${{ github.event_name }}" = "push" ]; then
             requested="${GITHUB_REF_NAME#v}"
             source="git tag ${GITHUB_REF_NAME}"
-          elif [ -n "${{ inputs.version }}" ]; then
-            requested="${{ inputs.version }}"
+          elif [ -n "$INPUT_VERSION" ]; then
+            requested="$INPUT_VERSION"
             source="workflow_dispatch input"
           else
             requested="$config_version"
@@ -84,9 +87,22 @@ jobs:
           echo "version=$requested" >> "$GITHUB_OUTPUT"
           echo "tag=v$requested" >> "$GITHUB_OUTPUT"
 
+      - name: Check for an already published release
+        id: published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" > releases.json
+          found=$(jq -s --arg tag "$TAG" 'any(.[][]; .tag_name == $tag and (.draft | not))' releases.json)
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
   release:
+    if: needs.verify-version.outputs.published == 'false'
     name: Build installers (${{ matrix.platform }})
     needs: verify-version
+    outputs:
+      release-id: ${{ steps.upload.outputs.releaseId }}
     runs-on: ${{ matrix.platform }}
     strategy:
       fail-fast: false
@@ -133,6 +149,7 @@ jobs:
       # All three jobs target the same tag; the action creates the draft release on
       # first use and uploads into the existing one afterwards.
       - name: Build and attach to draft release
+        id: upload
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -158,3 +175,26 @@ jobs:
           uploadUpdaterJson: true
           # Update packages are only built for releases: PR builds have no signing key.
           args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+
+  updater-manifest:
+    name: Finalize updater download URLs
+    needs: [verify-version, release]
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.verify-version.outputs.tag }}
+      RELEASE_ID: ${{ needs.release.outputs.release-id }}
+    steps:
+      - name: Resolve signed packages against the completed draft
+        run: |
+          gh api "repos/$GH_REPO/releases/$RELEASE_ID" > release.json
+          jq -e --arg tag "$TAG" '.draft and .tag_name == $tag' release.json
+          gh release download "$TAG" --pattern latest.json
+          jq -e --slurpfile release release.json '
+            ($release[0].assets | map({key: .url, value: .browser_download_url}) | from_entries) as $urls
+            | if (.platforms | length) == 0 then error("empty platform list") else . end
+            | .platforms[] |= (.url = ($urls[.url] // (if (.url | IN($urls[])) then .url else error("unknown package URL") end)))
+          ' latest.json > public.json
+          mv public.json latest.json
+          gh release upload "$TAG" latest.json --clobber

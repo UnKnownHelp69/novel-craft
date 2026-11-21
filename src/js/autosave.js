@@ -1,11 +1,12 @@
 /* Autosave and the crash-recovery copy. */
 import { hasTauri, invoke } from './bridge.js';
 import { $ } from './dom.js';
-import { currentFilePath, dirty, novel, setDirty } from './state.js';
-import { markDirty, setSaved, snapshotSaved } from './dirty.js';
-import { renumber } from './tree.js';
+import { currentFilePath, dirty, novel } from './state.js';
+import { forgetSavedHistory } from './history.js';
+import { markDirty } from './dirty.js';
+import { doSave } from './save.js';
 import {
-  flushNovel, serializeNovel, setCurrentNovel, updateFilePathIndicator
+  flushNovel, setCurrentNovel
 } from './novel-file.js';
 import { confirmModal, toast } from './dialogs.js';
 import { t } from './i18n/index.js';
@@ -80,7 +81,7 @@ export async function checkRecovery() {
           try { await invoke('read_text', { path }); } catch (_) { path = null; }
         }
         try {
-          setCurrentNovel(payload, path); markDirty();
+          setCurrentNovel(payload, path); forgetSavedHistory(); markDirty();
           toast(path || !data.path ? t('autosave.recovered') : t('autosave.recoveredUnsaved'));
           done('restored');
         } catch (e) {
@@ -101,18 +102,7 @@ export function init() {
   setInterval(async () => {
     if (!dirty || !novel) return;
     if (hasTauri && currentFilePath) {
-      try {
-        flushNovel();
-        renumber();
-        const content = serializeNovel(novel);
-        snapshotSaved();
-        setDirty(false);
-        await invoke('save_novel', { path: currentFilePath, content });
-        if (!dirty) setSaved();
-        else $('#saveIndicator').classList.remove('saving');
-        clearBackup();
-        updateFilePathIndicator();
-      } catch (_) { localBackup(); markDirty(); }   // still unsaved: keep the recovery copy current
+      await doSave(false, true);
     } else {
       localBackup();   // no file yet, or the browser build: recovery copy only
     }

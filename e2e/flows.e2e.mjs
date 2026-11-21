@@ -315,7 +315,7 @@ flow('opening another novel over unsaved work asks first', async page => {
   await page.keyboard.press('Control+o');
   await expectShown(page, '#modalOverlay');
   await expectText(page, '#modalTitle', 'Unsaved changes');
-  await page.click('#modalCancel');
+  await page.keyboard.press('Escape');
   await expectShown(page, '#modalOverlay', false);
   assert.equal(await editorText(page), 'Старый черновик', 'Cancel keeps the open novel');
 
@@ -329,7 +329,12 @@ flow('opening another novel over unsaved work asks first', async page => {
 });
 
 flow('a new novel from the start screen can be written and saved', async page => {
+  await expectShown(page, '#editor', false);
+  await expectShown(page, '#fmtBold', false);
+  await expectShown(page, '#esOpen');
   await page.click('#esNew');
+  await expectIndicator(page, 'Not saved to a file yet');
+  await expectShown(page, '#filePathIndicator', false);
   await expectShown(page, '#emptyState', false);
   await expectText(page, '#novelTitle', 'Untitled Novel');
   assert.deepEqual(await treeOutline(page), [['Chapter 1', ['Scene 1']]]);
@@ -356,7 +361,7 @@ flow('chapters and scenes: add, rename, numbering, breadcrumb, saved order', asy
 
   // chapter-row "+" adds a scene to that chapter
   await chapterRow(page, 'Chapter 2').hover();
-  await chapterRow(page, 'Chapter 2').locator('.tc-add').click();
+  await chapterRow(page, 'Chapter 2').locator('.tc-add').dblclick();
   await eventually(() => treeOutline(page), [['Глава 1', ['Начало']], ['Chapter 2', ['Scene 1', 'Scene 2']]], 'after row +');
   assert.deepEqual(await breadcrumb(page), ['Роман', 'Chapter 2', 'Scene 2']);
 
@@ -676,10 +681,13 @@ flow('tree context menu: Move to Chapter ▸ moves the scene to the end of the p
   assert.equal(await activeScene(page), 'S2');
   assert.equal(await editorText(page), 'Вторая сцена');
   assert.deepEqual(await breadcrumb(page), ['Роман', 'Два', 'S2']);
+  await expectText(page, '.tree-chapter.active > .tc-row .tc-title', 'Два');
 
   const { data } = await save(page);
   assert.deepEqual(outline(data), [['Один', ['S1']], ['Два', ['T1', 'S2']], ['Три', ['U1']]]);
   assert.deepEqual(data.chapters[1].scenes.map(s => [s.id, s.order]), [['t1', 0], ['s2', 1]]);
+  await contextMenu(page, chapterRow(page, 'Один'), 'Delete');
+  assert.equal(await activeScene(page), 'S2');
 });
 
 flow('tree context menu: the Move to Chapter ▸ submenu can be seen and clicked', async page => {
@@ -1447,6 +1455,7 @@ flow('compile: part divider, section break, drag reorder, rename, preview, TXT e
   ], { title: 'Книга' }));
   await page.click('#btnCompile');
   await expectShown(page, '#compileOverlay');
+  await expectText(page, '#compPages', '~1 page');
   const order = () => page.evaluate(() => [...document.querySelectorAll('#compOrder .co-item')].map(r =>
     (r.querySelector('.co-title, .co-part-t, .co-break-t') || r).textContent.trim()));
   await eventually(order, ['Пролог', 'Встреча', 'Финал'], 'default order');
@@ -1711,4 +1720,70 @@ flow('export menu: TXT, HTML and Markdown carry the text; notes export TXT and M
   assert.match(nmd.text, /^# Notes\n\n## Глава первая › Утро\n\n- \*\*\[Fix\]\*\* “рано” — Уточнить время _\(.+\)_/);
 
   await expectIndicator(page, 'Unsaved');   // exporting is not saving
+});
+
+flow('Markdown edits retain rich blocks and paragraph boundaries on disk', async page => {
+  const rich = '<p><u>Underline</u></p><ul><li>one</li><li>two</li></ul>' +
+    '<blockquote><p>Quote</p></blockquote><p style="text-align: center;">* * *</p>' +
+    '<p><img alt="map" src="data:image/png;base64,iVBORw0KGgo="></p>';
+  await openFixture(page, novelOf([ch('c', 'Chapter', sc('s', 'Scene', rich + '<p>End.</p>'))]));
+  const original = await editorHTML(page);
+  await page.click('#btnMarkdownMode');
+  await page.locator('#mdEditor').press('Control+End');
+  await page.keyboard.type('!');
+  const { data } = await save(page);
+  assert.equal(sceneIn(data, 'Scene').content, original.replace('End.', 'End.!'));
+  await page.click('#btnMarkdownMode');
+  assert.equal(await editorHTML(page), sceneIn(data, 'Scene').content);
+});
+
+flow('typewriter keeps the visual caret centered without changing the saved scene', async page => {
+  const content = Array.from({ length: 60 }, (_, i) => '<p>Line ' + i + '</p>').join('');
+  await openFixture(page, novelOf([ch('c', 'Chapter', sc('s', 'Scene', content))]));
+  await openAccordion(page, 'settings');
+  await page.check('#typewriterToggle');
+  await page.locator('#editor p').nth(30).click();
+  await eventually(() => page.evaluate(() => {
+    const r = getSelection().getRangeAt(0).getBoundingClientRect();
+    const s = document.querySelector('.editor-scroll').getBoundingClientRect();
+    return CSS.highlights.has('typewriter-dim') && Math.abs((r.y + r.height / 2 - s.y) / s.height - 0.45) < 0.04;
+  }), true, 'current line is centered');
+  await expectIndicator(page, 'Saved');
+  assert.equal((await save(page)).data.chapters[0].scenes[0].content, content);
+});
+
+flow('history across scenes and editor modes restores text, structure and the saved state', async page => {
+  await openFixture(page, novelOf([ch('c', 'Chapter', sc('a', 'A', '<p>First</p>'), sc('b', 'B', '<p>Second</p>'))]));
+  await typeAtEnd(page, ' edit');
+  await openSceneFromTree(page, 'B');
+  await openSceneFromTree(page, 'A');
+  await page.locator('#editor').press('Control+z');
+  assert.equal(await editorText(page), 'First');
+  await expectIndicator(page, 'Saved');
+  await page.keyboard.press('Control+Shift+z');
+  assert.equal(await editorText(page), 'First edit');
+  await page.click('#btnMarkdownMode');
+  await page.locator('#mdEditor').press('Control+End');
+  await page.keyboard.type(' **bold**');
+  await page.click('#btnMarkdownMode');
+  await page.locator('#editor').press('Control+z');
+  assert.equal(await editorText(page), 'First edit');
+  await page.keyboard.press('Control+Shift+z');
+  assert.match(await editorHTML(page), /<b>bold<\/b>/);
+  await save(page);
+  await page.click('#btnAddChapter');
+  await page.keyboard.press('Control+z');
+  assert.equal((await treeOutline(page)).length, 1);
+  await expectIndicator(page, 'Saved');
+  await page.keyboard.press('Control+Shift+z');
+  assert.equal((await treeOutline(page)).length, 2);
+  const { data } = await save(page);
+  assert.match(sceneIn(data, 'A').content, /<b>bold<\/b>/);
+  await openSceneFromTree(page, 'B');
+  await typeAtEnd(page, ' other');
+  await openSceneFromTree(page, 'A');
+  await page.keyboard.press('Control+z');
+  assert.equal(await editorText(page), 'Second');
+  await page.keyboard.press('Control+Shift+z');
+  assert.equal(await editorText(page), 'Second other');
 });

@@ -1,5 +1,6 @@
 /* The open novel as a file (one .novel file = one novel): new, open, load with migration of
    older files, recent files and the title in the top bar. */
+import { resetHistory } from './history.js';
 import { hasTauri, invoke, pickPath } from './bridge.js';
 import { $, editor } from './dom.js';
 import { countWords, uuid } from './lib/text.js';
@@ -31,31 +32,26 @@ export function updateWindowTitle() {
 }
 export function updateFilePathIndicator() {
   const el = $('#filePathIndicator');
-  if (!novel) { el.textContent = ''; el.title = ''; el.classList.remove('unsaved'); return; }
-  if (currentFilePath) {
-    el.textContent = baseName(currentFilePath);
-    el.title = currentFilePath;
-    el.classList.remove('unsaved');
-  } else {
-    el.textContent = t('file.unsavedIndicator');
-    el.title = t('file.unsavedIndicatorTitle');
-    el.classList.add('unsaved');
-  }
+  el.textContent = baseName(currentFilePath);
+  el.title = currentFilePath || '';
+  el.hidden = !currentFilePath;
 }
 export function flushNovel() { if (novel) saveCurrentScene(); }   // editor -> current scene, before serializing
 
 /* Render the whole UI for the current `novel` (or the empty state) and select its first scene.
    isLoadingContent is held for the whole pass, so nothing it fills in marks the novel dirty. */
-export function refreshUI() {
+export function refreshUI(sceneId = null) {
   const has = !!novel;
+  document.body.classList.toggle('no-novel', !has);
   setLoadingContent(true);
   editor.setAttribute('contenteditable', has ? 'true' : 'false');
   $('#emptyState').classList.toggle('hidden', has);
   $('#chaptersSection').classList.toggle('hidden', !has);
   $('#novelTitle').textContent = has ? (novel.title || t('file.untitledNovel')) : '—';
   if (has) {
-    setCurrentChapterId(novel.chapters[0] && novel.chapters[0].id);
-    setCurrentSceneId(novel.chapters[0] && novel.chapters[0].scenes[0] && novel.chapters[0].scenes[0].id);
+    const chapter = novel.chapters.find(c => c.scenes.some(s => s.id === sceneId)) || novel.chapters[0];
+    setCurrentChapterId(chapter.id);
+    setCurrentSceneId(chapter.scenes.find(s => s.id === sceneId)?.id ?? chapter.scenes[0].id);
     applyFontSize(novel.settings.fontSize || 18);
     applyDocFont(novel.settings.defaultFont || 'Georgia, serif');
   } else {
@@ -112,7 +108,11 @@ function migrateNovel(d) {
   const base = newNovel(d.title);
   const n = { ...base, ...d };
   n.version = '1.0';
-  n.title = d.title || 'Untitled Novel';
+  const nameText = (value, fallback) => {
+    if (value == null || value === '') return fallback;
+    return typeof value === 'object' ? JSON.stringify(value) : String(value);
+  };
+  n.title = nameText(d.title, 'Untitled Novel');
   n.settings = { ...base.settings, ...(d.settings || {}) };
   if (!Array.isArray(n.settings.customNoteTypes)) n.settings.customNoteTypes = [];
   if (!n.settings.noteTypeColors || typeof n.settings.noteTypeColors !== 'object') n.settings.noteTypeColors = {};
@@ -163,7 +163,7 @@ function migrateNovel(d) {
   };
   const normScene = (s, j) => {
     s.id = s.id || uuid();
-    s.title = s.title || `Scene ${j + 1}`;
+    s.title = nameText(s.title, `Scene ${j + 1}`);
     s.order = j;
     s.content = s.content || '';
     s.markdownContent = s.markdownContent || '';
@@ -181,7 +181,7 @@ function migrateNovel(d) {
   n.chapters.forEach((c, i) => {
     c.id = c.id || uuid();
     c.order = i;
-    c.title = c.title || `Chapter ${i + 1}`;
+    c.title = nameText(c.title, `Chapter ${i + 1}`);
     if (typeof c.collapsed !== 'boolean') c.collapsed = false;
     if (!Array.isArray(c.scenes) || !c.scenes.length) {
       // legacy chapter: wrap its content (+notes) into a single default scene
@@ -207,7 +207,10 @@ function migrateNovel(d) {
   if (migratedToScenes) setTimeout(() => toast(t('file.migratedToScenes')), 400);
   ['characters', 'locations', 'races'].forEach(k => {
     if (!Array.isArray(n[k])) n[k] = [];
-    n[k].forEach(e => { if (!e.id) e.id = uuid(); });
+    n[k].forEach(e => {
+      if (!e.id) e.id = uuid();
+      e.name = nameText(e.name, '');
+    });
   });
   // Relationship graph data. graphPosition null = not placed yet (the graph lays it out);
   // strength is 1-10.
@@ -245,7 +248,7 @@ function sanitizeNovelHTML(n) {
 }
 
 /* Put a loaded novel object into the UI as the current file. */
-export function setCurrentNovel(n, path) {
+export function setCurrentNovel(n, path, hasFile = !!path) {
   setNovel(sanitizeNovelHTML(migrateNovel(n)));
   setCurrentFilePath(path || null);
   // Compile state belongs to the previous novel (its order, title, author); openCompile()
@@ -253,8 +256,9 @@ export function setCurrentNovel(n, path) {
   setComp(null);
   if (compOpen) closeCompile();
   refreshUI();
+  resetHistory();
   snapshotSaved();
-  setSaved();
+  setSaved(hasFile);
 }
 
 /* Handle an old multi-novel (library) file by splitting it into separate files. */
@@ -336,7 +340,7 @@ export function openNovelFile() {
           try {
             const data = JSON.parse(rd.result);
             if (data && Array.isArray(data.novels)) handleLibraryFile(data, null);
-            else setCurrentNovel(data, null);
+            else setCurrentNovel(data, null, true);
             toast(t('file.opened', { name: f.name }));
           } catch { toast(t('file.invalidFile')); }
         };
@@ -353,11 +357,18 @@ export function newNovelFile() {
       // prompt for the file location up front and create the file
       const path = await pickPath('pick_save', { defaultName: n.title + '.novel' });
       if (!path) return;               // cancelled -> keep current novel
-      setCurrentNovel(n, path);
-      await invoke('save_novel', { path, content: serializeNovel(novel) });
-      await invoke('set_last_file', { path });
-      await addRecent(path);
-      toast(t('file.created', { name: baseName(path) }));
+      const previous = novel;
+      try {
+        await invoke('save_novel', { path, content: serializeNovel(n) });
+        if (novel !== previous) return;
+        setCurrentNovel(n, path);
+        await invoke('set_last_file', { path });
+        await addRecent(path);
+        toast(t('file.created', { name: baseName(path) }));
+      } catch (error) {
+        console.error(error);
+        toast(t('save.failed'));
+      }
     } else {
       setCurrentNovel(n, null);        // browser: unsaved until first Save
       toast(t('file.newNovel'));

@@ -6,7 +6,7 @@ import { novel } from './state.js';
 import { markDirty } from './dirty.js';
 import { chapterWordCount, currentChapter } from './tree.js';
 import { mdMode } from './editor.js';
-import { mdToHtml } from './lib/markdown.js';
+import { sceneSourceToHtml } from './lib/markdown.js';
 import { promptModal } from './dialogs.js';
 import { corkboardOpen } from './corkboard.js';
 import { fmtNumber, t } from './i18n/index.js';
@@ -19,7 +19,7 @@ export function updateCounters() {
   const chapWords = c ? chapterWordCount(c) : 0;
   const total = novel ? novel.chapters.reduce((s, x) => s + chapterWordCount(x), 0) : 0;
   // the character counts are for the scene in the editor, read live from whichever view is shown
-  const txt = !novel ? '' : mdMode ? stripHtml(mdToHtml(mdEditor.value)) : stripHtml(editor.innerHTML);
+  const txt = !novel ? '' : mdMode ? stripHtml(sceneSourceToHtml(mdEditor.value)) : stripHtml(editor.innerHTML);
   $('#statChapWords').textContent = chapWords;
   $('#statTotalWords').textContent = total;
   $('#statChars').textContent = txt.length;

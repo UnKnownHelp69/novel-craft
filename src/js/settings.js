@@ -3,6 +3,7 @@
 import { hasTauri, invoke } from './bridge.js';
 import { $ } from './dom.js';
 import { LOCALES, locale, setLocale, resolveLocale, applyI18n, t } from './i18n/index.js';
+import { scheduleTypewriter } from './editor.js';
 import { novel } from './state.js';
 import { refreshSaveIndicator } from './dirty.js';
 import { renderTree, updateBreadcrumb, updateSceneMeta } from './tree.js';
@@ -30,6 +31,7 @@ export function applyTypewriter(on) {
   document.body.classList.toggle('typewriter', on);
   const p = loadPrefs(); p.typewriter = on; savePrefs(p);
   $('#typewriterToggle').checked = on;
+  scheduleTypewriter();
 }
 
 /* The native menu's labels in the interface language; the keys are build_menu's in lib.rs. */
@@ -53,7 +55,7 @@ function measureSaveIndicator() {
   probe.className = 'save-indicator';
   probe.style.cssText = 'position:absolute;visibility:hidden;min-width:0';
   document.body.appendChild(probe);
-  const w = Math.max(...['status.saved', 'status.unsaved', 'status.saving'].map(k => {
+  const w = Math.max(...['status.saved', 'status.unsaved', 'status.saving', 'status.noFile'].map(k => {
     probe.textContent = t(k);
     return probe.getBoundingClientRect().width;
   }));

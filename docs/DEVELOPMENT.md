@@ -123,13 +123,10 @@ does this on GitHub's runners. To build only one bundle type:
 
 Builds are not code-signed; see [RELEASING.md](../RELEASING.md#known-limitations-not-bugs).
 
-**Optional fonts.** The editor offers Lora, Merriweather, Inter and Roboto (and the Markdown mode
-uses Roboto Mono). Each is taken from the system if installed, otherwise from
-`src/fonts/<name>.woff2`, otherwise a generic fallback is shown. Those `.woff2` files are not in the
-repository (they are git-ignored); `npm run fonts` is meant to download them before a build, but
-currently saves nothing — see the note in [`scripts/fetch-fonts.mjs`](../scripts/fetch-fonts.mjs).
-Release builds therefore ship without them. (The PDF fonts in `src/fonts/pdf/` are committed and
-always bundled.)
+**Editor fonts.** Installing the npm dependencies stages Lora, Merriweather, Inter, Roboto
+and Roboto Mono, their Unicode subsets and their licenses in `src/fonts/editor/`. The same
+files ship in desktop builds and work offline. Run `npm run fonts` to regenerate them.
+The separate PDF fonts in `src/fonts/pdf/` are committed.
 
 **Icons.** `src-tauri/icons/` is generated from `assets/app-icon.png` by `npm run icons`, and
 `assets/app-icon.png` itself is drawn by `node scripts/make-icon.mjs`. Both outputs are committed;

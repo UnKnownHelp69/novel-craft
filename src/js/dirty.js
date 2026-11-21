@@ -1,5 +1,6 @@
 /* Dirty tracking and the save indicator; the rules are under "Dirty-flag discipline" in
    CLAUDE.md. */
+import { recordHistory, saveHistory } from './history.js';
 import { $ } from './dom.js';
 import { dirty, isLoadingContent, novel, setDirty } from './state.js';
 import { t } from './i18n/index.js';
@@ -7,18 +8,21 @@ import { t } from './i18n/index.js';
 export let savedContent = {};         // sceneId -> normalizeHTML() snapshot at last save/load
 export let savedMd = {};              // sceneId -> markdown snapshot at last save/load
 
-export function markDirty() {
+export function markDirty(scene) {
   if (isLoadingContent) return;   // ignore mutations caused by programmatic loads
+  recordHistory(scene);
   setDirty(true);
   const ind = $('#saveIndicator');
   ind.textContent = t('status.unsaved');
   ind.classList.remove('saving');
 }
-export function setSaved() {
+let hasSavedFile = false;
+export function setSaved(hasFile = true) {
+  hasSavedFile = hasFile;
   setDirty(false);
   const ind = $('#saveIndicator');
-  ind.textContent = t('status.saved');
   ind.classList.remove('saving');
+  refreshSaveIndicator();
 }
 
 /* Canonical form of scene HTML for the "is this a real edit?" comparison against savedContent.
@@ -46,6 +50,7 @@ export function normalizeHTML(html) {
 /* The baseline later edits are compared against, per scene; retaken on every save (manual or
    auto) and every load. */
 export function snapshotSaved() {
+  saveHistory();
   savedContent = {};
   savedMd = {};
   if (!novel) return;
@@ -55,9 +60,11 @@ export function snapshotSaved() {
   }));
 }
 /* The indicator's text again, in the current interface language (after a language switch). */
-export function refreshSaveIndicator() {
+export function refreshSaveIndicator(finished = false) {
   const ind = $('#saveIndicator');
-  ind.textContent = t(ind.classList.contains('saving') ? 'status.saving' : dirty ? 'status.unsaved' : 'status.saved');
+  if (finished) ind.classList.remove('saving');
+  ind.hidden = !novel;
+  ind.textContent = t(ind.classList.contains('saving') ? 'status.saving' : dirty ? 'status.unsaved' : hasSavedFile ? 'status.saved' : 'status.noFile');
 }
 export function setSaving() {
   const ind = $('#saveIndicator');

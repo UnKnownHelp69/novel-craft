@@ -9,10 +9,11 @@ import {
   currentChapterId, currentSceneId, dirty, isLoadingContent, novel, setCurrentChapterId,
   setCurrentSceneId, setLoadingContent
 } from './state.js';
+import { rememberSelection } from './history.js';
 import { markDirty } from './dirty.js';
 import { nvTitle } from './novel-file.js';
 import { mdMode } from './editor.js';
-import { htmlToMd, mdToHtml } from './lib/markdown.js';
+import { htmlToMd, sceneSourceToHtml, sourceForScene } from './lib/markdown.js';
 import { updateCounters } from './panels.js';
 import { promptModal, toast, toastAction } from './dialogs.js';
 import { localBackup } from './autosave.js';
@@ -73,6 +74,8 @@ export function renderTree() {
   chapterList.innerHTML = '';
   if (!novel) return;
   renumber();
+  const selected = findScene(currentSceneId);
+  if (selected) setCurrentChapterId(selected.chapter.id);
   novel.chapters.forEach((c, ci) => {
     c.wordCount = chapterWordCount(c);
     const chLi = document.createElement('li');
@@ -113,6 +116,7 @@ export function selectScene(sceneId, saveFirst = true) {
   if (!f) return;
   setCurrentChapterId(f.chapter.id);
   setCurrentSceneId(sceneId);
+  rememberSelection();
   setOpenNoteId(null);
   closeAddNote();
   loadSceneIntoEditor();
@@ -134,7 +138,7 @@ export function loadSceneIntoEditor() {
   setLoadingContent(true);
   const s = currentScene();
   if (!s) { editor.innerHTML = ''; mdEditor.value = ''; }
-  else if (mdMode) mdEditor.value = s.markdownContent || htmlToMd(s.content);
+  else if (mdMode) mdEditor.value = sourceForScene(s);
   else { editor.innerHTML = s.content || ''; reconcileNotes(s); }
   updateBreadcrumb();
   updateSceneMeta();
@@ -148,7 +152,7 @@ export function saveCurrentScene() {
   // regenerated when the Markdown was actually edited.
   if (mdMode) { 
     if (mdEditor.value !== htmlToMd(s.content)) {
-      s.content = mdToHtml(mdEditor.value); 
+      s.content = sceneSourceToHtml(mdEditor.value);
     }
     s.markdownContent = mdEditor.value; 
   }
@@ -339,6 +343,7 @@ export function updateBreadcrumb() {
     const b = document.createElement('button');
     b.className = 'bc-part ' + cls;
     b.textContent = text;
+    b.title = text;
     // A title edit still in progress is committed here, not on mousedown (see the breadcrumb
     // mousedown listener near nvTitle).
     if (handler) b.onclick = () => { if (document.activeElement === nvTitle) nvTitle.blur(); handler(); };
@@ -451,12 +456,19 @@ function applyChapterDrop(chapterId, target) {
 
 export function init() {
   /* ---- tree interaction: caret / add / select / pointer drag ---- */
+  let lastAdd = null;
   chapterList.addEventListener('click', e => {
     if (swallowTreeClicks) return;
     const caret = e.target.closest('.tc-caret');
     if (caret) { const c = findChapter(caret.closest('.tree-chapter').dataset.chapterId); if (c) { c.collapsed = !c.collapsed; renderTree(); } return; }
     const add = e.target.closest('.tc-add');
-    if (add) { addScene(add.closest('.tree-chapter').dataset.chapterId); return; }
+    if (add) {
+      const id = add.closest('.tree-chapter').dataset.chapterId;
+      // Rendering replaces the button, so some webviews restart the click count at one.
+      const repeated = e.detail && lastAdd?.id === id && e.timeStamp - lastAdd.time < 450;
+      lastAdd = { id, time: e.timeStamp };
+      if (!repeated) addScene(id);
+    } else lastAdd = null;
   });
   chapterList.addEventListener('dblclick', e => {   // chapters are renamed on the second press (below)
     if (swallowTreeClicks) { swallowTreeClicks = false; return; }
