@@ -149,8 +149,11 @@ export function init() {
       // The read is async: remember the caret now and put it back before inserting.
       const sel = getSelection();
       const range = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+      const scene = currentScene();
+      const anchor = range?.startContainer;
       const reader = new FileReader();
       reader.onload = () => {
+        if (currentScene() !== scene || mdMode || !anchor || !editor.contains(anchor)) return;
         // through the policy too: it only keeps base64 data: URLs of the four types above
         const img = sanitizeSceneHTML(`<img src="${escAttr(String(reader.result))}">`);
         if (!img) return;
