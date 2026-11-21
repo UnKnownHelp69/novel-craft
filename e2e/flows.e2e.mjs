@@ -681,10 +681,13 @@ flow('tree context menu: Move to Chapter ▸ moves the scene to the end of the p
   assert.equal(await activeScene(page), 'S2');
   assert.equal(await editorText(page), 'Вторая сцена');
   assert.deepEqual(await breadcrumb(page), ['Роман', 'Два', 'S2']);
+  await expectText(page, '.tree-chapter.active > .tc-row .tc-title', 'Два');
 
   const { data } = await save(page);
   assert.deepEqual(outline(data), [['Один', ['S1']], ['Два', ['T1', 'S2']], ['Три', ['U1']]]);
   assert.deepEqual(data.chapters[1].scenes.map(s => [s.id, s.order]), [['t1', 0], ['s2', 1]]);
+  await contextMenu(page, chapterRow(page, 'Один'), 'Delete');
+  assert.equal(await activeScene(page), 'S2');
 });
 
 flow('tree context menu: the Move to Chapter ▸ submenu can be seen and clicked', async page => {

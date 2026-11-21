@@ -74,6 +74,8 @@ export function renderTree() {
   chapterList.innerHTML = '';
   if (!novel) return;
   renumber();
+  const selected = findScene(currentSceneId);
+  if (selected) setCurrentChapterId(selected.chapter.id);
   novel.chapters.forEach((c, ci) => {
     c.wordCount = chapterWordCount(c);
     const chLi = document.createElement('li');
