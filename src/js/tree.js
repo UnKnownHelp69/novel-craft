@@ -451,12 +451,19 @@ function applyChapterDrop(chapterId, target) {
 
 export function init() {
   /* ---- tree interaction: caret / add / select / pointer drag ---- */
+  let lastAdd = null;
   chapterList.addEventListener('click', e => {
     if (swallowTreeClicks) return;
     const caret = e.target.closest('.tc-caret');
     if (caret) { const c = findChapter(caret.closest('.tree-chapter').dataset.chapterId); if (c) { c.collapsed = !c.collapsed; renderTree(); } return; }
     const add = e.target.closest('.tc-add');
-    if (add) { addScene(add.closest('.tree-chapter').dataset.chapterId); return; }
+    if (add) {
+      const id = add.closest('.tree-chapter').dataset.chapterId;
+      // Rendering replaces the button, so some webviews restart the click count at one.
+      const repeated = e.detail && lastAdd?.id === id && e.timeStamp - lastAdd.time < 450;
+      lastAdd = { id, time: e.timeStamp };
+      if (!repeated) addScene(id);
+    } else lastAdd = null;
   });
   chapterList.addEventListener('dblclick', e => {   // chapters are renamed on the second press (below)
     if (swallowTreeClicks) { swallowTreeClicks = false; return; }

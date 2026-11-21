@@ -356,7 +356,7 @@ flow('chapters and scenes: add, rename, numbering, breadcrumb, saved order', asy
 
   // chapter-row "+" adds a scene to that chapter
   await chapterRow(page, 'Chapter 2').hover();
-  await chapterRow(page, 'Chapter 2').locator('.tc-add').click();
+  await chapterRow(page, 'Chapter 2').locator('.tc-add').dblclick();
   await eventually(() => treeOutline(page), [['Глава 1', ['Начало']], ['Chapter 2', ['Scene 1', 'Scene 2']]], 'after row +');
   assert.deepEqual(await breadcrumb(page), ['Роман', 'Chapter 2', 'Scene 2']);
 
