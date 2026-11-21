@@ -72,7 +72,8 @@ the PRs that reached `main`.
      compiled for both architectures)
 
    Each job also builds the signed update package for its platform (`.sig` next to it), and the
-   release gets `latest.json`, the manifest installed copies read to find the update.
+   release gets `latest.json`, the manifest installed copies read to find the update. Once all
+   builds finish, the workflow resolves its package URLs to public release downloads.
 
    Each job uploads its files to the draft release `NovelCraft vX.Y.Z`; whichever finishes first
    creates the draft, the others add to it. A job that fails just leaves its installers missing —
