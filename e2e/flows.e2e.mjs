@@ -1447,6 +1447,7 @@ flow('compile: part divider, section break, drag reorder, rename, preview, TXT e
   ], { title: 'Книга' }));
   await page.click('#btnCompile');
   await expectShown(page, '#compileOverlay');
+  await expectText(page, '#compPages', '~1 page');
   const order = () => page.evaluate(() => [...document.querySelectorAll('#compOrder .co-item')].map(r =>
     (r.querySelector('.co-title, .co-part-t, .co-break-t') || r).textContent.trim()));
   await eventually(order, ['Пролог', 'Встреча', 'Финал'], 'default order');
