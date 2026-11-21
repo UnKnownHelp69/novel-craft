@@ -554,3 +554,10 @@ test('a scene wordCount that is not a positive integer is recounted from the con
   assert.deepStrictEqual(n.chapters[0].scenes.map(s => s.wordCount), [3, 2, 1, 7]);
   assert.strictEqual(n.chapters[0].wordCount, 13);
 });
+
+test('non-text titles and entity names become displayable strings', () => {
+  const n = migrateNovel({ title: 0, chapters: [{ title: 12, scenes: [{ title: { a: 1 } }] }],
+    characters: [{ name: 23 }], locations: [{ name: false }], races: [{ name: ['x'] }] });
+  assert.deepEqual([n.title, n.chapters[0].title, n.chapters[0].scenes[0].title,
+    n.characters[0].name, n.locations[0].name, n.races[0].name], ['0', '12', '{"a":1}', '23', 'false', '["x"]']);
+});

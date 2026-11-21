@@ -112,7 +112,11 @@ function migrateNovel(d) {
   const base = newNovel(d.title);
   const n = { ...base, ...d };
   n.version = '1.0';
-  n.title = d.title || 'Untitled Novel';
+  const nameText = (value, fallback) => {
+    if (value == null || value === '') return fallback;
+    return typeof value === 'object' ? JSON.stringify(value) : String(value);
+  };
+  n.title = nameText(d.title, 'Untitled Novel');
   n.settings = { ...base.settings, ...(d.settings || {}) };
   if (!Array.isArray(n.settings.customNoteTypes)) n.settings.customNoteTypes = [];
   if (!n.settings.noteTypeColors || typeof n.settings.noteTypeColors !== 'object') n.settings.noteTypeColors = {};
@@ -163,7 +167,7 @@ function migrateNovel(d) {
   };
   const normScene = (s, j) => {
     s.id = s.id || uuid();
-    s.title = s.title || `Scene ${j + 1}`;
+    s.title = nameText(s.title, `Scene ${j + 1}`);
     s.order = j;
     s.content = s.content || '';
     s.markdownContent = s.markdownContent || '';
@@ -181,7 +185,7 @@ function migrateNovel(d) {
   n.chapters.forEach((c, i) => {
     c.id = c.id || uuid();
     c.order = i;
-    c.title = c.title || `Chapter ${i + 1}`;
+    c.title = nameText(c.title, `Chapter ${i + 1}`);
     if (typeof c.collapsed !== 'boolean') c.collapsed = false;
     if (!Array.isArray(c.scenes) || !c.scenes.length) {
       // legacy chapter: wrap its content (+notes) into a single default scene
@@ -207,7 +211,10 @@ function migrateNovel(d) {
   if (migratedToScenes) setTimeout(() => toast(t('file.migratedToScenes')), 400);
   ['characters', 'locations', 'races'].forEach(k => {
     if (!Array.isArray(n[k])) n[k] = [];
-    n[k].forEach(e => { if (!e.id) e.id = uuid(); });
+    n[k].forEach(e => {
+      if (!e.id) e.id = uuid();
+      e.name = nameText(e.name, '');
+    });
   });
   // Relationship graph data. graphPosition null = not placed yet (the graph lays it out);
   // strength is 1-10.
