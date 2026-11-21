@@ -39,7 +39,7 @@ export function docxP(runs, opts, settings) {
       if (r.i || opts.i) rpr += '<w:i/>';
       if (opts.sz) rpr += `<w:sz w:val="${opts.sz}"/>`;
       if (DOCX_LOCALE[s.language]) rpr += `<w:lang w:val="${DOCX_LOCALE[s.language]}"/>`;
-      rs += `<w:r>${rpr ? `<w:rPr>${rpr}</w:rPr>` : ''}<w:t xml:space="preserve">${xmlEsc(seg)}</w:t></w:r>`;
+      rs += `<w:r>${rpr ? `<w:rPr>${rpr}</w:rPr>` : ''}<w:t xml:space="preserve">${xmlEsc(seg).replaceAll('\t', '</w:t><w:tab/><w:t xml:space="preserve">')}</w:t></w:r>`;
       if (i < segs.length - 1) rs += '<w:r><w:br/></w:r>';
     });
   });

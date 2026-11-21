@@ -3,7 +3,7 @@
 import { hasTauri, invoke, pickPath } from './bridge.js';
 import { $ } from './dom.js';
 import { esc, escAttr, uuid } from './lib/text.js';
-import { parseInert, sanitizeChildren, stripHtml } from './lib/html.js';
+import { parseInert, sanitizeChildren, stripHtml, TEXT_BLOCK_TAGS } from './lib/html.js';
 import { novel } from './state.js';
 import { findScene, saveCurrentScene } from './tree.js';
 import { baseName } from './novel-file.js';
@@ -437,31 +437,54 @@ function tocHTMLx(flow, lang) {
   return `<section class="c-toc"><h1 class="c-toc-title">${esc(tocLabel(lang))}</h1><ul>` +
     entries.map(f => `<li class="c-toc-${f.type}"><a href="#${f.anchor}">${esc(f.title)}</a></li>`).join('') + `</ul></section>`;
 }
-/* Scene HTML -> [{ tag: 'p'|'h1'|'h2'|'h3', runs: [{ text, b, i }] }], one block per
-   top-level node; shared by the DOCX and PDF exporters. Only bold/italic survive, and
-   a <br> becomes a '\n' run. */
-function htmlToBlocks(html) {
-  const d = parseInert(html);
+/* Walk structural containers recursively. Inline descendants share their parent's
+   paragraph and carry their own emphasis. Table cells retain a tab between columns. */
+export function htmlToBlocks(html) {
   const blocks = [];
-  const runsOf = (node, b, i) => {
-    let out = [];
-    node.childNodes.forEach(ch => {
-      if (ch.nodeType === 3) { if (ch.textContent) out.push({ text: ch.textContent, b, i }); return; }
-      const t = ch.tagName;
-      if (t === 'BR') { out.push({ text: '\n', b, i }); return; }
-      out = out.concat(runsOf(ch, b || /^(B|STRONG)$/.test(t), i || /^(I|EM)$/.test(t)));
-    });
-    return out;
+  let runs = [], tag = 'p';
+  const flush = () => {
+    if (runs.some(r => r.text.trim() || r.text === '\n')) blocks.push({ tag, runs });
+    runs = [];
   };
-  Array.from(d.childNodes).forEach(ch => {
-    if (ch.nodeType === 3) { if (ch.textContent.trim()) blocks.push({ tag: 'p', runs: [{ text: ch.textContent }] }); return; }
-    const t = ch.tagName;
-    const tag = (t === 'H1' || t === 'H2' || t === 'H3') ? t.toLowerCase() : 'p';
-    blocks.push({ tag, runs: runsOf(ch, false, false) });
-  });
-  if (!blocks.length && stripHtml(html).trim()) blocks.push({ tag: 'p', runs: [{ text: stripHtml(html) }] });
+  function walk(node, b = false, i = false) {
+    if (node.nodeType === 3) { runs.push({ text: node.data, b, i }); return; }
+    const name = node.nodeName;
+    if (name === 'BR') { runs.push({ text: '\n', b, i }); return; }
+    if (name === 'TR') {
+      flush();
+      Array.from(node.cells).forEach((cell, index) => {
+        if (index) runs.push({ text: '\t' });
+        const cellBlocks = htmlToBlocks(cell.innerHTML);
+        cellBlocks.forEach((block, line) => {
+          if (line) runs.push({ text: '\n' });
+          runs.push(...block.runs);
+        });
+      });
+      flush();
+      return;
+    }
+    const block = TEXT_BLOCK_TAGS.has(name);
+    if (block) flush();
+    const parentTag = tag;
+    if (/^H[123]$/.test(name)) tag = name.toLowerCase();
+    const first = blocks.length;
+    for (const child of node.childNodes) walk(child, b || /^(B|STRONG)$/.test(name), i || /^(I|EM)$/.test(name));
+    if (block) {
+      flush();
+      if (blocks.length === first && /^(P|LI|H[123])$/.test(name)) blocks.push({ tag, runs: [] });
+      if (name === 'LI') {
+        const list = node.parentElement;
+        const prefix = list?.tagName === 'OL' ? (Array.from(list.children).indexOf(node) + 1) + '. ' : '• ';
+        blocks[first].runs.unshift({ text: prefix });
+      }
+    }
+    tag = parentTag;
+  }
+  walk(parseInert(html));
+  flush();
   return blocks;
 }
+
 async function exportCompDOCX() {
   const s = comp.settings;
   const flow = compFlow();

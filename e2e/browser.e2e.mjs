@@ -491,3 +491,14 @@ test('Shift-paste inserts the text flavour even when the clipboard offers rich t
     assert.equal(html, 'plain');
   } finally { await close(); }
 });
+
+test('compiled blocks separate list items, nested quotes and table rows', async () => {
+  const { page, close } = await appPage();
+  try {
+    const blocks = await page.evaluate(() => app.htmlToBlocks(
+      '<ol><li><p>one</p></li><li><b>two</b></li></ol>' +
+      '<blockquote><p>A</p><p>B</p></blockquote><table><tr><td>C</td><td>D</td></tr></table>'));
+    assert.deepEqual(blocks.map(b => b.runs.map(r => r.text).join('')), ['1. one', '2. two', 'A', 'B', 'C\tD']);
+    assert.equal(blocks[1].runs.at(-1).b, true);
+  } finally { await close(); }
+});
