@@ -329,6 +329,9 @@ flow('opening another novel over unsaved work asks first', async page => {
 });
 
 flow('a new novel from the start screen can be written and saved', async page => {
+  await expectShown(page, '#editor', false);
+  await expectShown(page, '#fmtBold', false);
+  await expectShown(page, '#esOpen');
   await page.click('#esNew');
   await expectIndicator(page, 'Not saved to a file yet');
   await expectShown(page, '#filePathIndicator', false);

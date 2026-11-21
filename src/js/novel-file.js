@@ -41,6 +41,7 @@ export function flushNovel() { if (novel) saveCurrentScene(); }   // editor -> c
    isLoadingContent is held for the whole pass, so nothing it fills in marks the novel dirty. */
 export function refreshUI() {
   const has = !!novel;
+  document.body.classList.toggle('no-novel', !has);
   setLoadingContent(true);
   editor.setAttribute('contenteditable', has ? 'true' : 'false');
   $('#emptyState').classList.toggle('hidden', has);

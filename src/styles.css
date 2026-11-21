@@ -103,6 +103,8 @@ button,input,select,textarea{font-family:inherit;color:inherit;}
   flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:10px;padding:24px;text-align:center;color:var(--text-dim);
 }
+body.no-novel :is(#editorArea, #leftPanel .lp-actions, #btnNew, #btnOpen, #rightPanel [data-acc="fmt"], #toggleLeft){display:none;}
+body.no-novel #leftPanel{flex:1;width:auto;opacity:1;}
 .empty-state .es-icon{font-size:38px;opacity:.6;}
 .empty-state p{margin:0 0 6px;font-size:13px;}
 .empty-state .lp-action{flex:none;min-width:150px;}
