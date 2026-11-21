@@ -37,6 +37,7 @@ jobs:
     name: Verify version
     runs-on: ubuntu-22.04
     outputs:
+      published: ${{ steps.published.outputs.found }}
       version: ${{ steps.resolve.outputs.version }}
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
@@ -86,7 +87,18 @@ jobs:
           echo "version=$requested" >> "$GITHUB_OUTPUT"
           echo "tag=v$requested" >> "$GITHUB_OUTPUT"
 
+      - name: Check for an already published release
+        id: published
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" > releases.json
+          found=$(jq -s --arg tag "$TAG" 'any(.[][]; .tag_name == $tag and (.draft | not))' releases.json)
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+
   release:
+    if: needs.verify-version.outputs.published == 'false'
     name: Build installers (${{ matrix.platform }})
     needs: verify-version
     runs-on: ${{ matrix.platform }}
