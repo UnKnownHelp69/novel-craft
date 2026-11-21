@@ -7,7 +7,7 @@ src-tauri/target/
 src-tauri/gen/
 
 # Generated font binaries (run `npm run fonts` to populate for offline use)
-src/fonts/*.woff2
+src/fonts/editor/
 
 # OS / editor junk
 .DS_Store
