@@ -36,8 +36,19 @@ export function showCtx(x, y) {
     // so the submenu closes a little after the pointer leaves it, not at once
     const sub = list.parentElement;
     let closing = null;
-    sub.addEventListener('pointerenter', () => { clearTimeout(closing); sub.classList.add('open'); });
-    sub.addEventListener('pointerleave', () => { closing = setTimeout(() => sub.classList.remove('open'), 300); });
+    let pinned = false;
+    sub.addEventListener('pointerenter', e => {
+      clearTimeout(closing);
+      if (e.pointerType === 'mouse') sub.classList.add('open');
+    });
+    sub.addEventListener('pointerleave', e => {
+      if (e.pointerType === 'mouse' && !pinned) closing = setTimeout(() => sub.classList.remove('open'), 300);
+    });
+    sub.querySelector('.ctx-sub-head').addEventListener('click', () => {
+      clearTimeout(closing);
+      pinned = !pinned;
+      sub.classList.toggle('open', pinned);
+    });
   });
 }
 
