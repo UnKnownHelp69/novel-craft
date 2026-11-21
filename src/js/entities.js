@@ -106,11 +106,19 @@ export function renderEntities(kind) {
       confirmModal(t('common.delete'), t('entities.deleteConfirm', { name: item.name || t('entities.thisEntry') }), () => {
         novel[kind] = novel[kind].filter(x => x.id !== item.id);
         if (kind === 'characters') {
+          for (const route of novel.settings.worldMap.routes) {
+            route.characterIds = route.characterIds.filter(id => id !== item.id);
+          }
           // scrub references to the removed character
           novel.characters.forEach(c => { c.relationships = (c.relationships || []).filter(r => r.targetCharacterId !== item.id); });
           novel.chapters.forEach(c => (c.scenes || []).forEach(s => { if (s.povCharacter === item.id) s.povCharacter = null; }));
         }
-        if (kind === 'locations') novel.chapters.forEach(c => (c.scenes || []).forEach(s => { if (s.location === item.id) s.location = null; }));
+        if (kind === 'locations') {
+          const map = novel.settings.worldMap;
+          delete map.locations[item.id];
+          map.routes = map.routes.filter(r => r.fromLocationId !== item.id && r.toLocationId !== item.id);
+          novel.chapters.forEach(c => (c.scenes || []).forEach(s => { if (s.location === item.id) s.location = null; }));
+        }
         renderEntities(kind);
         updateSceneMeta();
         if (graphOpen) { renderLegend(); drawGraph(); }
