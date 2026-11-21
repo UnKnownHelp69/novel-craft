@@ -59,14 +59,16 @@ jobs:
 
       - name: Resolve and check the release version
         id: resolve
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           config_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
           if [ "${{ github.event_name }}" = "push" ]; then
             requested="${GITHUB_REF_NAME#v}"
             source="git tag ${GITHUB_REF_NAME}"
-          elif [ -n "${{ inputs.version }}" ]; then
-            requested="${{ inputs.version }}"
+          elif [ -n "$INPUT_VERSION" ]; then
+            requested="$INPUT_VERSION"
             source="workflow_dispatch input"
           else
             requested="$config_version"
