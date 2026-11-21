@@ -103,7 +103,7 @@ export default {
   'ui.settings.autoResolve': 'Auto-resolve notes on text edit',
   'ui.settings.wordGoal': 'Word goal',
   'ui.settings.nativeTitlebar': 'Use native title bar',
-  'ui.settings.typewriter': 'Typewriter focus (dim & center)',
+  'ui.settings.typewriter': 'Typewriter focus in the visual editor',
   'ui.settings.general': 'General',
   'ui.settings.setWordGoal': 'Set word goal',
   'ui.settings.restoreBackupTitle': 'Load an earlier version of this novel\'s file',

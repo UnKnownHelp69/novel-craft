@@ -101,7 +101,7 @@ export default {
   'ui.settings.autoResolve': 'Решать заметки при правке текста',
   'ui.settings.wordGoal': 'Цель по словам',
   'ui.settings.nativeTitlebar': 'Системная строка заголовка',
-  'ui.settings.typewriter': 'Режим пишущей машинки (затемнение и центр)',
+  'ui.settings.typewriter': 'Режим пишущей машинки в визуальном редакторе',
   'ui.settings.general': 'Общие',
   'ui.settings.setWordGoal': 'Задать цель по словам',
   'ui.settings.restoreBackupTitle': 'Загрузить более раннюю версию файла этого романа',

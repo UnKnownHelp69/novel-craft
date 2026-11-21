@@ -309,7 +309,8 @@ body.focus #leftPanel,body.focus #rightPanel{width:0;min-width:0;opacity:0;point
 /* With the panels gone the column widens: 70% of the window, at most 850px. */
 body.focus #editorWrap{width:70%;max-width:850px;}
 /* Typewriter mode: the padding lets the first and last lines scroll to mid-screen. */
-body.focus.typewriter .editor{padding-top:30vh;padding-bottom:30vh;}
+body.typewriter .editor{padding-top:45vh;padding-bottom:55vh;}
+::highlight(typewriter-dim){color:var(--text-dim);}
 .exit-focus{
   position:absolute;top:-40px;left:50%;transform:translateX(-50%);
   background:var(--panel);color:var(--accent);border:1px solid var(--accent-dim);

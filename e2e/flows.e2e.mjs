@@ -1733,3 +1733,18 @@ flow('Markdown edits retain rich blocks and paragraph boundaries on disk', async
   await page.click('#btnMarkdownMode');
   assert.equal(await editorHTML(page), sceneIn(data, 'Scene').content);
 });
+
+flow('typewriter keeps the visual caret centered without changing the saved scene', async page => {
+  const content = Array.from({ length: 60 }, (_, i) => '<p>Line ' + i + '</p>').join('');
+  await openFixture(page, novelOf([ch('c', 'Chapter', sc('s', 'Scene', content))]));
+  await openAccordion(page, 'settings');
+  await page.check('#typewriterToggle');
+  await page.locator('#editor p').nth(30).click();
+  await eventually(() => page.evaluate(() => {
+    const r = getSelection().getRangeAt(0).getBoundingClientRect();
+    const s = document.querySelector('.editor-scroll').getBoundingClientRect();
+    return CSS.highlights.has('typewriter-dim') && Math.abs((r.y + r.height / 2 - s.y) / s.height - 0.45) < 0.04;
+  }), true, 'current line is centered');
+  await expectIndicator(page, 'Saved');
+  assert.equal((await save(page)).data.chapters[0].scenes[0].content, content);
+});

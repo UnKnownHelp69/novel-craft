@@ -92,6 +92,37 @@ export function toggleMarkdownMode() {
   renderNotes();   // margin dots / highlights only exist in visual mode
 }
 
+let typewriterFrame = 0;
+export function scheduleTypewriter() {
+  if (typewriterFrame) return;
+  typewriterFrame = requestAnimationFrame(updateTypewriter);
+}
+function updateTypewriter() {
+  typewriterFrame = 0;
+  const sel = getSelection();
+  if (!document.body.classList.contains('typewriter') || document.activeElement !== editor ||
+      !sel.focusNode || !editor.contains(sel.focusNode)) {
+    CSS.highlights?.delete('typewriter-dim');
+    return;
+  }
+  const caret = document.createRange();
+  caret.setStart(sel.focusNode, sel.focusOffset);
+  caret.collapse(true);
+  const element = sel.focusNode.nodeType === 1 ? sel.focusNode : sel.focusNode.parentElement;
+  const block = element.closest('p,li,blockquote,pre,h1,h2,h3,h4,h5,h6,div');
+  if (CSS.highlights && block && block !== editor && editor.contains(block)) {
+    const before = document.createRange(), after = document.createRange();
+    before.selectNodeContents(editor);
+    after.selectNodeContents(editor);
+    before.setEndBefore(block);
+    after.setStartAfter(block);
+    CSS.highlights.set('typewriter-dim', new Highlight(before, after));
+  } else CSS.highlights?.delete('typewriter-dim');
+  const rect = caret.getClientRects()[0] || element.getBoundingClientRect();
+  const scroll = editor.closest('.editor-scroll');
+  scroll.scrollTop += rect.top + rect.height / 2 - scroll.getBoundingClientRect().top - scroll.clientHeight * 0.45;
+}
+
 /* ---- document font and size ---- */
 export function applyFontSize(px) {
   document.documentElement.style.setProperty('--fs', px + 'px');
@@ -106,6 +137,8 @@ export function applyDocFont(font) {
 }
 
 export function init() {
+  for (const event of ['focus', 'blur', 'input']) editor.addEventListener(event, scheduleTypewriter);
+  window.addEventListener('resize', scheduleTypewriter);
   editor.addEventListener('input', () => {
     if (isLoadingContent) return;          // programmatic innerHTML writes are not edits
     const s = currentScene();
@@ -196,7 +229,10 @@ export function init() {
     markDirty();
   });
   document.addEventListener('selectionchange', () => {
-    if (document.activeElement === editor) updateToolbarState();
+    if (document.activeElement === editor) {
+      updateToolbarState();
+      if (document.body.classList.contains('typewriter')) scheduleTypewriter();
+    }
   });
   $('#btnMarkdownMode').addEventListener('click', toggleMarkdownMode);
   $('#fontSize').addEventListener('input', e => {
