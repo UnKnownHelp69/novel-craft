@@ -1,6 +1,6 @@
 /* Markdown mode of the editor: scene HTML <-> the small markdown subset it supports. */
 import { esc } from './text.js';
-import { parseInert } from './html.js';
+import { parseInert, sanitizeSceneHTML } from './html.js';
 
 /* Markdown -> HTML, DOM-free: run on every save while markdown mode is on
    (saveCurrentScene) and when toggling back out of it (toggleMarkdownMode); what it returns
@@ -36,39 +36,38 @@ export function inlineMd(s) {
   s = s.replace(/\x03/g, '#');
   return s;
 }
-/* Scene HTML -> markdown, the inverse of mdToHtml() for what it supports. Other elements
-   keep their text but lose their markup. Blocks are joined by blank lines, which mdToHtml()
-   reads back as empty paragraphs: <p>a</p><p>b</p> returns with a <p><br></p> between. */
+/* Rich blocks use Markdown's raw-HTML representation. Keep each on one source line,
+   including newlines inside preformatted text, so adjacent prose can be edited normally. */
+const rawBlock = line => /^<[a-z][\w-]*(?:\s|\/?>)/i.test(line);
+export function sceneSourceToHtml(md) {
+  return md.split(/\r?\n/).filter(line => line.trim()).map(line =>
+    rawBlock(line) ? sanitizeSceneHTML(line) : mdToHtml(line)).join('');
+}
 export function htmlToMd(html) {
-  const d = parseInert(html);
-  let out = [];
-  // escape what inlineMd()/mdToHtml() would read as syntax ('#' only at a line start)
-  const escText = t => t.replace(/\\/g, '\\\\').replace(/\*/g, '\\*').replace(/^#/g, '\\#').replace(/\n#/g, '\n\\#');
+  const root = parseInert(html);
+  const escapeText = text => text.replace(/\\/g, '\\\\').replace(/\*/g, '\\*').replace(/^#/gm, '\\#');
   const inline = node => {
-    let s = '';
-    node.childNodes.forEach(ch => {
-      if (ch.nodeType === 3) s += escText(ch.textContent);
-      else if (/^(B|STRONG)$/.test(ch.tagName)) s += '**' + inline(ch) + '**';
-      else if (/^(I|EM)$/.test(ch.tagName)) s += '*' + inline(ch) + '*';
-      else if (ch.tagName === 'BR') s += '\n';
-      else s += inline(ch);
-    });
-    return s;
+    if (node.nodeType === 3) return escapeText(node.data);
+    const text = Array.from(node.childNodes, inline).join('');
+    if (/^(B|STRONG)$/.test(node.tagName)) return '**' + text + '**';
+    if (/^(I|EM)$/.test(node.tagName)) return '*' + text + '*';
+    return text;
   };
-  const walk = node => {
-    node.childNodes.forEach(ch => {
-      if (ch.nodeType === 3) {
-        if (ch.textContent.trim()) out.push(escText(ch.textContent));
-        return;
-      }
-      const t = ch.tagName;
-      if (t === 'H1') out.push('# ' + inline(ch));
-      else if (t === 'H2') out.push('## ' + inline(ch));
-      else if (t === 'H3') out.push('### ' + inline(ch));
-      else if (t === 'P' || t === 'DIV') out.push(inline(ch));
-      else out.push(inline(ch));
-    });
-  };
-  walk(d);
-  return out.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+  const lines = [];
+  for (const node of root.childNodes) {
+    if (node.nodeType === 3 && !node.data.trim()) continue;
+    const heading = /^H([123])$/.exec(node.nodeName);
+    const line = (heading ? '#'.repeat(Number(heading[1])) + ' ' : '') + inline(node);
+    const html = node.outerHTML ?? '<p>' + esc(node.textContent) + '</p>';
+    // Use plain Markdown only when its inverse retains the entire block.
+    if (line.trim() && !line.includes('\n') && !rawBlock(line) && mdToHtml(line) === html) lines.push(line);
+    else lines.push(html.replace(/\n/g, '&#10;'));
+  }
+  return lines.join('\n\n');
+}
+
+export function sourceForScene(scene) {
+  const cached = scene.markdownContent;
+  if (cached && (!scene.content || sceneSourceToHtml(cached) === scene.content)) return cached;
+  return htmlToMd(scene.content);
 }

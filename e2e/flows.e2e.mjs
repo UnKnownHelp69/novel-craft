@@ -1718,3 +1718,18 @@ flow('export menu: TXT, HTML and Markdown carry the text; notes export TXT and M
 
   await expectIndicator(page, 'Unsaved');   // exporting is not saving
 });
+
+flow('Markdown edits retain rich blocks and paragraph boundaries on disk', async page => {
+  const rich = '<p><u>Underline</u></p><ul><li>one</li><li>two</li></ul>' +
+    '<blockquote><p>Quote</p></blockquote><p style="text-align: center;">* * *</p>' +
+    '<p><img alt="map" src="data:image/png;base64,iVBORw0KGgo="></p>';
+  await openFixture(page, novelOf([ch('c', 'Chapter', sc('s', 'Scene', rich + '<p>End.</p>'))]));
+  const original = await editorHTML(page);
+  await page.click('#btnMarkdownMode');
+  await page.locator('#mdEditor').press('Control+End');
+  await page.keyboard.type('!');
+  const { data } = await save(page);
+  assert.equal(sceneIn(data, 'Scene').content, original.replace('End.', 'End.!'));
+  await page.click('#btnMarkdownMode');
+  assert.equal(await editorHTML(page), sceneIn(data, 'Scene').content);
+});

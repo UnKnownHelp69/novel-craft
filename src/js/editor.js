@@ -7,7 +7,7 @@ import { nowISO } from './lib/model.js';
 import { isLoadingContent, novel, setLoadingContent } from './state.js';
 import { markDirty, normalizeHTML, savedContent, savedMd } from './dirty.js';
 import { chapterWordCount, currentChapter, currentScene } from './tree.js';
-import { htmlToMd, mdToHtml } from './lib/markdown.js';
+import { htmlToMd, sceneSourceToHtml, sourceForScene } from './lib/markdown.js';
 import { updateCounters } from './panels.js';
 import { reconcileNotes, renderNotes, scheduleNotesRender } from './notes.js';
 import { shortcutKey } from './lib/keys.js';
@@ -69,7 +69,7 @@ export function toggleMarkdownMode() {
   if (!mdMode) {
     // visual -> markdown
     s.content = editor.innerHTML;
-    mdEditor.value = htmlToMd(s.content);
+    mdEditor.value = sourceForScene(s);
     s.markdownContent = mdEditor.value;
     editor.classList.add('hidden');
     mdEditor.classList.remove('hidden');
@@ -78,7 +78,7 @@ export function toggleMarkdownMode() {
   } else {
     // markdown -> visual
     if (mdEditor.value !== htmlToMd(s.content)) {
-      s.content = mdToHtml(mdEditor.value);
+      s.content = sceneSourceToHtml(mdEditor.value);
     }
     s.markdownContent = mdEditor.value;
     editor.innerHTML = s.content || '';
@@ -178,7 +178,7 @@ export function init() {
     if (!s) return;
     s.markdownContent = mdEditor.value;
     // count the rendered text, not the raw markdown, so both modes agree (and match saveCurrentScene)
-    s.wordCount = countWords(stripHtml(mdToHtml(mdEditor.value)));
+    s.wordCount = countWords(stripHtml(sceneSourceToHtml(mdEditor.value)));
     s.modifiedAt = nowISO();
     updateCounters();
     refreshSceneWordCount(s);
@@ -198,10 +198,6 @@ export function init() {
   document.addEventListener('selectionchange', () => {
     if (document.activeElement === editor) updateToolbarState();
   });
-  /* Markdown mode. htmlToMd() keeps only h1-h3, paragraphs, bold/italic and line breaks,
-     so the round trip is lossy: the HTML is rebuilt from the markdown only when the markdown
-     text was actually changed; otherwise the scene's HTML (images, fonts, ...) stays as it was.
-     saveCurrentScene() applies the same rule. */
   $('#btnMarkdownMode').addEventListener('click', toggleMarkdownMode);
   $('#fontSize').addEventListener('input', e => {
     applyFontSize(+e.target.value);

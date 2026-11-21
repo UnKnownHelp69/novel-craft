@@ -12,7 +12,7 @@ import {
 import { markDirty } from './dirty.js';
 import { nvTitle } from './novel-file.js';
 import { mdMode } from './editor.js';
-import { htmlToMd, mdToHtml } from './lib/markdown.js';
+import { htmlToMd, sceneSourceToHtml, sourceForScene } from './lib/markdown.js';
 import { updateCounters } from './panels.js';
 import { promptModal, toast, toastAction } from './dialogs.js';
 import { localBackup } from './autosave.js';
@@ -134,7 +134,7 @@ export function loadSceneIntoEditor() {
   setLoadingContent(true);
   const s = currentScene();
   if (!s) { editor.innerHTML = ''; mdEditor.value = ''; }
-  else if (mdMode) mdEditor.value = s.markdownContent || htmlToMd(s.content);
+  else if (mdMode) mdEditor.value = sourceForScene(s);
   else { editor.innerHTML = s.content || ''; reconcileNotes(s); }
   updateBreadcrumb();
   updateSceneMeta();
@@ -148,7 +148,7 @@ export function saveCurrentScene() {
   // regenerated when the Markdown was actually edited.
   if (mdMode) { 
     if (mdEditor.value !== htmlToMd(s.content)) {
-      s.content = mdToHtml(mdEditor.value); 
+      s.content = sceneSourceToHtml(mdEditor.value);
     }
     s.markdownContent = mdEditor.value; 
   }
